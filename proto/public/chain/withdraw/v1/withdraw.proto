@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package chain.withdraw.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polyester/type/v1/u128.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/chain/withdraw/v1;chainwithdrawv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Trading Withdraws"
+      description:
+        "Request withdrawals from Trading for a Polyester account or "
+        "subaccount."
+    }
+  ]
+};
+
+// CreateTradingWithdrawResponse returns the accepted durable intent identifier
+// for the withdraw lifecycle.
+message CreateTradingWithdrawResponse {
+  // Stable server-owned intent identifier for the accepted withdraw lifecycle.
+  // Clients use this id to follow later progress for the same withdraw flow.
+  string intent_id = 1;
+}
+
+// CreateWalletTradingWithdrawResponse returns the accepted durable intent
+// identifier for a wallet-authorized withdraw lifecycle.
+message CreateWalletTradingWithdrawResponse {
+  // Stable server-owned intent identifier for the accepted withdraw lifecycle.
+  // Clients use this id to follow later progress for the same withdraw flow.
+  string intent_id = 1;
+}
+
+// TradingWithdrawAction identifies where funds should move from Trading.
+enum TradingWithdrawAction {
+  ACTION_UNSPECIFIED = 0;
+  TO_FUNDING = 1;
+  TO_EXTERNAL_CHAIN = 2;
+}
+
+// TradingWithdrawIntentPayload is the client-signed typed withdraw request.
+// Account scope and backend intent ids are derived server-side.
+message TradingWithdrawIntentPayload {
+  // Destination for funds leaving Trading.
+  TradingWithdrawAction action = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Asset identifier from Polyester asset metadata.
+  uint32 asset_id = 2 [(buf.validate.field).uint32.gt = 0];
+
+  // External network id for TO_EXTERNAL_CHAIN. Omit for TO_FUNDING.
+  uint64 destination_chain_id = 3;
+
+  // Withdraw amount in the asset's integer base units.
+  polyester.type.v1.U128 amount_q = 4 [(buf.validate.field).required = true];
+
+  // Unix timestamp in seconds after which this signed user authorization is no
+  // longer accepted by the API. This is separate from the server-owned
+  // execution deadline used later for on-chain submission.
+  uint64 deadline_ts_sec = 5 [(buf.validate.field).uint64.gt = 0];
+
+  // Client-generated nonce bound to the signed request.
+  polyester.type.v1.U128 nonce = 6 [(buf.validate.field).required = true];
+
+  // Destination address. For TO_EXTERNAL_CHAIN this is an address on
+  // destination_chain_id and is validated according to that network. For
+  // TO_FUNDING, omit it to move funds to the selected account's Funding account
+  // or provide another Polyester funding address for a Trading-to-Funding
+  // transfer.
+  string destination_address = 7;
+
+  // Client-chosen idempotency key. Reusing the same key with the same payload
+  // returns the existing withdraw; reusing it with different payload fails.
+  string idempotency_key = 8 [(buf.validate.field).string.min_len = 1];
+}
+
+// CreateTradingWithdrawRequest creates or returns one durable backend-authorized
+// Trading withdraw intent from typed protobuf fields and an API-key signature.
+message CreateTradingWithdrawRequest {
+  // Client-signed withdraw details.
+  TradingWithdrawIntentPayload payload = 1 [(buf.validate.field).required = true];
+
+  // User/API signature over deterministic TradingWithdrawIntentPayload bytes.
+  bytes payload_signature = 2 [(buf.validate.field).bytes.min_len = 1];
+}
+
+// CreateWalletTradingWithdrawRequest creates or returns one durable Trading
+// withdraw intent from typed frontend fields plus a wallet EIP-712 signature.
+message CreateWalletTradingWithdrawRequest {
+  // Client-signed withdraw details.
+  TradingWithdrawIntentPayload payload = 1 [(buf.validate.field).required = true];
+
+  // Optional public subaccount id. Omit to withdraw from the JWT root account.
+  uint64 subaccount_id = 2;
+
+  // Wallet address that produced payload_signature.
+  string signer_wallet = 3 [(buf.validate.field).string.pattern = "^0x[0-9a-fA-F]{40}$"];
+
+  // Wallet EIP-712 signature over the typed withdraw payload.
+  bytes payload_signature = 4 [(buf.validate.field).bytes.min_len = 1];
+}
+
+// WithdrawService manages authenticated chain-facing withdraw request intake.
+service WithdrawService {
+  // Create or return one durable withdraw from Trading.
+  rpc CreateTradingWithdraw(CreateTradingWithdrawRequest) returns (CreateTradingWithdrawResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/trading-withdraws"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Trading Withdraw"
+      description:
+        "Create or return one durable withdraw from Trading to "
+        "Funding or to an external chain for the selected account "
+        "target."
+      tags: "Trading Withdraws"
+    };
+  }
+
+  // Create or return one wallet/JWT withdraw from Trading.
+  rpc CreateWalletTradingWithdraw(CreateWalletTradingWithdrawRequest) returns (CreateWalletTradingWithdrawResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/trading-withdraws:wallet"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Wallet Trading Withdraw"
+      description:
+        "Create or return one durable Trading withdraw intent from "
+        "typed frontend fields and a wallet EIP-712 signature."
+      tags: "Trading Withdraws"
+    };
+  }
+}

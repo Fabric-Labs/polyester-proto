@@ -1,0 +1,339 @@
+syntax = "proto3";
+
+package chain.guard.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/chain/guard/v1;chainguardv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Guard Signer"
+      description:
+        "Manage guard signer wallets and approval signatures for "
+        "protected Polyester account actions."
+    }
+  ]
+};
+
+// ProtectedAction identifies one server-owned action that can receive a guard
+// approval. The server derives target, selector, paramsHash, nonce, and deadline.
+enum ProtectedAction {
+  // Action is not specified.
+  PROTECTED_ACTION_UNSPECIFIED = 0;
+  // Set the external whitelist requirement to false. Enabling the requirement
+  // does not need GuardSigner approval and should not be routed here.
+  PROTECTED_ACTION_FUNDING_SET_EXTERNAL_WHITELIST_REQUIRED = 1;
+  // Add external withdrawal destinations to the funding-account whitelist.
+  PROTECTED_ACTION_FUNDING_ADD_EXTERNAL_WHITELIST = 2;
+  // Remove external withdrawal destinations from the funding-account whitelist.
+  PROTECTED_ACTION_FUNDING_REMOVE_EXTERNAL_WHITELIST = 3;
+  // Add internal transfer destinations to the funding-account whitelist.
+  PROTECTED_ACTION_FUNDING_ADD_INTERNAL_WHITELIST = 4;
+  // Remove internal transfer destinations from the funding-account whitelist.
+  PROTECTED_ACTION_FUNDING_REMOVE_INTERNAL_WHITELIST = 5;
+  // Set the internal whitelist requirement to false. Enabling the requirement
+  // does not need GuardSigner approval and should not be routed here.
+  PROTECTED_ACTION_FUNDING_SET_INTERNAL_WHITELIST_REQUIRED = 6;
+}
+
+// GuardSignerStatus describes stored and live signer state for one account.
+message GuardSignerStatus {
+  // Stored guard signer EVM address, if a wallet exists for the selected account.
+  string signer_address = 1;
+
+  // Live on-chain signer value when chain reads are available.
+  string onchain_signer_address = 2;
+
+  // True when the stored signer matches the live on-chain signer.
+  bool initialized = 3;
+
+  // Current guard signer nonce for the default nonce space, encoded as a base-10 decimal string.
+  string nonce = 4;
+
+  // Default nonce space used for normal approvals.
+  uint64 nonce_space = 5;
+}
+
+// GuardApproval is the exact approval payload clients submit to protected
+// contract calls.
+message GuardApproval {
+  // Nonce space used for the signed approval. Normal flows use 0.
+  uint64 nonce_space = 1;
+
+  // Deadline as a unix timestamp in seconds, derived from chain time.
+  uint64 deadline_unix = 2;
+
+  // EIP-712 signature over the guard approval message.
+  bytes signature = 3 [(buf.validate.field).bytes.min_len = 1];
+}
+
+// ExternalWhitelistArgs contains the final external-chain destination bytes for
+// whitelist updates. For EVM destinations, callers should pass the same
+// string-encoded normalized address bytes used in WithdrawRequest.to, e.g.
+// stringToHex(address.toLowerCase()), not raw address bytes.
+message ExternalWhitelistArgs {
+  // External network identifier for the whitelist update.
+  uint32 polychain_chain_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Hex-encoded destination payloads to add or remove. Each value must be 0x-prefixed bytes.
+  repeated string addresses = 2 [
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string = {
+      min_len: 4
+      pattern: "^0x([0-9a-fA-F]{2})+$"
+    }
+  ];
+}
+
+// InternalWhitelistArgs contains EVM account addresses for internal whitelist
+// updates.
+message InternalWhitelistArgs {
+  // EVM account addresses to add or remove from the internal transfer whitelist.
+  repeated string addresses = 1 [
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string = {
+      len: 42
+      pattern: "^0x[0-9a-fA-F]{40}$"
+    }
+  ];
+}
+
+// WhitelistRequirementArgs contains the requested whitelist requirement state.
+// Guard approvals are only needed to disable a requirement.
+message WhitelistRequirementArgs {
+  // Required must be false for GuardSigner approvals. Enabling a requirement
+  // uses an empty approval on-chain and should not be signed here.
+  bool required = 1;
+}
+
+// ProtectedActionArgs contains business arguments for the selected protected
+// action. It intentionally excludes trusted account, nonce, and deadline fields.
+message ProtectedActionArgs {
+  // Business arguments required by the selected protected action.
+  oneof args {
+    // External whitelist destinations for external whitelist add or remove actions.
+    ExternalWhitelistArgs external_whitelist = 1;
+    // Internal account addresses for internal whitelist add or remove actions.
+    InternalWhitelistArgs internal_whitelist = 2;
+    // Requirement state for external/internal requirement setter actions.
+    WhitelistRequirementArgs whitelist_requirement = 3;
+  }
+}
+
+// CreateGuardSignerWalletRequest creates a guard signer wallet for the selected
+// account target.
+message CreateGuardSignerWalletRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+// CreateGuardSignerWalletResponse returns the generated signer address.
+message CreateGuardSignerWalletResponse {
+  // EVM address of the created guard signer wallet.
+  string signer_address = 1 [(buf.validate.field).string = {
+    len: 42
+    pattern: "^0x[0-9a-fA-F]{40}$"
+  }];
+}
+
+// GetGuardSignerStatusRequest queries stored and live signer status for one
+// account target.
+message GetGuardSignerStatusRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+// GetGuardSignerStatusResponse returns stored and on-chain signer state.
+message GetGuardSignerStatusResponse {
+  // Stored and live guard signer status for the selected account target.
+  GuardSignerStatus status = 1;
+}
+
+// SignProtectedActionRequest requests an approval for a supported FundingAccount
+// protected action.
+message SignProtectedActionRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+
+  // Protected action to approve.
+  ProtectedAction action = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Business arguments for the selected protected action.
+  ProtectedActionArgs args = 3;
+}
+
+// SignProtectedActionResponse returns the contract submission approval.
+message SignProtectedActionResponse {
+  // Approval signature payload for the requested protected action.
+  GuardApproval approval = 1;
+}
+
+// BatchSignProtectedActionItem is one protected FundingAccount action inside a
+// batched SmartAccount submission. The service signs items in this exact order.
+message BatchSignProtectedActionItem {
+  // Protected action to approve for this batch item.
+  ProtectedAction action = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Business arguments for this batch item.
+  ProtectedActionArgs args = 2;
+}
+
+// BatchSignProtectedActionsRequest requests ordered approvals for one batched
+// SmartAccount transaction. The server reads the first nonce from chain and
+// assigns subsequent nonces by incrementing locally within this response.
+message BatchSignProtectedActionsRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+
+  // Ordered protected actions to sign, max 20 items.
+  repeated BatchSignProtectedActionItem actions = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 20
+  }];
+}
+
+// BatchSignProtectedActionsResponse returns approvals in the same order as the
+// requested actions. Clients must submit them with the matching batched calls.
+message BatchSignProtectedActionsResponse {
+  // Approval signatures in the same order as the requested actions.
+  repeated GuardApproval approvals = 1;
+}
+
+// RotateGuardSignerWalletRequest asks the backend to generate a replacement
+// guard signer wallet and sign the on-chain rotation approval.
+message RotateGuardSignerWalletRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+// RotateGuardSignerWalletResponse returns the backend-generated replacement
+// signer and the approval needed to submit signer rotation on-chain.
+message RotateGuardSignerWalletResponse {
+  // EVM address of the replacement guard signer wallet.
+  string new_signer_address = 1 [(buf.validate.field).string = {
+    len: 42
+    pattern: "^0x[0-9a-fA-F]{40}$"
+  }];
+  // Approval signature payload needed to submit the signer rotation.
+  GuardApproval approval = 2;
+}
+
+// ExportGuardSignerWalletRequest exports guard signer key material for an
+// explicitly authorized account target. This is a high-risk sovereignty flow.
+message ExportGuardSignerWalletRequest {
+  // Optional subaccount public id. When omitted, the authenticated caller's
+  // root account is used as the target account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+// ExportGuardSignerWalletResponse returns the authorized high-risk wallet export.
+message ExportGuardSignerWalletResponse {
+  // Hex-encoded private key returned only after export authorization succeeds.
+  string private_key = 1 [(buf.validate.field).string = {
+    len: 66
+    pattern: "^0x[0-9a-fA-F]{64}$"
+  }];
+}
+
+// GuardSignerService manages guard signer lifecycle and approval signatures.
+service GuardSignerService {
+  rpc CreateGuardSignerWallet(CreateGuardSignerWalletRequest) returns (CreateGuardSignerWalletResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/guard-signer/wallets"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Guard Signer Wallet"
+      description: "Create a guard signer wallet for one authenticated account target."
+      tags: "Guard Signer"
+    };
+  }
+
+  rpc GetGuardSignerStatus(GetGuardSignerStatusRequest) returns (GetGuardSignerStatusResponse) {
+    option (google.api.http) = {get: "/v1/chain/guard-signer/status"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Guard Signer Status"
+      description: "Return stored and live guard signer status."
+      tags: "Guard Signer"
+    };
+  }
+
+  rpc SignProtectedAction(SignProtectedActionRequest) returns (SignProtectedActionResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/guard-signer/approvals"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Sign Protected Action"
+      description: "Create an approval signature for a supported protected action."
+      tags: "Guard Signer"
+    };
+  }
+
+  rpc BatchSignProtectedActions(BatchSignProtectedActionsRequest) returns (BatchSignProtectedActionsResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/guard-signer/approvals:batch"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Batch Sign Protected Actions"
+      description: "Create ordered approval signatures for a batched SmartAccount protected action submission."
+      tags: "Guard Signer"
+    };
+  }
+
+  rpc RotateGuardSignerWallet(RotateGuardSignerWalletRequest) returns (RotateGuardSignerWalletResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/guard-signer/wallets:rotate"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Rotate Guard Signer Wallet"
+      description: "Generate a backend-managed replacement signer and return the rotateSigner approval."
+      tags: "Guard Signer"
+    };
+  }
+
+  rpc ExportGuardSignerWallet(ExportGuardSignerWalletRequest) returns (ExportGuardSignerWalletResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/guard-signer/wallets:export"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Export Guard Signer Wallet"
+      description: "Export guard signer key material after owner authorization and fresh step-up."
+      tags: "Guard Signer"
+    };
+  }
+}

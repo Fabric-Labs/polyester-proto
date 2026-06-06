@@ -1,0 +1,237 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/mfa.proto";
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+// Auth and account APIs for wallet login and caller identity.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Auth Service"
+      description: "Authentication, accounts, sub-accounts, and API key management."
+    }
+  ]
+};
+
+// GetNonceRequest requests a short-lived login nonce for a smart-account
+// address. The wallet must sign a message containing this nonce before login.
+message GetNonceRequest {
+  // Smart-account EVM address, formatted as 0x plus 40 hex characters.
+  string smart_account_address = 1 [
+    (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// GetNonceResponse contains the nonce that must be signed for wallet login.
+message GetNonceResponse {
+  // Random login nonce. The nonce is single-purpose and is replaced by each new
+  // nonce request for the same smart-account address.
+  string nonce = 1;
+  // Time in UTC when the nonce expires. Login nonces expire after 5 minutes.
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// LoginWithWalletRequest completes smart-account wallet login using a signed
+// nonce.
+message LoginWithWalletRequest {
+  // Smart-account EVM address that produced the signature, formatted as 0x plus
+  // 40 hex characters.
+  string smart_account_address = 1 [
+    (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Nonce returned by GetNonce. The nonce must be unused and not expired.
+  string nonce = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 256,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Signature over the canonical login message containing the nonce. Maximum
+  // length is 8192 characters to support universal wallet signatures.
+  string signature = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 8192,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional user-agent string for account security and audit displays. Maximum
+  // length is 512 characters.
+  string user_agent = 4 [(buf.validate.field).string.max_len = 512];
+  // Optional caller IP address for account security and audit displays. Maximum
+  // length is 64 characters.
+  string ip = 5 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 64
+  ];
+
+  // Optional primary wallet address that controls this smart account, formatted
+  // as 0x plus 40 hex characters. This value is metadata and is not used for
+  // signature verification.
+  string primary_wallet_address = 6 [(buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"}];
+  // Optional provider hint for the primary wallet. Maximum length is 32 characters.
+  string wallet_provider = 7 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 32
+  ];
+}
+
+// LoginWithWalletResponse returns a session token for the authenticated root
+// account.
+message LoginWithWalletResponse {
+  // Bearer access token for authenticated API calls.
+  string access_token = 1;
+  // Time in UTC when access_token expires.
+  google.protobuf.Timestamp expires_at = 2;
+
+  // Root account the token is bound to (opaque ID).
+  fixed64 account_id = 10;
+  // Optional current username for the root account (empty if not set).
+  string username = 13;
+  // Session assurance details for the issued access token.
+  SessionInfo session = 20;
+}
+
+// MeRequest introspects the authenticated caller from the presented access
+// token or API key.
+message MeRequest {}
+
+// MeResponse describes the authenticated caller and current session context.
+message MeResponse {
+  // Root account identifier (opaque ID).
+  fixed64 account_id = 1;
+  // When present, indicates the request is authenticated via an API key.
+  optional fixed64 api_key_id = 10;
+  // Optional current username for the root account (empty if not set).
+  string username = 11;
+  // Root smart-account EVM address, formatted as 0x plus 40 hex characters.
+  // Empty if not set.
+  string root_smart_account_address = 12;
+  // Session assurance details for the presented access token, if any.
+  SessionInfo session = 20;
+}
+
+// High-level error codes for authentication and account-domain failures.
+enum AuthErrorCode {
+  // No auth error code specified.
+  AUTH_UNSPECIFIED = 0;
+  // Username format or characters are invalid.
+  AUTH_USERNAME_INVALID = 1;
+  // Username is already used by another account.
+  AUTH_USERNAME_TAKEN = 2;
+  // Username was changed too recently.
+  AUTH_USERNAME_COOLDOWN = 3;
+  // Account is not currently eligible to claim or change a username.
+  AUTH_USERNAME_FEATURE_LOCKED = 4;
+  // Username is reserved and cannot be claimed by this account.
+  AUTH_USERNAME_RESERVED = 5;
+  // Request is malformed or missing required input.
+  AUTH_INVALID_REQUEST = 6;
+  // Authentication is required for this operation.
+  AUTH_AUTHENTICATION_REQUIRED = 7;
+  // Presented session type is not allowed for this operation.
+  AUTH_SESSION_KIND_NOT_ALLOWED = 8;
+  // Wallet login failed because the nonce or signature could not be verified.
+  AUTH_WALLET_LOGIN_FAILED = 9;
+  // Requested resource was not found.
+  AUTH_RESOURCE_NOT_FOUND = 10;
+  // Caller does not have access to the requested sub-account.
+  AUTH_SUBACCOUNT_ACCESS_DENIED = 11;
+  // Caller does not have access to the requested API key.
+  AUTH_API_KEY_ACCESS_DENIED = 12;
+  // API key operation requires MFA.
+  AUTH_API_KEY_MFA_REQUIRED = 13;
+  // Requested API key status transition is not allowed.
+  AUTH_API_KEY_INVALID_STATUS_TRANSITION = 14;
+  // Policy definition or binding is invalid.
+  AUTH_POLICY_INVALID = 15;
+  // Smart-account address is already linked to another account.
+  AUTH_SMART_ACCOUNT_ALREADY_LINKED = 16;
+  // Caller does not have access to the requested invite.
+  AUTH_INVITE_ACCESS_DENIED = 17;
+  // Invite cannot be used in its current state.
+  AUTH_INVITE_INVALID_STATE = 18;
+  // MFA is not available for this account.
+  AUTH_MFA_DISABLED = 19;
+  // Required MFA factor is not enrolled.
+  AUTH_MFA_NOT_ENROLLED = 20;
+  // MFA session is missing, expired, or invalid.
+  AUTH_MFA_SESSION_INVALID = 21;
+  // MFA challenge was not found.
+  AUTH_MFA_CHALLENGE_NOT_FOUND = 22;
+  // MFA challenge payload is invalid.
+  AUTH_MFA_CHALLENGE_INVALID = 23;
+  // MFA challenge is locked after too many failed attempts.
+  AUTH_MFA_CHALLENGE_LOCKED = 24;
+  // One-time password is invalid.
+  AUTH_MFA_OTP_INVALID = 25;
+  // Recovery code is invalid.
+  AUTH_MFA_RECOVERY_INVALID = 26;
+  // Passkey verification is not available for this challenge.
+  AUTH_MFA_PASSKEY_NOT_AVAILABLE = 27;
+  // Passkey credential is invalid for this account or challenge.
+  AUTH_MFA_PASSKEY_CREDENTIAL_INVALID = 28;
+  // Passkey verification failed.
+  AUTH_MFA_PASSKEY_VERIFY_FAILED = 29;
+  // MFA enrollment binding is invalid or expired.
+  AUTH_MFA_ENROLLMENT_BINDING_INVALID = 30;
+  // A fresh step-up proof is required for this protected operation.
+  AUTH_STEP_UP_REQUIRED = 31;
+  // A requested step-up proof is unavailable.
+  AUTH_STEP_UP_PROOF_UNAVAILABLE = 32;
+  // The step-up proof has already been claimed.
+  AUTH_STEP_UP_ALREADY_CLAIMED = 33;
+}
+
+// AuthErrorDetail describes an authentication or account-domain failure.
+message AuthErrorDetail {
+  // Stable machine-readable auth error code.
+  AuthErrorCode code = 1;
+  // Human-readable error message.
+  string message = 2;
+}
+
+// AuthService manages wallet login and caller authentication context.
+service AuthService {
+  // Get a short-lived login nonce.
+  rpc GetNonce(GetNonceRequest) returns (GetNonceResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/nonce"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Wallet Login Nonce"
+      description: "Retrieve a short-lived nonce for wallet-signature login."
+      tags: "Auth Service"
+    };
+  }
+
+  // Verify a signed nonce and issue an access token.
+  rpc LoginWithWallet(LoginWithWalletRequest) returns (LoginWithWalletResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/login/wallet"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Login With Wallet"
+      description: "Verify a signed wallet nonce and issue an access token for the caller account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Return the caller's current auth context.
+  rpc Me(MeRequest) returns (MeResponse) {
+    option (google.api.http) = {get: "/v1/auth/me"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Auth Context"
+      description: "Retrieve the caller auth context, including account identity, API key identity, and session assurance details."
+      tags: "Auth Service"
+    };
+  }
+}

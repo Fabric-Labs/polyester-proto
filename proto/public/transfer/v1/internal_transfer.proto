@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package transfer.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/transfer/v1;transferv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Internal Transfers"
+      description: "Authenticated Trading to Trading internal transfer intake."
+    }
+  ]
+};
+
+// CreateInternalTransferRequest creates or returns one accepted Trading
+// to Trading internal transfer for the authenticated source account.
+message CreateInternalTransferRequest {
+  // Optional source subaccount public id. When omitted, the authenticated
+  // caller's root account is used as the source account.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+
+  oneof destination {
+    option (buf.validate.oneof).required = true;
+
+    // Destination root account public id.
+    fixed64 destination_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+    // Destination subaccount public id.
+    fixed64 destination_subaccount_id = 3 [(buf.validate.field).fixed64.gt = 0];
+    // Destination smart-account address.
+    string destination_smart_account_address = 4 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).string.max_len = 128
+    ];
+  }
+
+  // Canonical public unified asset id for the asset being transferred.
+  uint32 asset_id = 5 [(buf.validate.field).uint32.gt = 0];
+
+  // Quantity in asset quantity_scale units (scaled integer).
+  int64 quantity_scaled = 6 [(buf.validate.field).int64.gt = 0];
+
+  // Stable client-supplied idempotency key used to collapse safe retries.
+  string idempotency_key = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 128
+  ];
+}
+
+// ResolvedDestination describes the normalized transfer destination selected by
+// the server after public-id / smart-account resolution.
+message ResolvedDestination {
+  // Destination root account public id.
+  string root_account_public_id = 1;
+  // Destination subaccount public id when the destination targets a subaccount.
+  string subaccount_public_id = 2;
+  // Destination smart-account address resolved by the server.
+  string smart_account_address = 3;
+}
+
+// InternalTransferStatus is the public user-facing status for an internal
+// transfer request.
+enum InternalTransferStatus {
+  // Status was not specified.
+  INTERNAL_TRANSFER_STATUS_UNSPECIFIED = 0;
+
+  // The transfer request was accepted and has a durable transfer identifier.
+  INTERNAL_TRANSFER_STATUS_ACCEPTED = 1;
+
+  // The transfer request was rejected before durable acceptance.
+  INTERNAL_TRANSFER_STATUS_REJECTED = 2;
+
+  // The transfer request failed terminally before durable acceptance.
+  INTERNAL_TRANSFER_STATUS_FAILED = 3;
+}
+
+// CreateInternalTransferResponse returns the accepted request and transfer
+// identifiers for later correlation.
+message CreateInternalTransferResponse {
+  // Stable server-owned request identifier for this intake.
+  string request_id = 1;
+  // Stable transfer identifier for the settled internal transfer.
+  string transfer_id = 2;
+  // Acceptance timestamp in nanoseconds since epoch (server time).
+  uint64 accepted_at_unix_ns = 3;
+  // Echoed canonical public unified asset id.
+  uint32 asset_id = 4;
+  // Resolved asset code for convenience.
+  string asset_code = 5;
+  // Resolved unified asset id used by downstream settlement.
+  string u_asset_id = 6;
+  // Echoed transfer quantity in asset quantity_scale units.
+  int64 quantity_scaled = 7;
+  // Server-resolved destination summary.
+  ResolvedDestination destination = 8;
+  // Public status for the transfer request.
+  InternalTransferStatus status = 9;
+}
+
+// InternalTransferService manages authenticated Trading to Trading internal
+// transfer intake.
+service InternalTransferService {
+  // Create or return one accepted Trading to Trading transfer.
+  rpc CreateInternalTransfer(CreateInternalTransferRequest) returns (CreateInternalTransferResponse) {
+    option (google.api.http) = {
+      post: "/v1/trading/internal-transfers"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Internal Transfer"
+      description:
+        "Create or return one authenticated Trading to "
+        "Trading internal transfer."
+      tags: "Internal Transfers"
+    };
+  }
+}

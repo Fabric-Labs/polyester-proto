@@ -1,0 +1,985 @@
+syntax = "proto3";
+
+package orders.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
+// Document-level OpenAPI metadata for Orders API
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Orders Service"
+      description: "Public write surface for placing and canceling orders."
+    }
+  ]
+};
+
+// =============================================================================
+// Shared Enums (used by both REST and binary messages)
+// =============================================================================
+
+enum Side {
+  // Side was not provided.
+  SIDE_UNSPECIFIED = 0;
+  // Buy base asset using quote asset.
+  BUY = 1;
+  // Sell base asset for quote asset.
+  SELL = 2;
+}
+
+enum OrderType {
+  // Order type was not provided.
+  ORDER_TYPE_UNSPECIFIED = 0;
+  // Limit order with an explicit price.
+  LIMIT = 1;
+  // Market order executed against available liquidity.
+  MARKET = 2;
+}
+
+enum TIF {
+  // Time-in-force was not provided; create requests default to GTC.
+  TIF_UNSPECIFIED = 0;
+  // Good-til-canceled.
+  GTC = 1;
+  // Immediate-or-cancel.
+  IOC = 2;
+  // Fill-or-kill.
+  FOK = 3;
+}
+
+enum FeeSource {
+  // Fee source was not provided; buy orders default to QUOTE.
+  FEE_SOURCE_UNSPECIFIED = 0;
+  // Fees are paid from quote asset.
+  QUOTE = 1;
+  // Fees are paid from the received asset.
+  RECEIVED = 2;
+}
+
+enum STPMode {
+  // Self-trade prevention mode was not provided; create requests default to EXPIRE_MAKER.
+  STP_UNSPECIFIED = 0;
+  // Cancel the resting maker order on self-trade.
+  EXPIRE_MAKER = 1;
+  // Cancel the incoming taker order on self-trade.
+  EXPIRE_TAKER = 2;
+  // Cancel both maker and taker orders on self-trade.
+  EXPIRE_BOTH = 3;
+}
+
+// =============================================================================
+// Connect/Proto-facing Messages (scaled ints, fixed64 IDs)
+// =============================================================================
+
+// CreateOrderRequest is the binary (protobuf) request for placing orders.
+// Uses scaled integers for quantity and price, plus fixed64 IDs.
+// Preferred by latency-sensitive clients.
+message CreateOrderRequest {
+  option (buf.validate.message).cel = {
+    id: "create_order.market_slippage_market_only"
+    message: "market_max_slippage/client reference are only valid for MARKET orders"
+    expression: "(this.order_type == 2) || (!(has(this.market_max_slippage_ticks) || has(this.market_max_slippage_bps) || this.market_client_ref_price_ticks > 0))"
+  };
+
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Trading pair symbol, e.g., "BTC-USDT"; resolved to pair_id by gateway.
+  string symbol = 2 [(buf.validate.field).string.min_len = 1];
+  // Order side: BUY or SELL.
+  Side side = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Order type: LIMIT or MARKET.
+  OrderType order_type = 4 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Time-in-force: GTC, IOC, or FOK. Defaults to GTC if unspecified.
+  TIF tif = 5 [(buf.validate.field).enum.defined_only = true];
+  // Quantity in base asset scale units (scaled integer).
+  int64 qty_scaled = 6 [(buf.validate.field).int64.gt = 0];
+  // Price in ticks (6 decimals); optional for MARKET orders.
+  int64 price_ticks = 7;
+  // Optional max slippage override for MARKET orders.
+  // If omitted, server-side per-pair default slippage is used.
+  oneof market_max_slippage {
+    // Maximum allowed slippage in absolute ticks.
+    int32 market_max_slippage_ticks = 12 [(buf.validate.field).int32.gt = 0];
+    // Maximum allowed slippage in basis points (1 bp = 0.01%).
+    int32 market_max_slippage_bps = 13 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+  // Optional client-side reference price in ticks for MARKET slippage anchoring.
+  // When absent, admission uses server-side reference pricing.
+  int64 market_client_ref_price_ticks = 14 [
+    (buf.validate.field).int64.gt = 0,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // If true, the order is rejected instead of crossing the book (maker-only).
+  bool post_only = 8;
+  // Optional client order identifier for idempotency.
+  string client_order_id = 9 [
+    (buf.validate.field).string.max_len = 36,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
+  ];
+  // Fee source for BUY orders: QUOTE (default) or RECEIVED.
+  FeeSource fee_source = 10 [(buf.validate.field).enum.defined_only = true];
+  // Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.
+  STPMode stp_mode = 11 [(buf.validate.field).enum.defined_only = true];
+  // Optional attached risk controls (TP/SL/TrailingStop) for this order.
+  RiskPolicy attached_risk = 20;
+}
+
+// CreateOrderResponse is the binary (protobuf) response after placing an order.
+message CreateOrderResponse {
+  // Status indicator, e.g., "accepted".
+  string status = 1;
+  // Order ID as fixed64.
+  fixed64 order_id = 2;
+  // Echoed client order ID (when provided in request).
+  string client_order_id = 3;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 4;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 5;
+  // Trigger ID for attached take-profit.
+  optional uint64 take_profit_trigger_id = 20;
+  // Trigger ID for attached stop-loss.
+  optional uint64 stop_loss_trigger_id = 21;
+  // Trigger ID for attached trailing stop.
+  optional uint64 trailing_stop_trigger_id = 22;
+}
+
+// CancelOrderRequest is the binary (protobuf) request for canceling orders.
+message CancelOrderRequest {
+  // Exactly one of order_id or client_order_id must be set.
+  option (buf.validate.message).cel = {
+    id: "cancel_order.key_required"
+    message: "exactly one of order_id or client_order_id must be set"
+    expression: "(this.order_id > 0u) != (this.client_order_id != \"\")"
+  };
+
+  oneof key {
+    // Order ID as fixed64.
+    fixed64 order_id = 1 [(buf.validate.field).fixed64.gt = 0];
+    // Client order ID.
+    string client_order_id = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).string.max_len = 36,
+      (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+    ];
+  }
+  // Optional symbol_id for routing; when omitted, resolved from order directory.
+  uint32 symbol_id = 3;
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 4;
+}
+
+// CancelOrderResponse is the binary (protobuf) response after canceling an order.
+message CancelOrderResponse {
+  // Status indicator, e.g., "accepted".
+  string status = 1;
+  // Order ID as fixed64.
+  fixed64 order_id = 2;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 4;
+}
+
+// ErrorCode enumerates stable machine-readable error codes for the Orders API.
+// These mirror the REST problem+json "code" field for parity between REST and
+// ConnectRPC clients.
+enum ErrorCode {
+  // Error code was not provided.
+  ERROR_CODE_UNSPECIFIED = 0;
+  // Request could not be parsed or was structurally invalid.
+  ERROR_CODE_BAD_REQUEST = 1;
+  // Request fields failed validation.
+  ERROR_CODE_INVALID_ARGUMENT = 2;
+  // Account does not have enough available balance for the order.
+  ERROR_CODE_INSUFFICIENT_FUNDS = 3;
+  // Requested trading symbol is unknown.
+  ERROR_CODE_UNKNOWN_SYMBOL = 4;
+  // Price is invalid for the requested order.
+  ERROR_CODE_BAD_PRICE = 5;
+  // Quantity is invalid for the requested order.
+  ERROR_CODE_BAD_QTY = 6;
+  // Order notional is below the pair minimum.
+  ERROR_CODE_MIN_NOTIONAL = 7;
+  // Quantity does not align with the pair step size.
+  ERROR_CODE_QTY_STEP_SIZE = 8;
+  // Client order ID is already in use for a different active order.
+  ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID = 9;
+  // Service is temporarily unavailable.
+  ERROR_CODE_UNAVAILABLE = 10;
+  // Caller is not authenticated.
+  ERROR_CODE_UNAUTHENTICATED = 11;
+  // Caller is authenticated but not allowed to perform this action.
+  ERROR_CODE_PERMISSION_DENIED = 12;
+  // Requested order or resource was not found.
+  ERROR_CODE_NOT_FOUND = 13;
+  // Upstream dependency returned an error.
+  ERROR_CODE_UPSTREAM_ERROR = 14;
+  // Requested fee source is not allowed for this order.
+  ERROR_CODE_FEE_SOURCE_NOT_ALLOWED = 15;
+  // Additional domain-specific codes used by the Orders API.
+  ERROR_CODE_PAIR_DISABLED = 16;
+  ERROR_CODE_ORDER_UNKNOWN = 17;
+  ERROR_CODE_INTERNAL_ERROR = 18;
+  // Sub-account is present but not in an active state (disabled, deleted,
+  // etc.).
+  ERROR_CODE_SUBACCOUNT_INACTIVE = 19;
+  // Sub-account policy prevented trading on this market (e.g. pair mask).
+  ERROR_CODE_POLICY_MARKET_DENY = 20;
+  // Sub-account policy max order notional exceeded.
+  ERROR_CODE_POLICY_MAX_NOTIONAL = 21;
+  // Trading has been globally halted for this sub-account.
+  ERROR_CODE_POLICY_TRADING_HALTED = 22;
+  // Sub-account policy does not allow spot trading (action mask).
+  ERROR_CODE_POLICY_SPOT_TRADE_DENY = 23;
+  // API key is scoped to the master/root account and cannot trade on
+  // sub-accounts.
+  ERROR_CODE_API_KEY_ROOT_SCOPE_ONLY = 24;
+  // API key is scoped to a specific sub-account and cannot trade on the
+  // master/root account.
+  ERROR_CODE_API_KEY_SUB_SCOPE_ONLY = 25;
+  // API key is scoped to a different sub-account than the one requested.
+  ERROR_CODE_API_KEY_SUBACCOUNT_MISMATCH = 26;
+  // API key must have an attached policy before it can be used for trading.
+  ERROR_CODE_API_KEY_POLICY_REQUIRED = 27;
+  // API key referenced in the request could not be resolved by the Orders
+  // service.
+  ERROR_CODE_API_KEY_UNKNOWN = 28;
+  // API key policy does not allow trading this market, even though the
+  // sub-account policy does.
+  ERROR_CODE_API_KEY_MARKET_DENY = 29;
+  // Price must align with the pair tick size (LIMIT orders).
+  ERROR_CODE_PRICE_TICK_SIZE = 30;
+  // Quantity is below the pair minimum quantity (base units).
+  ERROR_CODE_MIN_QTY = 31;
+
+  // Post-only is only valid for LIMIT orders.
+  ERROR_CODE_POST_ONLY_LIMIT_ONLY = 32;
+  // Batch size exceeds the maximum allowed.
+  ERROR_CODE_BATCH_TOO_LARGE = 33;
+  // Cancel-all matched more orders than the safety cap allows.
+  ERROR_CODE_LIMIT_EXCEEDED = 34;
+  // Modify request in AMEND_ONLY mode requires replace semantics.
+  ERROR_CODE_MODIFICATION_REQUIRES_REPLACE = 35;
+  // Idempotency key was reused with a different payload.
+  ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE = 36;
+  // MARKET BUY cannot be reserved because no reference/top-of-book price is available.
+  ERROR_CODE_MARKET_PRICE_UNAVAILABLE = 37;
+  // Pair exists but is not listed yet.
+  ERROR_CODE_PAIR_NOT_LISTED_YET = 50;
+  // Pair was delisted and is no longer tradable.
+  ERROR_CODE_PAIR_DELISTED = 51;
+  // Pair is in cancel-only mode.
+  ERROR_CODE_PAIR_CANCEL_ONLY = 52;
+  // Pair is in post-only mode and requires post_only=true.
+  ERROR_CODE_PAIR_POST_ONLY = 53;
+  // Pair is in reduce-only mode and does not accept new spot orders.
+  ERROR_CODE_PAIR_REDUCE_ONLY = 54;
+  // Account-level risk limits were exceeded.
+  ERROR_CODE_RISK_LIMIT = 55;
+  // Market is halted.
+  ERROR_CODE_MARKET_HALTED = 56;
+  // Referenced account could not be resolved by the trading service.
+  ERROR_CODE_ACCOUNT_UNKNOWN = 57;
+  // Post-only order would cross the book.
+  ERROR_CODE_POST_ONLY_CROSS = 58;
+  // Reduce-only policy blocked the order.
+  ERROR_CODE_REDUCE_ONLY_BLOCKED = 59;
+  // Price band guard rejected the order.
+  ERROR_CODE_PRICE_BAND_VIOLATION = 60;
+  // Market-cap guard rejected the order.
+  ERROR_CODE_MARKET_CAP_VIOLATION = 61;
+  // Market order could not execute due to empty book.
+  ERROR_CODE_EMPTY_BOOK = 62;
+  // FOK order rejected due to insufficient immediate liquidity.
+  ERROR_CODE_FOK_INSUFFICIENT_LIQUIDITY = 63;
+  // Client order ID points to an order that already reached terminal state.
+  ERROR_CODE_ORDER_ALREADY_TERMINAL = 64;
+
+  // Trigger-specific error codes (40-49 range).
+  // Trigger price is invalid (e.g., TP below current price for long).
+  ERROR_CODE_TRIGGER_PRICE_INVALID = 40;
+  // Trigger price source not supported (e.g., INDEX_PRICE before it's
+  // available).
+  ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED = 41;
+  // Trailing stop distance must be positive.
+  ERROR_CODE_TRAILING_DISTANCE_INVALID = 42;
+  // Trigger not found (for cancel/get operations).
+  ERROR_CODE_TRIGGER_NOT_FOUND = 43;
+  // Trigger cannot be canceled in current state.
+  ERROR_CODE_TRIGGER_CANCEL_REJECTED = 44;
+  // Trigger status does not allow requested lifecycle operation.
+  ERROR_CODE_TRIGGER_STATUS_INVALID = 45;
+  // Trigger type/state does not support requested lifecycle operation.
+  ERROR_CODE_TRIGGER_NOT_MODIFIABLE = 46;
+  // Duplicate client trigger ID was reused with a different trigger payload.
+  ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID = 47;
+  // Trailing-stop max slippage (ticks or bps) is invalid.
+  ERROR_CODE_MAX_SLIPPAGE_INVALID = 48;
+  // Client reference price is stale compared to server-side BBO/drift policy.
+  ERROR_CODE_STALE_QUOTE = 65;
+}
+
+// ErrorDetail is attached to ConnectRPC errors for structured error handling.
+// Clients can inspect this to get a stable machine-readable error code.
+message ErrorDetail {
+  // Stable error code matching the REST problem+json "code" field.
+  ErrorCode code = 1;
+}
+
+// =============================================================================
+// Trigger System: Risk Controls + Conditional Orders
+// =============================================================================
+
+// TriggerPriceSource defines which price feed to use for trigger evaluation.
+// v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for
+// future.
+enum TriggerPriceSource {
+  // Trigger price source was not provided; spot triggers default to LAST_PRICE.
+  TRIGGER_PRICE_SOURCE_UNSPECIFIED = 0;
+  // Last traded price (default for spot).
+  LAST_PRICE = 1;
+  // Index price aggregated from external exchanges (future).
+  INDEX_PRICE = 2;
+  // Mark price for perpetuals (future).
+  MARK_PRICE = 3;
+}
+
+// TriggerDirection defines whether the trigger fires when price goes above or
+// below threshold.
+enum TriggerDirection {
+  // Trigger direction was not provided.
+  TRIGGER_DIRECTION_UNSPECIFIED = 0;
+  // Fire when price >= trigger_price (e.g., take-profit for long, stop-loss for
+  // short).
+  ABOVE = 1;
+  // Fire when price <= trigger_price (e.g., stop-loss for long, take-profit for
+  // short).
+  BELOW = 2;
+}
+
+// TakeProfitPolicy defines a take-profit attached to an order.
+// Arms after the parent order fills; fires when price crosses the threshold.
+message TakeProfitPolicy {
+  // Trigger price in ticks (6 decimals). Required.
+  int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
+  TriggerPriceSource trigger_price_source = 2 [(buf.validate.field).enum.defined_only = true];
+  // Order type for the child order when triggered. Defaults to MARKET.
+  OrderType order_type = 3 [(buf.validate.field).enum.defined_only = true];
+  // Limit price in ticks for LIMIT child orders. Required if order_type is
+  // LIMIT.
+  int64 limit_price_ticks = 4;
+}
+
+// StopLossPolicy defines a stop-loss attached to an order.
+// Arms after the parent order fills; fires when price crosses the threshold.
+message StopLossPolicy {
+  // Trigger price in ticks (6 decimals). Required.
+  int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
+  TriggerPriceSource trigger_price_source = 2 [(buf.validate.field).enum.defined_only = true];
+  // Order type for the child order when triggered. Defaults to MARKET.
+  OrderType order_type = 3 [(buf.validate.field).enum.defined_only = true];
+  // Limit price in ticks for LIMIT child orders. Required if order_type is
+  // LIMIT.
+  int64 limit_price_ticks = 4;
+}
+
+// TrailingStopPolicy defines a trailing stop attached to an order.
+// Tracks peak (for sell) or trough (for buy) and fires when price reverses by
+// the distance.
+message TrailingStopPolicy {
+  // Trailing distance. Exactly one of these should be set.
+  oneof trailing_distance {
+    // Trailing distance in absolute ticks.
+    int64 trailing_distance_ticks = 1 [(buf.validate.field).int64.gt = 0];
+    // Trailing distance in basis points (1 bp = 0.01%).
+    int32 trailing_distance_bps = 2 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+  // Optional price protection. If set, when the trailing stop triggers we place
+  // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
+  // MARKET order).
+  //
+  // Exactly one of these should be set (or neither for unprotected behavior).
+  oneof max_slippage {
+    // Maximum allowed slippage in absolute ticks.
+    int32 max_slippage_ticks = 6 [(buf.validate.field).int32.gt = 0];
+    // Maximum allowed slippage in basis points (1 bp = 0.01%).
+    int32 max_slippage_bps = 7 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+  // Optional activation price: trailing only starts after this price is
+  // reached. If omitted, trailing starts immediately after the parent order
+  // fills.
+  int64 activation_price_ticks = 3;
+  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
+  TriggerPriceSource trigger_price_source = 4 [(buf.validate.field).enum.defined_only = true];
+  // Order type for the child order when triggered. Defaults to MARKET.
+  OrderType order_type = 5 [(buf.validate.field).enum.defined_only = true];
+}
+
+// RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an
+// order. These arm after the parent order fills and fire when conditions are
+// met. If the parent order is canceled before any fill, attached risk controls
+// are discarded.
+message RiskPolicy {
+  option (buf.validate.message).cel = {
+    id: "risk_policy.oco_requires_tp_and_one_stop"
+    message: "oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)"
+    expression: "!this.oco || (has(this.take_profit) && (has(this.stop_loss) != has(this.trailing_stop)))"
+  };
+
+  // Optional take-profit configuration.
+  TakeProfitPolicy take_profit = 1;
+
+  // At most one stop leg can be configured for attached risk.
+  oneof stop_leg {
+    // Optional stop-loss configuration.
+    StopLossPolicy stop_loss = 2;
+    // Optional trailing stop configuration.
+    TrailingStopPolicy trailing_stop = 3;
+  }
+
+  // If true, take-profit and the configured stop leg (stop-loss or trailing-stop)
+  // form an OCO pair: when one fires, the other is canceled.
+  // Default is false (no mutual cancellation).
+  bool oco = 4;
+}
+
+// ModifyBehavior controls how ModifyOrder should handle amend-vs-replace paths.
+// MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE by server logic.
+enum ModifyBehavior {
+  // Behavior was not provided; server treats this as AMEND_OR_REPLACE.
+  MODIFY_BEHAVIOR_UNSPECIFIED = 0;
+  // Try in-place amend first; if patch cannot be amended, fall back to replace.
+  AMEND_OR_REPLACE = 1;
+  // In-place amend only; reject if patch requires replace semantics.
+  AMEND_ONLY = 2;
+  // Always attempt replace semantics.
+  REPLACE_ONLY = 3;
+}
+
+// ModifyActionTaken describes what action was applied for a modify request.
+enum ModifyActionTaken {
+  // Modify action is unknown or the request was rejected.
+  MODIFY_ACTION_UNSPECIFIED = 0;
+  // Existing order was amended in place.
+  AMENDED = 1;
+  // Existing order was canceled and replaced with a new order.
+  REPLACED = 2;
+}
+
+// =============================================================================
+// CancelAllOrders: filter-based mass cancel (kill switch / safety)
+// =============================================================================
+
+// CancelAllOrdersRequest cancels all matching open orders for an account.
+message CancelAllOrdersRequest {
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Symbol filter. When set, only orders on this symbol are canceled.
+  // When empty, all symbols are canceled.
+  string symbol = 2 [
+    (buf.validate.field).string.max_len = 32,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Side filter. When set, only orders on this side are canceled.
+  Side side = 3 [(buf.validate.field).enum.defined_only = true];
+  // If true, return matched counts without actually canceling.
+  bool dry_run = 4;
+  // Safety cap: reject if matched orders exceed this limit. Default 1000.
+  // Bounded to prevent accidental runaway values.
+  uint32 max_orders = 5 [
+    (buf.validate.field).uint32 = {lte: 10000},
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Idempotency key (required).
+  string request_id = 6 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+}
+
+// CancelAllOrdersResponse returns the result of a cancel-all operation.
+message CancelAllOrdersResponse {
+  // "submitted" or "dry_run".
+  string status = 1;
+  // Number of orders that matched the filter.
+  uint32 matched_orders = 2;
+  // Number of cancel requests submitted for processing.
+  uint32 submitted_cancels = 3;
+  // Number of cancels that could not be submitted (already canceled, etc.).
+  uint32 failed_cancels = 4;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 5;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 6;
+}
+
+// =============================================================================
+// CancelAllAfter: dead-man switch heartbeat
+// =============================================================================
+
+// CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.
+message CancelAllAfterRequest {
+  option (buf.validate.message).cel = {
+    id: "cancel_all_after.timeout_range"
+    message: "timeout_sec must be 0 or between 10 and 120"
+    expression: "this.timeout_sec == 0u || (this.timeout_sec >= 10u && this.timeout_sec <= 120u)"
+  };
+
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Heartbeat timeout in seconds.
+  // - 0 disables the dead-man switch for this account.
+  // - 10..120 arms or refreshes the switch.
+  uint32 timeout_sec = 2;
+  // Optional symbol filter. When set, only orders on this symbol are canceled
+  // on expiry. When empty, all symbols are canceled.
+  string symbol = 3 [
+    (buf.validate.field).string.max_len = 32,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Optional side filter for cancel-on-expiry.
+  Side side = 4 [(buf.validate.field).enum.defined_only = true];
+  // Idempotency/trace key from caller (required).
+  string request_id = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+}
+
+// CancelAllAfterResponse returns dead-man switch arming/disable status.
+message CancelAllAfterResponse {
+  // "armed" or "disabled".
+  string status = 1;
+  // Effective timeout in seconds (0 when disabled).
+  uint32 effective_timeout_sec = 2;
+  // Expiry timestamp in epoch nanoseconds (0 when disabled).
+  uint64 expires_at_ts_ns = 3;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 4;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 5;
+}
+
+// =============================================================================
+// BatchCreateOrders: best-effort batch order placement
+// =============================================================================
+
+// BatchCreateResultItem contains the per-item result of a batch create.
+message BatchCreateResultItem {
+  // "accepted" or "rejected".
+  string status = 1;
+  // Resolved order ID (populated on accept).
+  fixed64 order_id = 2;
+  // Echoed client order ID.
+  string client_order_id = 3;
+  // Error code if rejected.
+  string code = 4;
+  // Trigger ID for attached take-profit (when accepted and configured).
+  optional uint64 take_profit_trigger_id = 5;
+  // Trigger ID for attached stop-loss (when accepted and configured).
+  optional uint64 stop_loss_trigger_id = 6;
+  // Trigger ID for attached trailing stop (when accepted and configured).
+  optional uint64 trailing_stop_trigger_id = 7;
+}
+
+// BatchCreateOrdersRequest places multiple orders in one request.
+message BatchCreateOrdersRequest {
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Top-level idempotency key for the batch request.
+  string request_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+  // Orders to create (max 20). Reuses CreateOrderRequest payload, including attached risk.
+  repeated CreateOrderRequest items = 3 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 20
+  }];
+  // Optional partial-success flag. Current implementation is always best-effort.
+  bool allow_partial = 4;
+}
+
+// BatchCreateOrdersResponse returns per-item results for a batch create.
+message BatchCreateOrdersResponse {
+  // Per-item results in same order as request.
+  repeated BatchCreateResultItem results = 1;
+  // Aggregate counts.
+  uint32 accepted_count = 2;
+  uint32 rejected_count = 3;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 4;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 5;
+}
+
+// =============================================================================
+// BatchCancelOrders: explicit-ID batch cancel (bot control loop)
+// =============================================================================
+
+// ModifyOrderRequest updates an existing order using policy-driven amend/replace behavior.
+message ModifyOrderRequest {
+  // At least one patch field must be provided.
+  option (buf.validate.message).cel = {
+    id: "modify_order.patch_required"
+    message: "at least one of new_price_ticks, new_qty_scaled, or new_attached_risk must be set"
+    expression: "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
+  };
+
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Target key.
+  oneof key {
+    option (buf.validate.oneof).required = true;
+    // Order ID as fixed64.
+    fixed64 order_id = 2 [(buf.validate.field).fixed64.gt = 0];
+    // Client order ID to resolve within the caller account.
+    string client_order_id = 3 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).string.max_len = 36,
+      (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+    ];
+  }
+  // Idempotency key (required).
+  string request_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+
+  // Patch fields (presence-based).
+  // New limit price in ticks. Required for price changes.
+  optional int64 new_price_ticks = 5 [(buf.validate.field).int64.gt = 0];
+  // Target total quantity after modify/replace.
+  optional int64 new_qty_scaled = 6 [(buf.validate.field).int64.gt = 0];
+  // Replacement attached-risk policy for the order.
+  RiskPolicy new_attached_risk = 7;
+
+  // Modify behavior policy.
+  // MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE.
+  ModifyBehavior behavior = 8 [(buf.validate.field).enum.defined_only = true];
+  // Optional new client order id when replace path is taken.
+  string new_client_order_id = 9 [
+    (buf.validate.field).string.max_len = 36,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+}
+
+// ModifyOrderResponse returns deterministic modify outcome.
+message ModifyOrderResponse {
+  // Action applied; unspecified when rejected.
+  ModifyActionTaken action_taken = 1;
+  // Original order ID that was amended or replaced.
+  fixed64 old_order_id = 2;
+  // Final active order ID; same as old_order_id for amendments.
+  fixed64 final_order_id = 3;
+  // Error code if rejected.
+  string code = 4;
+  // Trigger IDs for updated attached risk controls (when applicable).
+  optional uint64 take_profit_trigger_id = 5;
+  optional uint64 stop_loss_trigger_id = 6;
+  optional uint64 trailing_stop_trigger_id = 7;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 8;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 9;
+}
+
+// BatchModifyItem identifies one modify operation inside a batch request.
+message BatchModifyItem {
+  // At least one patch field must be provided.
+  option (buf.validate.message).cel = {
+    id: "batch_modify_item.patch_required"
+    message: "at least one patch field must be set"
+    expression: "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
+  };
+
+  oneof key {
+    option (buf.validate.oneof).required = true;
+    // Order ID as fixed64. Exactly one of order_id or client_order_id.
+    fixed64 order_id = 1 [(buf.validate.field).fixed64.gt = 0];
+    // Client order ID. Exactly one of order_id or client_order_id.
+    string client_order_id = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).string.max_len = 36,
+      (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+    ];
+  }
+
+  // New limit price in ticks.
+  optional int64 new_price_ticks = 3 [(buf.validate.field).int64.gt = 0];
+  // Target total quantity after modify/replace.
+  optional int64 new_qty_scaled = 4 [(buf.validate.field).int64.gt = 0];
+  // Replacement attached-risk policy for the order.
+  RiskPolicy new_attached_risk = 5;
+
+  // Optional per-item behavior override.
+  // MODIFY_BEHAVIOR_UNSPECIFIED means "use behavior_default".
+  ModifyBehavior behavior = 6 [(buf.validate.field).enum.defined_only = true];
+  // Optional new client order id when replace path is taken.
+  string new_client_order_id = 7 [
+    (buf.validate.field).string.max_len = 36,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+}
+
+// BatchModifyResultItem contains one result in a batch modify response.
+message BatchModifyResultItem {
+  // "modified" or "rejected".
+  string status = 1;
+  // AMENDED or REPLACED when modified.
+  ModifyActionTaken action_taken = 2;
+  // Original order ID that was amended or replaced.
+  fixed64 old_order_id = 3;
+  // Final active order ID; same as old_order_id for amendments.
+  fixed64 final_order_id = 4;
+  // Client order ID associated with the final order when available.
+  string client_order_id = 5;
+  // Error code if rejected.
+  string code = 6;
+  // Trigger ID for attached take-profit after modification.
+  optional uint64 take_profit_trigger_id = 7;
+  // Trigger ID for attached stop-loss after modification.
+  optional uint64 stop_loss_trigger_id = 8;
+  // Trigger ID for attached trailing stop after modification.
+  optional uint64 trailing_stop_trigger_id = 9;
+}
+
+// BatchModifyOrdersRequest updates multiple orders in one request.
+message BatchModifyOrdersRequest {
+  // Prevent duplicate order targets in the same batch.
+  option (buf.validate.message).cel = {
+    id: "batch_modify_orders.unique_targets"
+    message: "each item target must be unique within a batch"
+    expression: "this.items.map(i, i.order_id > 0u ? \"o:\" + string(i.order_id) : \"c:\" + i.client_order_id).unique()"
+  };
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Idempotency key (required).
+  string request_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+  // Modify items.
+  repeated BatchModifyItem items = 3 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 50
+  }];
+  // Default behavior for items with unspecified behavior.
+  // MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE.
+  ModifyBehavior behavior_default = 4 [(buf.validate.field).enum.defined_only = true];
+  // Optional partial-success flag. Current behavior is best-effort per item.
+  bool allow_partial = 5;
+}
+
+// BatchModifyOrdersResponse returns per-item modify outcomes.
+message BatchModifyOrdersResponse {
+  // Per-item results in the same order as the request items.
+  repeated BatchModifyResultItem results = 1;
+  // Number of items amended in place.
+  uint32 amended_count = 2;
+  // Number of items replaced with a new order.
+  uint32 replaced_count = 3;
+  // Number of items rejected.
+  uint32 rejected_count = 4;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 5;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 6;
+}
+
+// BatchCancelItem identifies a single order to cancel within a batch.
+message BatchCancelItem {
+  // Exactly one of order_id or client_order_id must be set.
+  option (buf.validate.message).cel = {
+    id: "batch_cancel_item.key_required"
+    message: "exactly one of order_id or client_order_id must be set"
+    expression: "(this.order_id > 0u) != (this.client_order_id != \"\")"
+  };
+
+  // Order ID as fixed64. Exactly one of order_id or client_order_id.
+  fixed64 order_id = 1 [(buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE];
+  // Client order ID. Exactly one of order_id or client_order_id.
+  string client_order_id = 2 [
+    (buf.validate.field).string.max_len = 36,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Optional symbol routing hint.
+  uint32 symbol_id = 3;
+}
+
+// BatchCancelResultItem contains the per-item result of a batch cancel.
+message BatchCancelResultItem {
+  // "accepted" or "rejected".
+  string status = 1;
+  // Resolved order ID (populated on accept).
+  fixed64 order_id = 2;
+  // Echoed client order ID (when provided).
+  string client_order_id = 3;
+  // Error code if rejected.
+  string code = 4;
+}
+
+// BatchCancelOrdersRequest cancels multiple orders by explicit ID.
+message BatchCancelOrdersRequest {
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Idempotency key (required).
+  string request_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+  // Orders to cancel (max 50).
+  repeated BatchCancelItem items = 3 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 50
+  }];
+}
+
+// BatchCancelOrdersResponse returns per-item results for a batch cancel.
+message BatchCancelOrdersResponse {
+  // Per-item results in same order as request.
+  repeated BatchCancelResultItem results = 1;
+  // Aggregate counts.
+  uint32 accepted_count = 2;
+  uint32 rejected_count = 3;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 4;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 5;
+}
+
+service OrdersService {
+  // Create a new order.
+  // REST clients use generated handlers that convert decimal strings to scaled ints.
+  // ConnectRPC clients use this directly with scaled integer values.
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Order"
+      description:
+        "Create a single order with side, type, quantity, and optional price fields. "
+        "Supports optional client order IDs and attached risk instructions (take-profit, stop-loss, trailing stop)."
+      tags: "Orders Service"
+    };
+  }
+
+  // Cancels an existing order by id or client order id.
+  // REST clients use generated handlers that convert base58 IDs to uint64.
+  // ConnectRPC clients use this directly with fixed64 IDs.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Order"
+      description:
+        "Cancel a single open order by order ID or client order ID. "
+        "Supports optional subaccount and symbol scoping."
+      tags: "Orders Service"
+    };
+  }
+
+  // Cancels all matching open orders for an account (kill switch).
+  // Evaluates matching orders from a consistent snapshot at request start.
+  // Final state is confirmed via the order update stream or read path.
+  rpc CancelAllOrders(CancelAllOrdersRequest) returns (CancelAllOrdersResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel All Orders"
+      description:
+        "Cancel all matching open orders for an account. "
+        "Supports optional symbol and side filters, dry-run preview, and max order bounds."
+      tags: "Orders Service"
+    };
+  }
+
+  // Set cancel-all-after (dead-man switch).
+  // Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.
+  rpc CancelAllAfter(CancelAllAfterRequest) returns (CancelAllAfterResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel All After (Dead-Man Switch)"
+      description:
+        "Set or disable a dead-man switch timeout for automatic cancel-all. "
+        "Supports optional symbol and side scope with idempotent heartbeat refresh."
+      tags: "Orders Service"
+    };
+  }
+
+  // Places multiple orders in a single request (best-effort per item).
+  rpc BatchCreateOrders(BatchCreateOrdersRequest) returns (BatchCreateOrdersResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Batch Create Orders"
+      description:
+        "Create up to 20 orders in a single request with per-item results. "
+        "Supports mixed symbols, attached risk payloads, and optional partial acceptance."
+      tags: "Orders Service"
+    };
+  }
+
+  // Modifies an existing order using explicit behavior policy.
+  rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Modify Order"
+      description:
+        "Modify a single open order by order ID or client order ID. "
+        "Supports amend-or-replace behavior policies, price and quantity updates, and attached risk updates."
+      tags: "Orders Service"
+    };
+  }
+
+  // Modifies multiple existing orders in one request.
+  rpc BatchModifyOrders(BatchModifyOrdersRequest) returns (BatchModifyOrdersResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Batch Modify Orders"
+      description:
+        "Modify up to 50 open orders in one request with per-item outcomes. "
+        "Supports default and per-item behavior policies plus aggregated result counters."
+      tags: "Orders Service"
+    };
+  }
+
+  // Cancels multiple orders by explicit ID in a single request.
+  // Per-item results are returned; partial success is the default.
+  // Final state is confirmed via the order update stream or read path.
+  rpc BatchCancelOrders(BatchCancelOrdersRequest) returns (BatchCancelOrdersResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Batch Cancel Orders"
+      description:
+        "Cancel up to 50 orders by order ID or client order ID in one request. "
+        "Returns per-item accept or reject results with aggregate counts."
+      tags: "Orders Service"
+    };
+  }
+}

@@ -1,0 +1,303 @@
+syntax = "proto3";
+
+package ledger.read.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polyester/api/options.proto";
+import "polyester/type/v1/u128.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/ledger/read/v1;ledgerrdv1";
+// Document-level OpenAPI metadata
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Ledger Read"
+      description: "Read endpoints for balances, transfers, and holds."
+    }
+  ]
+};
+
+// Read surface for the Ledger (stable, versionable).
+//
+// Canonical amounts are represented as integer quantities:
+// - IDs: fixed64/uint32
+// - Amounts: U128 (hi/lo) base units or scaled integer vectors (e.g. *_q)
+//
+// REST JSON responses render
+// human-friendly decimal strings without duplicating REST message types here.
+
+message GetBalancesRequest {
+  // Optional sub-account to scope balances to. If omitted, balances are
+  // returned for the authenticated root account derived from the JWT or API
+  // key. The logical account id itself is always derived from the caller's JWT
+  // or API key, not from this payload.
+  optional fixed64 subaccount_id = 1;
+}
+
+// Fixed-size representation for balances (for Protobuf/WS clients).
+// Uses common U128 messages for amounts to keep schema tidy and consistent.
+message AssetBalance {
+  uint32 asset_id = 1; // public asset id (client resolves name/scale)
+  // Trading/trading balance for this asset (u128 base units).
+  polyester.type.v1.U128 trading = 2;
+  // Funding balance for this asset (u128 base units).
+  polyester.type.v1.U128 funding = 3;
+  // Reserved amount in the trading bucket (u128 base units).
+  polyester.type.v1.U128 reserved = 4;
+  // Available amount in the trading bucket (u128 base units).
+  // This is computed as max(trading - reserved, 0).
+  polyester.type.v1.U128 available = 5;
+}
+
+message GetBalancesResponse {
+  repeated AssetBalance balances = 1;
+}
+
+// Supported history windows for balance charts.
+enum BalanceRange {
+  BALANCE_RANGE_UNSPECIFIED = 0;
+  DAY_1 = 1; // 1 day
+  DAY_7 = 2; // 7 days
+  DAY_30 = 3; // 30 days
+  DAY_90 = 4; // 90 days
+  DAY_180 = 5; // 180 days
+  DAY_365 = 6; // 365 days
+}
+
+message GetBalanceHistoryRequest {
+  // Optional sub-account to scope balances to. If omitted, balances are
+  // returned for the authenticated root account derived from the JWT or API
+  // key. The logical account id itself is always derived from the caller's JWT
+  // or API key, not from this payload.
+  optional fixed64 subaccount_id = 1;
+  // History window to return. When unset/UNSPECIFIED, defaults to 1D.
+  BalanceRange range = 2 [(buf.validate.field).enum.defined_only = true];
+  // Optional public asset filter. When unset/0, returns all assets.
+  uint32 ledger = 3;
+  // Optional subset of account buckets to return. When empty, returns all
+  // account buckets.
+  repeated uint32 account_codes = 4;
+}
+
+// Columnar balance series payload (scaled integers).
+// REST renders decimal strings from these values.
+message BalanceSeries {
+  uint32 asset_id = 1; // public asset id
+  uint32 account_code = 2; // account bucket code
+  // balance in asset units scaled by 1e7 (7 decimals). Aligned 1:1 with implicit timestamps.
+  repeated uint64 balance_q = 3;
+}
+
+message GetBalanceHistoryResponse {
+  BalanceRange range = 1;
+  string bucket = 2;
+  fixed32 start_ts_sec = 3;
+  fixed32 end_ts_sec = 4;
+  uint32 points = 5;
+  repeated BalanceSeries series = 6;
+}
+
+// How to group equity series data.
+enum EquityGroupBy {
+  GROUP_BY_UNSPECIFIED = 0; // defaults to ACCOUNT
+  GROUP_BY_ACCOUNT = 1; // group by account bucket
+  GROUP_BY_ASSET = 2; // group by asset (BTC, ETH, etc.)
+}
+
+// Account grouping metadata (used when group_by = ACCOUNT).
+message AccountGrouping {
+  uint32 code = 1; // account bucket code
+  string name = 2; // human-readable name ("funding", "trading")
+}
+
+// Asset grouping metadata (used when group_by = ASSET).
+message AssetGrouping {
+  uint32 id = 1; // public asset id (0 for "OTHER" bucket)
+  string symbol = 2; // asset symbol ("BTC", "ETH", "OTHER")
+}
+
+// Equity history in USDT (or BTC via client-side conversion using btc_prices).
+// Values are derived from per-asset balances and market prices (close ticks).
+message GetEquityHistorySeriesRequest {
+  // Optional sub-account to scope equity to. If omitted, equity is returned for
+  // the authenticated root account derived from the JWT or API key.
+  optional fixed64 subaccount_id = 1;
+  // History window to return. When unset/UNSPECIFIED, defaults to 1D.
+  BalanceRange range = 2 [(buf.validate.field).enum.defined_only = true];
+
+  reserved 3; // was: quote_ledger (now always USDT)
+
+  // Optional subset of account bucket codes.
+  // When empty, server returns both funding and trading.
+  // Only used when group_by = ACCOUNT.
+  repeated uint32 account_codes = 4;
+
+  // How to group the equity series. Defaults to ACCOUNT if unspecified.
+  EquityGroupBy group_by = 5;
+}
+
+// Columnar equity series payload (scaled integers).
+// REST renders decimal strings from these values.
+message EquitySeries {
+  // Grouping identifier: either account or asset, depending on request group_by.
+  oneof grouping {
+    AccountGrouping account = 1; // set when group_by = ACCOUNT
+    AssetGrouping asset = 3; // set when group_by = ASSET
+  }
+  // Equity in quote currency scaled by 1e4 (4 decimals). Aligned 1:1 with timestamps.
+  repeated sint64 equity_q = 2;
+}
+
+message GetEquityHistorySeriesResponse {
+  BalanceRange range = 1;
+  string bucket = 2;
+  fixed32 start_ts_sec = 3;
+  fixed32 end_ts_sec = 4;
+  reserved 5; // was: quote_ledger (now always USDT)
+  // Human-readable quote asset symbol (always "USDT").
+  string quote_asset = 6;
+  uint32 points = 7;
+  repeated EquitySeries series = 8;
+  // BTC price in USDT at each timestamp, scaled by 1e6 (price ticks).
+  // Enables client-side conversion to BTC denomination without refetch.
+  repeated int64 btc_prices_q = 10;
+}
+
+message ListTransfersRequest {
+  // Guardrails: timestamp range must be ordered when both are set.
+  option (buf.validate.message).cel = {
+    id: "list_transfers.timestamp_range_valid"
+    message: "timestamp_max must be >= timestamp_min when both are set"
+    expression: "this.timestamp_min == 0u || this.timestamp_max == 0u || this.timestamp_max >= this.timestamp_min"
+  };
+
+  // Optional sub-account to scope transfers to. If omitted, transfers are
+  // listed for the authenticated root account derived from the JWT or API key.
+  optional fixed64 subaccount_id = 1;
+  // Max number of rows to return (server may clamp). Default applied if 0.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
+  // true=newest first; false=oldest first.
+  bool reversed = 3;
+  // Optional lower timestamp bound (inclusive). Server may ignore.
+  uint64 timestamp_min = 4;
+  // Optional upper timestamp bound (inclusive). Server may ignore.
+  uint64 timestamp_max = 5;
+  // Optional filter by transfer reason code (stored as uint16 internally; use
+  // uint32 here for convenience).
+  uint32 code = 6;
+  uint32 ledger = 7; // optional filter by asset ledger
+  uint64 since = 8; // cursor: return rows with timestamp > since
+}
+
+// Transfer row with compact integers and client-side resolution.
+message TransferRow {
+  uint32 asset_id = 1; // public asset id; client resolves symbol/scale
+  polyester.type.v1.U128 amount = 2; // base units (u128)
+  uint32 type = 3; // reason code id
+  uint32 account_code = 4; // account bucket code
+  uint64 timestamp = 5; // cluster timestamp
+  string tx_id = 7; // opaque transfer id (chain hash or internal id)
+  bool onchain = 8; // true for on-chain transfers
+  polyester.type.v1.U128 balance_after = 9; // post-transfer balance (u128)
+  bool is_debit = 10; // true for debit legs, false for credit legs
+  uint64 link_id = 11; // correlation id derived from ME matchId for grouping
+  // related legs (0 when N/A)
+  string flow_id = 12; // public lifecycle flow id when this transfer belongs
+  // to a chain lifecycle flow
+}
+
+message ListTransfersResponse {
+  // Transfer rows in requested order.
+  repeated TransferRow transfers = 1;
+  uint64 next_cursor = 2;
+}
+
+message ListHoldsRequest {
+  // Optional sub-account to scope holds to. If omitted, holds are listed for
+  // the authenticated root account derived from the JWT or API key.
+  optional fixed64 subaccount_id = 1;
+  // Max number of rows to return (server may clamp). Default applied if 0.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
+  // true=newest first; false=oldest first.
+  bool reversed = 3;
+}
+
+// Hold row with compact integers and client-side resolution.
+message HoldRow {
+  fixed64 hold_id = 1; // pending transfer id (numeric)
+  polyester.type.v1.U128 amount_reserved = 2; // base units (u128)
+  uint32 asset_id = 3; // public asset id
+  uint64 expires_at_ns = 4;
+}
+
+message ListHoldsResponse {
+  repeated HoldRow holds = 1;
+}
+
+message GetHealthRequest {}
+message GetHealthResponse {
+  bool ok = 1;
+  string version = 2;
+}
+
+// LedgerReadService exposes read-only ledger endpoints (balances, history, transfers, holds).
+service LedgerReadService {
+  // Retrieve balance history buckets for an account.
+  // Supports optional subaccount, range, asset, and account-code filters.
+  rpc GetBalanceHistory(GetBalanceHistoryRequest) returns (GetBalanceHistoryResponse) {}
+
+  // Retrieve equity history as columnar series data.
+  // Supports optional subaccount, range, account-code filtering, and grouping by account or asset.
+  rpc GetEquityHistorySeries(GetEquityHistorySeriesRequest) returns (GetEquityHistorySeriesResponse) {}
+
+  // List finalized transfer history for an account.
+  // Supports optional subaccount, asset, ordering, and cursor filters.
+  rpc ListTransfers(ListTransfersRequest) returns (ListTransfersResponse) {}
+
+  // ListHolds returns pending holds with integer amounts (u128) and asset ids.
+  rpc ListHolds(ListHoldsRequest) returns (ListHoldsResponse) {}
+
+  // Retrieve the latest balances for an account.
+  // Supports optional subaccount scoping and returns asset symbols with decimal amounts on REST.
+  rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse) {}
+
+  // Retrieve service health and version (public).
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/health"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Health"
+      description: "Retrieve service health and version."
+      tags: "Ledger Read"
+    };
+  }
+}
+
+// ErrorCode enumerates stable machine-readable error codes for the Ledger Read
+// API. These mirror the REST problem+json "code" field for parity between REST
+// and ConnectRPC clients.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_BAD_REQUEST = 1;
+  ERROR_CODE_UNAUTHENTICATED = 2;
+  ERROR_CODE_PERMISSION_DENIED = 3;
+  ERROR_CODE_NOT_FOUND = 4;
+  // Missing or invalid account identifier (legacy; used by older endpoints).
+  ERROR_CODE_MISSING_ACCOUNT_ID = 5;
+  ERROR_CODE_INVALID_ACCOUNT_ID = 6;
+  // Wallet-specific errors for balance lookups by wallet.
+  ERROR_CODE_MISSING_WALLET = 7;
+  ERROR_CODE_WALLET_RESOLUTION_UNAVAILABLE = 8;
+  ERROR_CODE_WALLET_NOT_FOUND = 9;
+  // Upstream dependency error (e.g., transfers store, wallet resolver).
+  ERROR_CODE_UPSTREAM_ERROR = 10;
+}
+
+// ErrorDetail is attached to ConnectRPC errors for structured error handling.
+// Clients can inspect this to get a stable machine-readable error code.
+message ErrorDetail {
+  // Stable error code matching the REST problem+json "code" field.
+  ErrorCode code = 1;
+}

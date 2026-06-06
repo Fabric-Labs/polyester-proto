@@ -1,0 +1,587 @@
+syntax = "proto3";
+
+package polychart.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/polychart/v1;polychartv1";
+// Document-level OpenAPI metadata for Polychart persistence and sharing.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Polychart Service"
+      description: "Persistence and sharing for Polychart drawing layers and drawings."
+    }
+  ]
+};
+
+// LayerRef uniquely identifies a drawing layer across owners.
+message LayerRef {
+  // Account that owns the layer.
+  fixed64 owner_id = 1;
+  // Layer identifier unique within the owner account.
+  fixed64 layer_id = 2;
+}
+
+// DrawingRef uniquely identifies a drawing across owners.
+message DrawingRef {
+  // Account that owns the drawing.
+  fixed64 owner_id = 1;
+  // Drawing identifier unique within the owner account.
+  fixed64 drawing_id = 2;
+}
+
+// Layer is a shareable container of drawings for one market.
+message Layer {
+  // Account that owns the layer.
+  fixed64 owner_id = 1;
+  // Layer identifier unique within the owner account.
+  fixed64 layer_id = 2;
+  // Engine symbol identifier for the market this layer belongs to.
+  uint32 engine_symbol_id = 3;
+
+  // Human-readable layer name.
+  string name = 4;
+  // Owner-defined ordering hint for the layer list.
+  int32 sort_hint = 5;
+
+  // Owner-level style defaults.
+  // Packed layer color in 0xAARRGGBB format.
+  uint32 color_rgba = 6;
+  // True when drawings should use the layer color by default.
+  bool use_layer_color = 7;
+
+  // True when clients should prevent editing drawings in this layer.
+  bool is_locked = 8;
+  // True when the layer is visible by default.
+  bool is_visible = 9;
+
+  // Monotonic per layer; increments on any committed change to the layer or its drawings.
+  fixed64 revision = 10;
+  // Server-assigned commit timestamp in milliseconds since epoch (UTC).
+  fixed64 updated_at_ms = 11;
+}
+
+// Drawing is a shape or annotation stored inside a layer.
+message Drawing {
+  // Account that owns the drawing.
+  fixed64 owner_id = 1;
+  // Drawing identifier unique within the owner account.
+  fixed64 drawing_id = 2;
+
+  // Parent layer for the drawing.
+  LayerRef layer = 3;
+  // Engine symbol identifier for the drawing market.
+  uint32 engine_symbol_id = 4;
+
+  // Client-defined drawing type identifier.
+  uint32 type = 5;
+  // Client-defined payload schema version.
+  uint32 version = 6;
+
+  // Serialized drawing payload bytes.
+  bytes payload = 7;
+
+  // Minimum drawing time bound in milliseconds since epoch (UTC); 0 means unset.
+  fixed64 bbox_time_min_ms = 8;
+  // Maximum drawing time bound in milliseconds since epoch (UTC); 0 means unset.
+  fixed64 bbox_time_max_ms = 9;
+  // Minimum drawing price bound; 0 means unset.
+  double bbox_price_min = 10;
+  // Maximum drawing price bound; 0 means unset.
+  double bbox_price_max = 11;
+
+  // Server-assigned commit timestamp in milliseconds since epoch (UTC).
+  fixed64 updated_at_ms = 12;
+  // Server-assigned deletion timestamp in milliseconds since epoch (UTC); 0 means not deleted.
+  fixed64 deleted_at_ms = 13;
+  // Client-assigned commit timestamp in milliseconds since epoch (UTC), used for last-write-wins merge.
+  fixed64 client_updated_at_ms = 14;
+}
+
+// LayerSubscription is the viewer's per-market preference for one accessible layer.
+message LayerSubscription {
+  // Viewer account that owns this subscription.
+  fixed64 viewer_id = 1;
+  // Engine symbol identifier for the subscription market.
+  uint32 engine_symbol_id = 2;
+
+  // Layer included in the viewer's market subscriptions.
+  LayerRef layer = 3;
+
+  // Optional viewer-specific display name for the layer.
+  string alias_name = 4;
+  // Viewer-defined ordering value for subscribed layers.
+  int32 sort_order = 5;
+  // True when drawings from this layer should be loaded by default.
+  bool is_enabled = 6;
+  // True when the layer should stay pinned in the viewer's layer list.
+  bool is_pinned = 7;
+
+  // Viewer overrides (optional).
+  // Visibility override for this viewer; unset means use the layer default.
+  optional bool is_visible_override = 8;
+  // Locked-state override for this viewer; unset means use the layer default.
+  optional bool is_locked_override = 9;
+}
+
+// =============================================================================
+// Snapshots
+// =============================================================================
+
+// Load viewer's subscribed layers + drawings for a market.
+message GetMarketLayersRequest {
+  // Engine symbol identifier for the market to load.
+  uint32 engine_symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+}
+
+// GetMarketLayersResponse returns subscribed layer metadata and enabled drawing snapshots.
+message GetMarketLayersResponse {
+  // Engine symbol identifier for the returned market.
+  uint32 engine_symbol_id = 1;
+
+  // Caller subscriptions for the market.
+  repeated LayerSubscription subscriptions = 2;
+  // Only layers referenced by `subscriptions` are returned here.
+  repeated Layer layers = 3;
+  // Drawings are returned only for enabled subscriptions (avoid huge payloads).
+  repeated Drawing drawings = 4;
+}
+
+// List layers explicitly shared to the viewer for a market (metadata only; no drawings).
+// This is the viewer's "inbox" for FOLLOWERS/GROUP/USER shares.
+// It must NOT act as a global directory of PUBLIC layers.
+message ListInboxMarketLayersRequest {
+  // Engine symbol identifier for the market inbox.
+  uint32 engine_symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Maximum number of layers to return; the service may apply a smaller default or maximum.
+  uint32 limit = 2;
+  // Exclusive owner cursor from the previous response; 0 starts from the first page.
+  fixed64 after_owner_id = 3;
+  // Exclusive layer cursor from the previous response; 0 starts from the first page.
+  fixed64 after_layer_id = 4;
+}
+
+// ListInboxMarketLayersResponse returns metadata-only shared layers for one market.
+message ListInboxMarketLayersResponse {
+  // Engine symbol identifier for the returned market.
+  uint32 engine_symbol_id = 1;
+  // Shared layer metadata only; drawings are not included.
+  repeated Layer layers = 2;
+  // Cursor owner ID for the next page; 0 means there are no more pages.
+  fixed64 next_after_owner_id = 3;
+  // Cursor layer ID for the next page; 0 means there are no more pages.
+  fixed64 next_after_layer_id = 4;
+}
+
+// Fetch a single layer snapshot for realtime gap recovery and share viewing.
+message GetLayerSnapshotRequest {
+  // Layer to fetch.
+  LayerRef layer = 1;
+}
+
+// GetLayerSnapshotResponse returns a layer and all non-deleted drawings in it.
+message GetLayerSnapshotResponse {
+  // Current layer metadata.
+  Layer layer = 1;
+  // Drawings currently in the layer.
+  repeated Drawing drawings = 2;
+}
+
+// =============================================================================
+// Share links (create/revoke) and share token resolution (no auth)
+// =============================================================================
+
+// Resolve a share token to a layer snapshot. No auth required.
+// This is the ONLY unauthenticated API for layers.
+message ResolveLayerShareTokenRequest {
+  // Opaque share token from a layer share link.
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// ResolveLayerShareTokenResponse returns a view-only layer snapshot for a valid share token.
+message ResolveLayerShareTokenResponse {
+  // Shared layer metadata.
+  Layer layer = 1;
+  // Drawings currently in the shared layer.
+  repeated Drawing drawings = 2;
+  // Optional short-lived realtime subscribe token scoped to this layer.
+  string centrifugo_sub_token = 3;
+}
+
+// Authenticated viewers request realtime subscribe tokens for layer channels.
+message GetLayerSubscribeTokensRequest {
+  // Layers for which the caller needs subscribe tokens.
+  repeated LayerRef layers = 1;
+}
+
+// LayerSubscribeToken contains a subscribe token for one layer.
+message LayerSubscribeToken {
+  // Layer the token authorizes.
+  LayerRef layer = 1;
+  // Short-lived realtime subscribe token for the layer.
+  string centrifugo_sub_token = 2;
+}
+
+// GetLayerSubscribeTokensResponse contains subscribe tokens for authorized layers.
+message GetLayerSubscribeTokensResponse {
+  // Subscribe tokens keyed by layer.
+  repeated LayerSubscribeToken tokens = 1;
+}
+
+// CreateLayerShareLinkRequest creates a token-gated share link for a layer.
+message CreateLayerShareLinkRequest {
+  // Layer to share.
+  LayerRef layer = 1;
+  // Permission bitmask for the share link: VIEW=1, EDIT=2, SHARE=4, MANAGE=8.
+  uint32 perms = 2 [(buf.validate.field).uint32.gt = 0];
+  // Expiration time in milliseconds since epoch (UTC); 0 means the link does not expire.
+  fixed64 expires_at_ms = 3;
+}
+
+// CreateLayerShareLinkResponse returns the minted share token.
+message CreateLayerShareLinkResponse {
+  // Opaque share token.
+  string token = 1;
+}
+
+// RevokeLayerShareLinkRequest revokes one previously minted layer share token.
+message RevokeLayerShareLinkRequest {
+  // Opaque share token to revoke.
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// RevokeLayerShareLinkResponse is empty when the token was revoked.
+message RevokeLayerShareLinkResponse {}
+
+// =============================================================================
+// Publications (listed discovery)
+// =============================================================================
+
+// PublishedLayer contains discovery metadata for a listed layer.
+message PublishedLayer {
+  // Listed layer metadata.
+  Layer layer = 1;
+  // Public display title.
+  string title = 2;
+  // Public description shown with the layer.
+  string description = 3;
+  // Public tags used for grouping or filtering.
+  repeated string tags = 4;
+  // Publication time in milliseconds since epoch (UTC).
+  fixed64 published_at_ms = 5;
+}
+
+// ListOwnerPublishedLayersRequest lists discoverable layers for one owner.
+message ListOwnerPublishedLayersRequest {
+  // Owner account whose published layers should be listed.
+  fixed64 owner_id = 1;
+  // Optional market filter.
+  optional uint32 engine_symbol_id = 2;
+  // Maximum number of layers to return; the service may apply a smaller default or maximum.
+  uint32 limit = 3;
+  // Exclusive publication-time cursor from the previous response; 0 starts from the first page.
+  fixed64 after_published_at_ms = 4;
+  // Exclusive layer cursor from the previous response; 0 starts from the first page.
+  fixed64 after_layer_id = 5;
+}
+
+// ListOwnerPublishedLayersResponse contains one page of discoverable layers.
+message ListOwnerPublishedLayersResponse {
+  // Published layers, returned newest-published first.
+  repeated PublishedLayer layers = 1;
+  // Cursor publication timestamp for the next page; 0 means there are no more pages.
+  fixed64 next_after_published_at_ms = 2;
+  // Cursor layer ID for the next page; 0 means there are no more pages.
+  fixed64 next_after_layer_id = 3;
+}
+
+// PublishLayerRequest lists a layer for discovery. Publishing implies PUBLIC view access.
+message PublishLayerRequest {
+  // Layer to publish.
+  LayerRef layer = 1;
+  // Public display title.
+  string title = 2 [(buf.validate.field).string.min_len = 1];
+  // Public description shown with the layer.
+  string description = 3;
+  // Public tags used for grouping or filtering.
+  repeated string tags = 4;
+}
+
+// PublishLayerResponse returns the published layer metadata.
+message PublishLayerResponse {
+  // Published layer metadata.
+  PublishedLayer layer = 1;
+}
+
+// UnpublishLayerRequest removes a layer from discovery listings.
+message UnpublishLayerRequest {
+  // Layer to remove from discovery.
+  LayerRef layer = 1;
+}
+
+// UnpublishLayerResponse is empty when the layer was removed from discovery.
+message UnpublishLayerResponse {}
+
+// =============================================================================
+// Mutations
+// =============================================================================
+
+// UpsertLayerRequest creates or updates a layer using optimistic concurrency.
+message UpsertLayerRequest {
+  // Layer payload to create or update.
+  Layer layer = 1;
+  // Expected current layer revision; 0 creates a new layer.
+  fixed64 expected_revision = 2;
+}
+
+// UpsertLayerResponse returns the committed layer.
+message UpsertLayerResponse {
+  // Layer after server-side commit handling.
+  Layer layer = 1;
+}
+
+// DeleteLayerRequest soft-deletes a layer and its drawings using optimistic concurrency.
+message DeleteLayerRequest {
+  // Layer to delete.
+  LayerRef layer = 1;
+  // Expected current layer revision.
+  fixed64 expected_revision = 2;
+}
+
+// DeleteLayerResponse returns the final layer revision after deletion.
+message DeleteLayerResponse {
+  // Final layer revision after delete.
+  fixed64 layer_revision = 1;
+}
+
+// UpsertDrawingRequest creates or updates one drawing using the parent layer revision.
+message UpsertDrawingRequest {
+  // Drawing payload to create or update.
+  Drawing drawing = 1;
+  // Expected current revision of the parent layer.
+  fixed64 expected_layer_revision = 2;
+}
+
+// UpsertDrawingResponse returns the committed drawing and new parent layer revision.
+message UpsertDrawingResponse {
+  // Drawing after server-side commit handling.
+  Drawing drawing = 1;
+  // New parent layer revision after mutation.
+  fixed64 layer_revision = 2;
+}
+
+// DeleteDrawingRequest soft-deletes one drawing using the parent layer revision.
+message DeleteDrawingRequest {
+  // Drawing to delete.
+  DrawingRef drawing = 1;
+  // Parent layer that contains the drawing.
+  LayerRef layer = 2;
+  // Expected current revision of the parent layer.
+  fixed64 expected_layer_revision = 3;
+}
+
+// DeleteDrawingResponse returns the new parent layer revision.
+message DeleteDrawingResponse {
+  // New parent layer revision after deletion.
+  fixed64 layer_revision = 1;
+}
+
+// SetLayerSubscriptionsRequest replaces the caller's layer subscriptions for one market.
+message SetLayerSubscriptionsRequest {
+  // Engine symbol identifier for the market whose subscriptions should be replaced.
+  uint32 engine_symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Full replace for (viewer_id, engine_symbol_id).
+  // Server replaces all existing rows for the market with this list.
+  repeated LayerSubscription subscriptions = 2;
+}
+
+// SetLayerSubscriptionsResponse is empty when subscriptions were saved.
+message SetLayerSubscriptionsResponse {}
+
+// PolychartService persists chart drawing layers and manages sharing.
+service PolychartService {
+  // GetMarketLayers returns the caller's subscribed layers and drawings for a market.
+  rpc GetMarketLayers(GetMarketLayersRequest) returns (GetMarketLayersResponse) {
+    option (google.api.http) = {get: "/v1/polychart/markets/{engine_symbol_id}/layers"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Market Layers"
+      description: "Retrieve enabled drawing layers and drawings for a market, scoped to caller subscriptions."
+      tags: "Polychart Service"
+    };
+  }
+
+  // ListInboxMarketLayers lists layers explicitly shared to the viewer (metadata only).
+  rpc ListInboxMarketLayers(ListInboxMarketLayersRequest) returns (ListInboxMarketLayersResponse) {
+    option (google.api.http) = {get: "/v1/polychart/markets/{engine_symbol_id}/layers/inbox"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Inbox Market Layers"
+      description: "List drawing layers shared directly to the caller for a market."
+      tags: "Polychart Service"
+    };
+  }
+
+  // GetLayerSnapshot returns a layer and all drawings in it.
+  rpc GetLayerSnapshot(GetLayerSnapshotRequest) returns (GetLayerSnapshotResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/layers/snapshot"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Layer Snapshot"
+      description: "Retrieve the current snapshot of a single drawing layer and its drawings."
+      tags: "Polychart Service"
+    };
+  }
+
+  // GetLayerSubscribeTokens returns realtime subscribe tokens for layer channels (batch).
+  rpc GetLayerSubscribeTokens(GetLayerSubscribeTokensRequest) returns (GetLayerSubscribeTokensResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/layers/subscribe-tokens"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Layer Subscribe Tokens"
+      description: "Retrieve short-lived realtime subscribe tokens for drawing-layer channels after access validation."
+      tags: "Polychart Service"
+    };
+  }
+
+  // ResolveLayerShareToken resolves an unauthenticated share token to a layer snapshot.
+  rpc ResolveLayerShareToken(ResolveLayerShareTokenRequest) returns (ResolveLayerShareTokenResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/share/layer/{token}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Resolve Layer Share Token"
+      description: "Resolve a share token to a view-only drawing-layer snapshot."
+      tags: "Polychart Service"
+    };
+  }
+
+  // CreateLayerShareLink mints a share token for a layer (owner-only).
+  rpc CreateLayerShareLink(CreateLayerShareLinkRequest) returns (CreateLayerShareLinkResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/share-links/layers"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Layer Share Link"
+      description: "Create a share token for a drawing layer."
+      tags: "Polychart Service"
+    };
+  }
+
+  // RevokeLayerShareLink revokes a previously minted share token (owner-only).
+  rpc RevokeLayerShareLink(RevokeLayerShareLinkRequest) returns (RevokeLayerShareLinkResponse) {
+    option (google.api.http) = {delete: "/v1/polychart/share-links/layers/{token}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Revoke Layer Share Link"
+      description: "Revoke a share token for a drawing layer."
+      tags: "Polychart Service"
+    };
+  }
+
+  // ListOwnerPublishedLayers lists listed/published layers for an owner (profile/gallery surfaces).
+  rpc ListOwnerPublishedLayers(ListOwnerPublishedLayersRequest) returns (ListOwnerPublishedLayersResponse) {
+    option (google.api.http) = {get: "/v1/polychart/owners/{owner_id}/published/layers"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Owner Published Layers"
+      description: "List drawing layers the owner has published for discovery."
+      tags: "Polychart Service"
+    };
+  }
+
+  // PublishLayer publishes a layer for discovery (owner-only).
+  rpc PublishLayer(PublishLayerRequest) returns (PublishLayerResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/published/layers"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Publish Layer"
+      description: "Publish a drawing layer for discovery."
+      tags: "Polychart Service"
+    };
+  }
+
+  // UnpublishLayer removes a layer from discovery (owner-only).
+  rpc UnpublishLayer(UnpublishLayerRequest) returns (UnpublishLayerResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/published/layers/unpublish"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Unpublish Layer"
+      description: "Remove a drawing layer from discovery listings."
+      tags: "Polychart Service"
+    };
+  }
+
+  // UpsertLayer creates or updates a layer (owner-only).
+  rpc UpsertLayer(UpsertLayerRequest) returns (UpsertLayerResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/layers"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Upsert Layer"
+      description: "Create or update a drawing layer using optimistic concurrency."
+      tags: "Polychart Service"
+    };
+  }
+
+  // DeleteLayer deletes a layer and all drawings in it (owner-only).
+  rpc DeleteLayer(DeleteLayerRequest) returns (DeleteLayerResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/layers/delete"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Layer"
+      description: "Soft-delete a drawing layer and its drawings using tombstone semantics."
+      tags: "Polychart Service"
+    };
+  }
+
+  // UpsertDrawing creates or updates a drawing (owner-only).
+  rpc UpsertDrawing(UpsertDrawingRequest) returns (UpsertDrawingResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/drawings"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Upsert Drawing"
+      description: "Create or update a drawing using optimistic concurrency on the parent layer."
+      tags: "Polychart Service"
+    };
+  }
+
+  // DeleteDrawing deletes a drawing (owner-only).
+  rpc DeleteDrawing(DeleteDrawingRequest) returns (DeleteDrawingResponse) {
+    option (google.api.http) = {
+      post: "/v1/polychart/drawings/delete"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Drawing"
+      description: "Soft-delete a drawing using optimistic concurrency on the parent layer."
+      tags: "Polychart Service"
+    };
+  }
+
+  // SetLayerSubscriptions replaces the viewer's subscriptions for a market.
+  rpc SetLayerSubscriptions(SetLayerSubscriptionsRequest) returns (SetLayerSubscriptionsResponse) {
+    option (google.api.http) = {
+      put: "/v1/polychart/markets/{engine_symbol_id}/layer-subscriptions"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set Layer Subscriptions"
+      description: "Replace caller drawing-layer subscriptions for a market."
+      tags: "Polychart Service"
+    };
+  }
+}

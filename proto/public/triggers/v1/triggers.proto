@@ -1,0 +1,719 @@
+syntax = "proto3";
+
+package triggers.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "orders/v1/orders.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/triggers/v1;triggersv1";
+// Document-level OpenAPI metadata for Triggers API
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Triggers Service"
+      description:
+        "Public surface for managing standalone triggers (Stop "
+        "orders, TWAP, Ladder)."
+    }
+  ]
+};
+
+// =============================================================================
+// Trigger Types and Status
+// =============================================================================
+
+// TriggerType defines the category of standalone trigger.
+enum TriggerType {
+  // Trigger type was not provided.
+  TRIGGER_TYPE_UNSPECIFIED = 0;
+  // Stop-loss: fires when the price crosses a threshold.
+  STOP_LOSS = 1;
+  // Take-profit: fires when the price crosses a threshold.
+  TAKE_PROFIT = 2;
+  // Trailing stop: dynamic stop that trails price by a distance.
+  TRAILING_STOP = 3;
+  // TWAP: Time-Weighted Average Price execution over a duration.
+  TWAP = 4;
+  // Ladder/Scaled: Multiple orders placed across a price range.
+  LADDER = 5;
+}
+
+// TriggerStatus represents the lifecycle state of a trigger.
+enum TriggerStatus {
+  // Trigger status was not provided.
+  TRIGGER_STATUS_UNSPECIFIED = 0;
+  // Trigger was created and is pending activation.
+  CREATED = 1;
+  // Trigger admitted and actively evaluating conditions.
+  ARMED = 2;
+  // Trigger is actively executing (for example, TWAP slices in progress).
+  RUNNING = 3;
+  // Trigger completed successfully (all child orders placed/filled).
+  COMPLETED = 4;
+  // Trigger was canceled by user.
+  CANCELLED = 5;
+  // Trigger failed (for example, reservation failure, child order rejection).
+  FAILED = 6;
+  // Trigger is paused (user-initiated, can be resumed).
+  PAUSED = 7;
+}
+
+// TriggerEventType defines append-only trigger lifecycle events for history.
+enum TriggerEventType {
+  // Trigger event type was not provided.
+  TRIGGER_EVENT_TYPE_UNSPECIFIED = 0;
+  // Trigger fired and may have created a child order.
+  FIRED = 1;
+  // Trigger was canceled.
+  CANCELED = 2;
+  // Trigger configuration or lifecycle state was updated.
+  UPDATED = 3;
+}
+
+// LadderDistribution defines how quantity is distributed across ladder levels.
+enum LadderDistribution {
+  // Ladder distribution was not provided.
+  LADDER_DISTRIBUTION_UNSPECIFIED = 0;
+  // Equal quantity at each level.
+  LINEAR = 1;
+  // More quantity toward the edges (U-shape).
+  GEOMETRIC = 2;
+  // More quantity at favorable prices.
+  WEIGHTED_FAVORABLE = 3;
+}
+
+// =============================================================================
+// Create Trigger Request/Response
+// =============================================================================
+
+// CreateTriggerRequest creates a standalone trigger (stop order, TWAP, ladder,
+// etc.). Standalone triggers have independent lifecycle and arm immediately
+// after creation.
+message CreateTriggerRequest {
+  // Cross-field validation to ensure unused fields can't slip through when a
+  // trigger type requires them.
+  option (buf.validate.message).cel = {
+    id: "create_trigger.stop.trigger_price_required"
+    message: "trigger_price_ticks must be > 0 for STOP_LOSS and TAKE_PROFIT"
+    expression: "(this.trigger_type != 1 && this.trigger_type != 2) || this.trigger_price_ticks > 0"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_trigger.limit.limit_price_required"
+    message: "limit_price_ticks required for LIMIT child orders"
+    expression: "this.order_type != 1 || this.limit_price_ticks > 0 || this.trigger_type == 5"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_trigger.trailing.trailing_distance_required"
+    message: "trailing_distance required for TRAILING_STOP"
+    expression: "this.trigger_type != 3 || (has(this.trailing_distance_ticks) || has(this.trailing_distance_bps))"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_trigger.twap.window_valid"
+    message: "twap_duration_ms and twap_slice_interval_ms invalid"
+    expression: "this.trigger_type != 4 || (this.twap_duration_ms >= 1000 && this.twap_slice_interval_ms >= 100 && this.twap_slice_interval_ms <= this.twap_duration_ms)"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_trigger.ladder.range_valid"
+    message: "ladder_price_min_ticks/ladder_price_max_ticks invalid"
+    expression: "this.trigger_type != 5 || (this.ladder_price_min_ticks > 0 && this.ladder_price_max_ticks > 0 && this.ladder_price_max_ticks > this.ladder_price_min_ticks)"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_trigger.ladder.levels_valid"
+    message: "ladder_levels must be [2,100]"
+    expression: "this.trigger_type != 5 || (this.ladder_levels >= 2 && this.ladder_levels <= 100)"
+  };
+
+  // Target sub-account. When empty or omitted, uses the caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Symbol, for example "BTC-USDT"; resolved to a numeric symbol ID.
+  string symbol = 2 [(buf.validate.field).string.min_len = 1];
+  // Type of trigger. Required.
+  TriggerType trigger_type = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // --- Trigger Condition (for STOP_LOSS, TAKE_PROFIT, TRAILING_STOP) ---
+
+  // Trigger price in ticks. Required for STOP_LOSS/TAKE_PROFIT.
+  int64 trigger_price_ticks = 10;
+  // Price source for trigger evaluation. Defaults to LAST_PRICE.
+  orders.v1.TriggerPriceSource trigger_price_source = 11 [(buf.validate.field).enum.defined_only = true];
+  // Reserved: trigger direction is derived from side + trigger_type in v1.
+  reserved 12;
+  reserved "trigger_direction";
+
+  // --- Child Order Template ---
+
+  // Side for the child order. Required.
+  orders.v1.Side side = 20 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Order type for the child order (LIMIT or MARKET). Defaults to MARKET.
+  orders.v1.OrderType order_type = 21 [(buf.validate.field).enum.defined_only = true];
+  // Time-in-force for the child order. Defaults to GTC for LIMIT, IOC for
+  // MARKET.
+  orders.v1.TIF tif = 22 [(buf.validate.field).enum.defined_only = true];
+  // Quantity in base asset scale units. Required.
+  int64 qty_scaled = 23 [(buf.validate.field).int64.gt = 0];
+  // Limit price in ticks for LIMIT child orders.
+  int64 limit_price_ticks = 24;
+  // Fee source selection for BUY child orders. SELL child orders always pay in
+  // QUOTE.
+  //
+  // When omitted (UNSPECIFIED), defaults to QUOTE.
+  orders.v1.FeeSource fee_source = 25 [(buf.validate.field).enum.defined_only = true];
+  // Self-trade prevention mode for child orders.
+  //
+  // When omitted (UNSPECIFIED), defaults to EXPIRE_MAKER.
+  orders.v1.STPMode stp_mode = 26 [(buf.validate.field).enum.defined_only = true];
+  // If true, child LIMIT orders are post-only (rejected if they would cross).
+  bool post_only = 27;
+
+  // --- Trailing Stop Specific ---
+
+  // Trailing distance. Exactly one of these should be set for TRAILING_STOP.
+  oneof trailing_distance {
+    // Trailing distance in absolute ticks.
+    int64 trailing_distance_ticks = 30 [(buf.validate.field).int64.gt = 0];
+    // Trailing distance in basis points (1 bp = 0.01%).
+    int32 trailing_distance_bps = 31 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+  // Optional activation price: trailing only starts after this price is
+  // reached.
+  int64 activation_price_ticks = 32;
+  // Optional price protection. If set, when the trailing stop triggers we place
+  // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
+  // MARKET order).
+  //
+  // Exactly one of these should be set (or neither for unprotected behavior).
+  oneof max_slippage {
+    // Maximum allowed slippage in absolute ticks.
+    int32 max_slippage_ticks = 33 [(buf.validate.field).int32.gt = 0];
+    // Maximum allowed slippage in basis points (1 bp = 0.01%).
+    int32 max_slippage_bps = 34 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+
+  // --- TWAP Specific ---
+
+  // Total duration of TWAP execution in milliseconds. Required for TWAP.
+  int64 twap_duration_ms = 40;
+  // Interval between TWAP slices in milliseconds. Required for TWAP.
+  int64 twap_slice_interval_ms = 41;
+  // twap_flexible removed (TWAP is always flexible).
+  reserved 42;
+  reserved "twap_flexible";
+
+  // --- Ladder/Scaled Specific ---
+
+  // Minimum price in ticks for the ladder range.
+  int64 ladder_price_min_ticks = 50;
+  // Maximum price in ticks for the ladder range.
+  int64 ladder_price_max_ticks = 51;
+  // Number of price levels in the ladder.
+  // Required for LADDER; valid range is 2..100.
+  int32 ladder_levels = 52;
+  // Distribution of quantity across levels.
+  LadderDistribution ladder_distribution = 53 [(buf.validate.field).enum.defined_only = true];
+
+  // --- Client Idempotency ---
+
+  // Client-provided trigger ID for idempotency. Required.
+  string client_trigger_id = 60 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// CreateTriggerResponse returns the accepted trigger identifier and status.
+message CreateTriggerResponse {
+  // Unique trigger ID assigned by the system.
+  fixed64 trigger_id = 1;
+  // Current status of the trigger.
+  TriggerStatus status = 2;
+  // Echoed back if provided in request.
+  string client_trigger_id = 3;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 4;
+  // Server timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 5;
+}
+
+// =============================================================================
+// Get Trigger
+// =============================================================================
+
+// GetTriggerRequest retrieves one trigger by ID.
+message GetTriggerRequest {
+  // Trigger ID to retrieve.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account for authorization.
+  optional fixed64 subaccount_id = 2;
+}
+
+// GetTriggerResponse returns the requested trigger.
+message GetTriggerResponse {
+  // Trigger state and configuration.
+  Trigger trigger = 1;
+}
+
+// =============================================================================
+// List Triggers
+// =============================================================================
+
+// ListTriggersRequest lists triggers for an account.
+message ListTriggersRequest {
+  // Optional sub-account to list triggers for. When empty or omitted, uses the
+  // caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Optional filter by symbol.
+  string symbol = 2;
+  // Optional filter by status (can specify multiple).
+  repeated TriggerStatus status = 3 [(buf.validate.field).repeated.items.enum.defined_only = true];
+  // Optional filter by type.
+  TriggerType trigger_type = 4 [(buf.validate.field).enum.defined_only = true];
+  // Optional filter by attached parent order ID.
+  optional fixed64 parent_order_id = 5;
+  // Page size. Defaults to 100 when omitted; maximum 1000.
+  optional int32 limit = 10 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 1000
+  }];
+  // Zero-based result offset for page-number style pagination. Defaults to 0.
+  int32 offset = 11 [(buf.validate.field).int32.gte = 0];
+}
+
+// ListTriggersResponse returns triggers ordered newest-first.
+message ListTriggersResponse {
+  // Triggers ordered by creation time descending, then trigger ID descending.
+  repeated Trigger triggers = 1;
+  // Total count matching the filter (for pagination).
+  int32 total = 2;
+}
+
+// =============================================================================
+// Trigger Events (History / Audit)
+// =============================================================================
+
+// ListTriggerEventsRequest lists historical events for one trigger.
+message ListTriggerEventsRequest {
+  // Trigger ID to list events for.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account (authorization). When empty or omitted, uses the
+  // caller's root account.
+  optional fixed64 subaccount_id = 2;
+  // Page size. Defaults to 100 when omitted; maximum 1000.
+  optional int32 limit = 3 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 1000
+  }];
+  // Exclusive reverse-time cursor in nanoseconds since epoch (UTC).
+  // Zero means start from the latest event.
+  uint64 before_ts_ns = 4;
+}
+
+// TriggerEvent describes one historical trigger lifecycle event.
+message TriggerEvent {
+  // Trigger ID associated with the event.
+  fixed64 trigger_id = 1;
+  // Public account or sub-account ID associated with the trigger.
+  fixed64 subaccount_id = 2;
+  // Trading symbol numeric identifier.
+  uint32 symbol_id = 3;
+  // Trigger type at the time of the event.
+  TriggerType trigger_type = 4;
+  // Event category.
+  TriggerEventType event_type = 5;
+
+  // Event timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 10;
+  // Child sequence number for multi-child trigger strategies.
+  int32 child_seq = 11;
+  // Child order ID created by this event, if any.
+  fixed64 child_order_id = 12;
+  // Price that caused the trigger to fire, in ticks. Zero when not applicable.
+  int64 fire_px_ticks = 13;
+
+  // Optional cancel reason.
+  string reason = 20;
+}
+
+// ListTriggerEventsResponse returns historical events ordered newest-first.
+message ListTriggerEventsResponse {
+  // Events ordered by event time descending, then child sequence descending.
+  repeated TriggerEvent events = 1;
+  // Cursor for the next page; pass as before_ts_ns to request strictly older events.
+  // Zero means this response is empty.
+  uint64 next_before_ts_ns = 2;
+}
+
+// =============================================================================
+// Cancel Trigger
+// =============================================================================
+
+// CancelTriggerRequest cancels an active trigger by ID.
+message CancelTriggerRequest {
+  // Trigger ID to cancel.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account for authorization.
+  optional fixed64 subaccount_id = 2;
+}
+
+// CancelTriggerResponse returns the final status after cancellation.
+message CancelTriggerResponse {
+  // Trigger ID that was canceled.
+  fixed64 trigger_id = 1;
+  // Final status (should be CANCELLED).
+  TriggerStatus status = 2;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 4;
+}
+
+// =============================================================================
+// Modify / Pause / Resume Trigger
+// =============================================================================
+
+// ModifyTriggerRequest applies a limited patch to an existing trigger.
+message ModifyTriggerRequest {
+  // Trigger ID to modify.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account for authorization.
+  optional fixed64 subaccount_id = 2;
+
+  // Patch fields for safe price, trailing-distance, and slippage edits.
+  // For stop/take-profit:
+  // Updated trigger price in ticks.
+  optional int64 trigger_price_ticks = 10;
+  // Updated limit price in ticks for LIMIT child orders.
+  optional int64 limit_price_ticks = 11;
+
+  // For trailing stop:
+  oneof trailing_distance {
+    // Updated trailing distance in absolute ticks.
+    int64 trailing_distance_ticks = 12;
+    // Updated trailing distance in basis points (1 bp = 0.01%).
+    int32 trailing_distance_bps = 13;
+  }
+  // Updated activation price in ticks.
+  optional int64 activation_price_ticks = 14;
+  // Optional price protection.
+  oneof max_slippage {
+    // Updated maximum allowed slippage in absolute ticks.
+    int32 max_slippage_ticks = 15;
+    // Updated maximum allowed slippage in basis points (1 bp = 0.01%).
+    int32 max_slippage_bps = 16;
+  }
+}
+
+// ModifyTriggerResponse returns the trigger status after modification.
+message ModifyTriggerResponse {
+  // Modified trigger ID.
+  fixed64 trigger_id = 1;
+  // Current trigger status after modification.
+  TriggerStatus status = 2;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 4;
+}
+
+// PauseTriggerRequest pauses an active trigger by ID.
+message PauseTriggerRequest {
+  // Trigger ID to pause.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account for authorization.
+  optional fixed64 subaccount_id = 2;
+}
+
+// PauseTriggerResponse returns the trigger status after pausing.
+message PauseTriggerResponse {
+  // Paused trigger ID.
+  fixed64 trigger_id = 1;
+  // Current trigger status after pausing.
+  TriggerStatus status = 2;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 4;
+}
+
+// ResumeTriggerRequest resumes a paused trigger by ID.
+message ResumeTriggerRequest {
+  // Trigger ID to resume.
+  fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Optional sub-account for authorization.
+  optional fixed64 subaccount_id = 2;
+}
+
+// ResumeTriggerResponse returns the trigger status after resuming.
+message ResumeTriggerResponse {
+  // Resumed trigger ID.
+  fixed64 trigger_id = 1;
+  // Current trigger status after resuming.
+  TriggerStatus status = 2;
+  // Server timestamp.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp in nanoseconds since epoch (UTC).
+  uint64 ts_ns = 4;
+}
+
+// =============================================================================
+// Trigger Model
+// =============================================================================
+
+// StopDetails contains configuration for STOP_LOSS and TAKE_PROFIT triggers.
+message StopDetails {
+  // Trigger threshold price in ticks (6 decimals).
+  int64 trigger_price_ticks = 1;
+  // Price source used for trigger evaluation.
+  orders.v1.TriggerPriceSource trigger_price_source = 2;
+  // Direction the price must cross to fire the trigger.
+  orders.v1.TriggerDirection trigger_direction = 3;
+}
+
+// TrailingDetails contains configuration and runtime state for TRAILING_STOP
+// triggers.
+message TrailingDetails {
+  // Trailing distance in absolute ticks (6 decimals).
+  int64 trailing_distance_ticks = 1;
+  // Optional activation price: trailing only starts after this price is
+  // reached.
+  int64 activation_price_ticks = 2;
+  // Current peak price in ticks for sell trailing stops.
+  int64 peak_price_ticks = 3;
+  // Current trough price in ticks for buy trailing stops.
+  int64 trough_price_ticks = 4;
+  // Trailing distance in basis points (1 bp = 0.01%).
+  int32 trailing_distance_bps = 5;
+  // Optional maximum allowed slippage in absolute ticks.
+  int32 max_slippage_ticks = 6;
+  // Optional maximum allowed slippage in basis points (1 bp = 0.01%).
+  int32 max_slippage_bps = 7;
+  // Direction/source are fixed per trigger; exposed for completeness.
+  orders.v1.TriggerPriceSource trigger_price_source = 8;
+  orders.v1.TriggerDirection trigger_direction = 9;
+}
+
+// TwapDetails contains configuration and runtime state for TWAP triggers.
+message TwapDetails {
+  // Total duration of TWAP execution in milliseconds.
+  int64 twap_duration_ms = 1;
+  // Interval between TWAP slices in milliseconds.
+  int64 twap_slice_interval_ms = 2;
+  reserved 3;
+  reserved "twap_flexible";
+  // Current slice index, zero-based.
+  int32 slice_idx = 4;
+  // Total number of planned slices.
+  int32 slice_count = 5;
+  // Cumulative executed quantity in scaled base units.
+  int64 executed_qty_scaled = 6;
+}
+
+// LadderDetails contains configuration for LADDER triggers.
+message LadderDetails {
+  // Minimum price in ticks for the ladder range (6 decimals).
+  int64 ladder_price_min_ticks = 1;
+  // Maximum price in ticks for the ladder range (6 decimals).
+  int64 ladder_price_max_ticks = 2;
+  // Number of price levels in the ladder.
+  int32 ladder_levels = 3;
+  // Quantity distribution across ladder levels.
+  LadderDistribution ladder_distribution = 4;
+}
+
+// Trigger represents a trigger with its full state.
+message Trigger {
+  // Trigger ID.
+  fixed64 trigger_id = 1;
+  // Public account or sub-account ID associated with the trigger.
+  fixed64 subaccount_id = 2;
+  // Trading symbol numeric identifier.
+  uint32 symbol_id = 3;
+  // Trading symbol, for example "BTC-USDT".
+  string symbol = 4;
+  // Trigger category.
+  TriggerType trigger_type = 5;
+  // Current trigger lifecycle status.
+  TriggerStatus status = 6;
+  // Parent order ID for attached-risk triggers; empty for standalone triggers.
+  optional fixed64 parent_order_id = 7;
+
+  // Child order side.
+  orders.v1.Side side = 20;
+  // Child order type.
+  orders.v1.OrderType order_type = 21;
+  // Child order time-in-force policy.
+  orders.v1.TIF tif = 22;
+  // Child order quantity in scaled base units.
+  int64 qty_scaled = 23;
+  // Child LIMIT order price in ticks. Zero for MARKET child orders.
+  int64 limit_price_ticks = 24;
+  // Fee source for BUY child orders.
+  orders.v1.FeeSource fee_source = 25;
+  // Self-trade prevention mode for child orders.
+  orders.v1.STPMode stp_mode = 26;
+  // True if child LIMIT orders are post-only.
+  bool post_only = 27;
+
+  // Type-specific fields.
+  oneof details {
+    // Stop-loss or take-profit trigger details.
+    StopDetails stop = 100;
+    // Trailing-stop trigger details.
+    TrailingDetails trailing = 101;
+    // TWAP trigger details.
+    TwapDetails twap = 102;
+    // Ladder trigger details.
+    LadderDetails ladder = 103;
+  }
+
+  // Client-provided trigger ID for idempotency and correlation.
+  string client_trigger_id = 60;
+  // Creation timestamp.
+  google.protobuf.Timestamp created_at = 61;
+  // Last update timestamp.
+  google.protobuf.Timestamp updated_at = 62;
+  // Timestamp when the trigger became armed.
+  google.protobuf.Timestamp armed_at = 63;
+  // Timestamp when the trigger reached a terminal successful state.
+  google.protobuf.Timestamp completed_at = 64;
+
+  // Child orders spawned by this trigger.
+  repeated fixed64 child_order_ids = 70;
+
+  // Prevent accidental reuse of removed flattened fields.
+  reserved 10, 11, 12;
+  reserved 30, 31, 32, 33, 34, 35, 36;
+  reserved 40, 41, 42, 43, 44, 45;
+  reserved 50, 51, 52, 53;
+}
+
+// =============================================================================
+// Service Definition
+// =============================================================================
+
+service TriggersService {
+  // Create a standalone trigger (stop order, TWAP, ladder).
+  rpc CreateTrigger(CreateTriggerRequest) returns (CreateTriggerResponse) {
+    option (google.api.http) = {
+      post: "/v1/triggers"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Trigger"
+      description:
+        "Create a standalone trigger order. Supports stop, "
+        "trailing, TWAP, and ladder trigger configurations."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Get a trigger by ID.
+  rpc GetTrigger(GetTriggerRequest) returns (GetTriggerResponse) {
+    option (google.api.http) = {get: "/v1/triggers/{trigger_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Trigger"
+      description:
+        "Retrieve a single trigger by trigger ID, including "
+        "lifecycle state and strategy-specific fields."
+      tags: "Triggers Service"
+    };
+  }
+
+  // List triggers for a sub-account with optional filters.
+  rpc ListTriggers(ListTriggersRequest) returns (ListTriggersResponse) {
+    option (google.api.http) = {get: "/v1/triggers"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Triggers"
+      description:
+        "List triggers for an account with optional symbol, status, "
+        "and trigger-type filters."
+      tags: "Triggers Service"
+    };
+  }
+
+  // List trigger events (append-only history).
+  rpc ListTriggerEvents(ListTriggerEventsRequest) returns (ListTriggerEventsResponse) {
+    option (google.api.http) = {get: "/v1/triggers/{trigger_id}/events"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Trigger Events"
+      description:
+        "List append-only trigger events for a trigger, including "
+        "child-order actions, with reverse-time pagination."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Cancel a trigger.
+  rpc CancelTrigger(CancelTriggerRequest) returns (CancelTriggerResponse) {
+    option (google.api.http) = {delete: "/v1/triggers/{trigger_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Trigger"
+      description:
+        "Cancel a trigger by trigger ID and release its reserved "
+        "quantity."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Modify a trigger (limited patch).
+  rpc ModifyTrigger(ModifyTriggerRequest) returns (ModifyTriggerResponse) {
+    option (google.api.http) = {
+      put: "/v1/triggers/{trigger_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Modify Trigger"
+      description:
+        "Modify a trigger by trigger ID using a limited patch for "
+        "trigger pricing and trailing/slippage parameters."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Pause a trigger (sets status=PAUSED).
+  rpc PauseTrigger(PauseTriggerRequest) returns (PauseTriggerResponse) {
+    option (google.api.http) = {
+      post: "/v1/triggers/{trigger_id}/pause"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Pause Trigger"
+      description: "Pause a trigger by trigger ID without deleting it."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Resume a paused trigger (sets status back to ARMED/RUNNING as appropriate).
+  rpc ResumeTrigger(ResumeTriggerRequest) returns (ResumeTriggerResponse) {
+    option (google.api.http) = {
+      post: "/v1/triggers/{trigger_id}/resume"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Resume Trigger"
+      description: "Resume a paused trigger by trigger ID."
+      tags: "Triggers Service"
+    };
+  }
+}

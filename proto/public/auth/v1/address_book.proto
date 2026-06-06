@@ -1,0 +1,851 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/subaccounts.proto";
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/validation/v1/predefined_string_rules.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Address Book"
+      description: "Saved transfer destinations, recent counterparties, and whitelist status for external withdrawals and internal transfers."
+    }
+  ]
+};
+
+// AccountScopeType identifies whether address-book data belongs to the root account or a subaccount.
+enum AccountScopeType {
+  // Scope is not specified.
+  SCOPE_UNSPECIFIED = 0;
+  // Root account scope.
+  SCOPE_ROOT = 1;
+  // Subaccount scope.
+  SCOPE_SUBACCOUNT = 2;
+}
+
+// AddressBookEntryKind identifies the type of saved transfer destination.
+enum AddressBookEntryKind {
+  // Entry type is not specified.
+  ENTRY_KIND_UNSPECIFIED = 0;
+  // External network withdrawal address.
+  EXTERNAL_CHAIN = 1;
+  // Internal exchange account.
+  INTERNAL_ACCOUNT = 2;
+}
+
+// InternalWhitelistResolutionStatus shows whether an internal account destination could be matched to account details.
+enum InternalWhitelistResolutionStatus {
+  // Resolution status is not specified.
+  INTERNAL_WHITELIST_RESOLUTION_UNSPECIFIED = 0;
+  // Internal destination account details are available.
+  INTERNAL_WHITELIST_RESOLVED = 1;
+  // Internal destination account details are not currently available.
+  INTERNAL_WHITELIST_UNRESOLVED = 2;
+}
+
+// DestinationWhitelistStatus describes whether a transfer destination currently has an active whitelist allowance.
+enum DestinationWhitelistStatus {
+  // Whitelist status is not specified.
+  DESTINATION_WHITELIST_STATUS_UNSPECIFIED = 0;
+  // Destination is not whitelisted.
+  DESTINATION_NOT_WHITELISTED = 1;
+  // Destination has an active whitelist entry and can be used now.
+  DESTINATION_WHITELIST_ACTIVE = 2;
+  // Whitelist status could not be resolved for this destination.
+  DESTINATION_WHITELIST_UNRESOLVED = 3;
+}
+
+// TransferCounterpartyDirection identifies how a recent counterparty was used.
+enum TransferCounterpartyDirection {
+  // Direction is not specified.
+  TRANSFER_COUNTERPARTY_DIRECTION_UNSPECIFIED = 0;
+  // Counterparty sent funds to the account.
+  DEPOSIT_FROM = 1;
+  // Account withdrew funds to the counterparty.
+  WITHDRAW_TO = 2;
+  // Counterparty sent an internal transfer to the account.
+  INTERNAL_TRANSFER_FROM = 3;
+  // Account sent an internal transfer to the counterparty.
+  INTERNAL_TRANSFER_TO = 4;
+}
+
+message AccountScopeRef {
+  // Address-book scope type.
+  AccountScopeType scope_type = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Root account that owns this address book.
+  fixed64 root_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // Subaccount for subaccount-scoped books. Empty for root account books.
+  fixed64 subaccount_id = 3 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+message AddressBook {
+  // Account or subaccount represented by this address book.
+  AccountScopeRef scope = 1;
+  // Caller role for this address book.
+  SubaccountRole caller_role = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Display label for the address book. Usually present for subaccounts.
+  string label = 3 [(buf.validate.field).string.max_len = 64];
+  // Username of the root owner when available.
+  string owner_username = 4 [(buf.validate.field).string.max_len = 64];
+  // Smart account address associated with this account or subaccount.
+  string smart_account_address = 5 [(buf.validate.field).string.max_len = 128];
+}
+
+message ExternalWithdrawAddress {
+  // External network identifier for the destination address.
+  uint32 polychain_chain_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).uint32.gt = 0
+  ];
+  // Destination address on the selected external network.
+  string address = 2 [(buf.validate.field).string.(polyester.api.validation.v1.external_chain_address_text) = true];
+}
+
+message InternalTransferAccount {
+  // Root account that owns the target internal account.
+  fixed64 root_account_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Target account or subaccount public id.
+  fixed64 target_account_id = 2 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Whether target_account_id identifies a root account or a subaccount.
+  AccountScopeType target_scope_type = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // Smart account address for the internal transfer destination.
+  string smart_account_address = 4 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
+  // Username for the destination root account, when available.
+  string root_username = 5 [(buf.validate.field).string.max_len = 64];
+  // Label for the destination subaccount, when the destination is a subaccount.
+  string subaccount_label = 6 [(buf.validate.field).string.max_len = 64];
+}
+
+message AddressBookTag {
+  // Stable public id of the tag.
+  fixed64 tag_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book scope where this tag exists.
+  AccountScopeRef scope = 2;
+  // Human-readable tag name.
+  string name = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 48
+  }];
+  // Optional UI color token for this tag.
+  string color = 4 [(buf.validate.field).string.max_len = 32];
+  // Time the tag was created, as a UTC timestamp.
+  google.protobuf.Timestamp created_at = 5;
+  // Time this tag was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message AddressBookTagSummary {
+  // Stable public id of the tag.
+  fixed64 tag_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Human-readable tag name.
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 48
+  }];
+  // Optional UI color token for this tag.
+  string color = 3 [(buf.validate.field).string.max_len = 32];
+}
+
+message AddressBookEntry {
+  // Stable public id of the saved address-book entry.
+  fixed64 address_book_entry_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book that owns this entry.
+  AccountScopeRef scope = 2;
+  // Type of saved destination.
+  AddressBookEntryKind kind = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // User-defined display label.
+  string label = 4 [(buf.validate.field).string.max_len = 128];
+  // Optional user-defined note.
+  string note = 5 [(buf.validate.field).string.max_len = 512];
+  // Time this entry was created, as a UTC timestamp.
+  google.protobuf.Timestamp created_at = 6;
+  // Time this entry was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 7;
+  oneof entry {
+    // External chain withdraw destination.
+    ExternalWithdrawAddress external = 20;
+    // Internal account transfer destination.
+    InternalTransferAccount internal = 21;
+  }
+  // Tags currently attached to this entry.
+  repeated AddressBookTag tags = 30;
+}
+
+message AddressBookEntriesView {
+  // Saved external withdrawal destinations.
+  repeated ExternalAddressBookEntry external = 1;
+  // Saved internal transfer destinations.
+  repeated InternalAddressBookEntry internal = 2;
+}
+
+message ExternalAddressBookEntry {
+  // Stable public id of the saved external destination.
+  fixed64 address_book_entry_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book that owns this entry.
+  AccountScopeRef scope = 2;
+  // User-defined display label.
+  string label = 3 [(buf.validate.field).string.max_len = 128];
+  // Optional user-defined note.
+  string note = 4 [(buf.validate.field).string.max_len = 512];
+  // Tag ids attached to this entry. See GetAddressBookViewResponse.tags for tag details.
+  repeated fixed64 tag_ids = 5 [(buf.validate.field).repeated.max_items = 10];
+  // Current active whitelist status for this destination.
+  DestinationWhitelistStatus whitelist_status = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // External network identifier for the destination address.
+  uint32 polychain_chain_id = 7 [(buf.validate.field).uint32.gt = 0];
+  // Destination address on the selected external network.
+  string address = 8 [(buf.validate.field).string.(polyester.api.validation.v1.external_chain_address_text) = true];
+  // Time this entry was created, as a UTC timestamp.
+  google.protobuf.Timestamp created_at = 9;
+  // Time this entry was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message InternalAddressBookEntry {
+  // Stable public id of the saved internal destination.
+  fixed64 address_book_entry_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book that owns this entry.
+  AccountScopeRef scope = 2;
+  // User-defined display label.
+  string label = 3 [(buf.validate.field).string.max_len = 128];
+  // Optional user-defined note.
+  string note = 4 [(buf.validate.field).string.max_len = 512];
+  // Tag ids attached to this entry. See GetAddressBookViewResponse.tags for tag details.
+  repeated fixed64 tag_ids = 5 [(buf.validate.field).repeated.max_items = 10];
+  // Current active whitelist status for this destination.
+  DestinationWhitelistStatus whitelist_status = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Root account that owns the target internal account.
+  fixed64 root_account_id = 7 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Target account or subaccount public id.
+  fixed64 target_account_id = 8 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Whether target_account_id identifies a root account or a subaccount.
+  AccountScopeType target_scope_type = 9 [(buf.validate.field).enum = {defined_only: true}];
+  // Smart account address for the internal transfer destination.
+  string smart_account_address = 10 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
+  // Username for the destination root account, when available.
+  string root_username = 11 [(buf.validate.field).string.max_len = 64];
+  // Label for the destination subaccount, when the destination is a subaccount.
+  string subaccount_label = 12 [(buf.validate.field).string.max_len = 64];
+  // Time this entry was created, as a UTC timestamp.
+  google.protobuf.Timestamp created_at = 13;
+  // Time this entry was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message TransferCounterparty {
+  // Stable public id of this transfer counterparty.
+  fixed64 counterparty_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book where this counterparty was observed.
+  AccountScopeRef scope = 2;
+  // Most recent transfer direction for this counterparty.
+  TransferCounterpartyDirection direction = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Counterparty type.
+  AddressBookEntryKind kind = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Whether this counterparty is already saved in the address book.
+  bool saved = 5;
+  // Saved address book entry id when saved is true.
+  fixed64 address_book_entry_id = 6 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Number of transfers observed for this counterparty.
+  uint64 use_count = 7;
+  // Time this counterparty was first observed, as a UTC timestamp.
+  google.protobuf.Timestamp first_seen_at = 8;
+  // Time this counterparty was last observed, as a UTC timestamp.
+  google.protobuf.Timestamp last_seen_at = 9;
+  oneof counterparty {
+    // External chain address counterparty.
+    ExternalWithdrawAddress external = 20;
+    // Internal account counterparty.
+    InternalTransferAccount internal = 21;
+  }
+}
+
+message AddressBookRecentDestinationsView {
+  // Recent external withdrawal destinations that are not saved in the address book.
+  repeated ExternalRecentDestination external = 1;
+  // Recent internal transfer destinations that are not saved in the address book.
+  repeated InternalRecentDestination internal = 2;
+}
+
+message ExternalRecentDestination {
+  // Address book where this destination was observed.
+  AccountScopeRef scope = 1;
+  // Direction of the most recent interaction.
+  TransferCounterpartyDirection last_direction = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Whether this destination is already saved in the address book.
+  bool saved = 3;
+  // Saved address book entry id when saved is true.
+  fixed64 address_book_entry_id = 4 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Number of transfers observed for this destination.
+  uint64 use_count = 5;
+  // Time this destination was last used, as a UTC timestamp.
+  google.protobuf.Timestamp last_seen_at = 6;
+  // External network identifier for the destination address.
+  uint32 polychain_chain_id = 7 [(buf.validate.field).uint32.gt = 0];
+  // Destination address on the selected external network.
+  string address = 8 [(buf.validate.field).string.(polyester.api.validation.v1.external_chain_address_text) = true];
+}
+
+message InternalRecentDestination {
+  // Address book where this destination was observed.
+  AccountScopeRef scope = 1;
+  // Direction of the most recent interaction.
+  TransferCounterpartyDirection last_direction = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Whether this destination is already saved in the address book.
+  bool saved = 3;
+  // Saved address book entry id when saved is true.
+  fixed64 address_book_entry_id = 4 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Number of transfers observed for this destination.
+  uint64 use_count = 5;
+  // Time this destination was last used, as a UTC timestamp.
+  google.protobuf.Timestamp last_seen_at = 6;
+  // Root account that owns the target internal account.
+  fixed64 root_account_id = 7 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Target account or subaccount public id.
+  fixed64 target_account_id = 8 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Whether target_account_id identifies a root account or a subaccount.
+  AccountScopeType target_scope_type = 9 [(buf.validate.field).enum = {defined_only: true}];
+  // Smart account address for the internal transfer destination.
+  string smart_account_address = 10 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
+  // Username for the destination root account, when available.
+  string root_username = 11 [(buf.validate.field).string.max_len = 64];
+  // Label for the destination subaccount, when the destination is a subaccount.
+  string subaccount_label = 12 [(buf.validate.field).string.max_len = 64];
+}
+
+message InternalTransferWhitelistEntry {
+  // Stable public id of this internal transfer whitelist entry.
+  fixed64 entry_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Address book that can view this whitelist entry.
+  AccountScopeRef scope = 2;
+  // Root account that owns the target internal account.
+  fixed64 root_account_id = 3 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Target account or subaccount public id.
+  fixed64 target_account_id = 4 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Whether target_account_id identifies a root account or a subaccount.
+  AccountScopeType target_scope_type = 5 [(buf.validate.field).enum = {defined_only: true}];
+  // Smart account address allowed for internal transfers.
+  string smart_account_address = 6 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
+  // Username for the destination root account, when available.
+  string root_username = 7 [(buf.validate.field).string.max_len = 64];
+  // Label for the destination subaccount, when the destination is a subaccount.
+  string subaccount_label = 8 [(buf.validate.field).string.max_len = 64];
+  // Time this whitelist entry was created, as a UTC timestamp.
+  google.protobuf.Timestamp created_at = 9;
+  // Time this whitelist entry was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 10;
+  // Whether destination account details are available.
+  InternalWhitelistResolutionStatus resolution_status = 11 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message MirroredWithdrawWhitelistEntry {
+  // Destination address on the selected external network.
+  string canonical_address = 1 [(buf.validate.field).string.max_len = 256];
+  // Encoded destination payload as lowercase hex, when available.
+  string raw_address_hex = 2 [(buf.validate.field).string.max_len = 1024];
+  // Time this whitelist entry was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp updated_at = 5;
+  // External network identifier for this whitelist entry.
+  uint32 polychain_chain_id = 6 [(buf.validate.field).uint32.gt = 0];
+}
+
+message WithdrawWhitelistView {
+  // Address book for this withdraw whitelist view.
+  AccountScopeRef scope = 1;
+  // Whether external withdrawals are restricted to whitelisted destinations.
+  bool external_whitelist_required = 2;
+  // Active external withdraw whitelist entries for this address book.
+  repeated MirroredWithdrawWhitelistEntry active_entries = 3;
+  // Whether internal transfers are restricted to whitelisted destinations.
+  bool internal_whitelist_required = 4;
+}
+
+message TransferDestination {
+  // Address book scope for this transfer destination.
+  AccountScopeRef scope = 1;
+  // Destination type.
+  AddressBookEntryKind kind = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Whether this destination is saved in the address book.
+  bool saved = 3;
+  // Whether this destination currently has an active whitelist entry.
+  bool whitelisted = 4;
+  // Current active whitelist status for this destination.
+  DestinationWhitelistStatus whitelist_status = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Saved address-book entry, when this destination is saved.
+  AddressBookEntry address_book_entry = 6;
+  oneof destination {
+    // External withdrawal destination.
+    ExternalWithdrawAddress external = 20;
+    // Internal transfer destination.
+    InternalTransferAccount internal = 21;
+  }
+  // Time the whitelist status was last updated, as a UTC timestamp.
+  google.protobuf.Timestamp whitelist_updated_at = 31;
+}
+
+message ListAddressBooksRequest {}
+
+message ListAddressBooksResponse {
+  // Address books visible to the caller, ordered by root book first and then subaccount id ascending.
+  repeated AddressBook books = 1;
+}
+
+message ListAddressBookEntriesRequest {
+  // Optional subaccount scope. Omit to use the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Optional destination type filter.
+  AddressBookEntryKind kind = 2 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+message ListAddressBookEntriesResponse {
+  // Saved address book entries matching the request filters, ordered by creation time newest first.
+  repeated AddressBookEntry entries = 1;
+}
+
+message CreateAddressBookEntryRequest {
+  // Optional subaccount scope. Omit to create in the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // User-defined display label.
+  string label = 2 [(buf.validate.field).string.max_len = 128];
+  // Optional user-defined note.
+  string note = 3 [(buf.validate.field).string.max_len = 512];
+  oneof entry {
+    // External withdrawal destination to save.
+    ExternalWithdrawAddress external = 10;
+    // Internal transfer destination to save.
+    RequestedInternalTransferAccount internal = 11;
+  }
+  // Complete set of existing tag ids to attach to the entry.
+  repeated fixed64 tag_ids = 4 [(buf.validate.field).repeated.max_items = 10];
+  // New tags to create and attach with this entry creation.
+  repeated AddressBookTagInput new_tags = 5 [(buf.validate.field).repeated.max_items = 10];
+}
+
+message RequestedInternalTransferAccount {
+  // Smart account address of the internal transfer destination.
+  string smart_account_address = 1 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
+}
+
+message CreateAddressBookEntryResponse {
+  // Newly created address book entry.
+  AddressBookEntry entry = 1;
+}
+
+message UpdateAddressBookEntryRequest {
+  // Address-book entry id to update.
+  fixed64 address_book_entry_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Replacement display label.
+  string label = 2 [(buf.validate.field).string.max_len = 128];
+  // Replacement note.
+  string note = 3 [(buf.validate.field).string.max_len = 512];
+  // Complete replacement set of tag ids to attach to the entry.
+  repeated fixed64 tag_ids = 4 [(buf.validate.field).repeated.max_items = 10];
+  // New tags to create and attach with this entry update.
+  repeated AddressBookTagInput new_tags = 5 [(buf.validate.field).repeated.max_items = 10];
+}
+
+message UpdateAddressBookEntryResponse {
+  // Updated address book entry.
+  AddressBookEntry entry = 1;
+}
+
+message AddressBookTagInput {
+  // Human-readable tag name.
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 48
+  }];
+  // Optional UI color token for this tag.
+  string color = 2 [(buf.validate.field).string.max_len = 32];
+}
+
+message DeleteAddressBookEntryRequest {
+  // Address-book entry id to delete.
+  fixed64 address_book_entry_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message DeleteAddressBookEntryResponse {}
+
+message CopyAddressBookEntryRequest {
+  // Address-book entry id to copy.
+  fixed64 address_book_entry_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional destination subaccount. Omit to copy into the root account address book.
+  fixed64 target_subaccount_id = 2 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+message CopyAddressBookEntryResponse {
+  // Newly copied address book entry.
+  AddressBookEntry entry = 1;
+}
+
+message CreateAddressBookTagRequest {
+  // Optional subaccount scope. Omit to create in the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Human-readable tag name.
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 48
+  }];
+  // Optional UI color token for this tag.
+  string color = 3 [(buf.validate.field).string.max_len = 32];
+}
+
+message CreateAddressBookTagResponse {
+  // Newly created tag.
+  AddressBookTag tag = 1;
+}
+
+message UpdateAddressBookTagRequest {
+  // Tag id to update.
+  fixed64 tag_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Replacement tag name.
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 48
+  }];
+  // Replacement UI color token.
+  string color = 3 [(buf.validate.field).string.max_len = 32];
+}
+
+message UpdateAddressBookTagResponse {
+  // Updated tag.
+  AddressBookTag tag = 1;
+}
+
+message DeleteAddressBookTagRequest {
+  // Tag id to delete. Deleted tags are removed from entries.
+  fixed64 tag_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message DeleteAddressBookTagResponse {}
+
+message ListTransferCounterpartiesRequest {
+  // Optional subaccount scope. Omit to use the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Optional transfer direction filter.
+  TransferCounterpartyDirection direction = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Optional destination type filter.
+  AddressBookEntryKind kind = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // Maximum number of counterparties to return, up to 200. Defaults to the service limit when omitted.
+  uint32 page_size = 4 [(buf.validate.field).uint32.lte = 200];
+}
+
+message ListTransferCounterpartiesResponse {
+  // Transfer counterparties matching the request filters, ordered by last_seen_at newest first.
+  repeated TransferCounterparty counterparties = 1;
+}
+
+message ListTransferDestinationsRequest {
+  // Optional subaccount scope. Omit to use the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Optional destination type filter.
+  AddressBookEntryKind kind = 2 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+message ListTransferDestinationsResponse {
+  // Saved destinations and active whitelisted destinations matching the request filters.
+  repeated TransferDestination destinations = 1;
+}
+
+message ListInternalTransferWhitelistEntriesRequest {
+  // Optional subaccount scope. Omit to use the root account address book.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+message ListInternalTransferWhitelistEntriesResponse {
+  // Active internal transfer whitelist entries for the requested address book.
+  repeated InternalTransferWhitelistEntry entries = 1;
+}
+
+message GetWithdrawWhitelistViewRequest {
+  // Optional subaccount scope. Omit to use the root account withdraw whitelist view.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+}
+
+message GetWithdrawWhitelistViewResponse {
+  // Withdraw whitelist status for the requested address book.
+  WithdrawWhitelistView view = 1;
+}
+
+message GetAddressBookViewRequest {
+  // Optional subaccount scope. Omit to use the root account address book view.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Maximum number of recent destinations to return, up to 200. Defaults to the service limit when omitted.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+}
+
+message GetAddressBookViewResponse {
+  // Address books visible to the caller.
+  repeated AddressBook books = 1;
+  // Saved address-book entries grouped by destination type.
+  AddressBookEntriesView entries = 2;
+  // Recent destinations not saved in the address book, grouped by destination type.
+  AddressBookRecentDestinationsView recent_destinations = 3;
+  // Tags referenced by entries.tag_ids.
+  repeated AddressBookTagSummary tags = 4;
+  // External withdrawal whitelist status for the selected address book.
+  WithdrawWhitelistView withdraw_whitelist = 5;
+}
+
+service AddressBookService {
+  rpc ListAddressBooks(ListAddressBooksRequest) returns (ListAddressBooksResponse) {
+    option (google.api.http) = {get: "/v1/auth/address-books"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Address Books"
+      description: "List the root and subaccount address books visible to the caller."
+      tags: "Address Book"
+    };
+  }
+
+  rpc ListAddressBookEntries(ListAddressBookEntriesRequest) returns (ListAddressBookEntriesResponse) {
+    option (google.api.http) = {get: "/v1/auth/address-book-entries"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Address Book Entries"
+      description: "List saved address-book entries for one visible root or subaccount scope."
+      tags: "Address Book"
+    };
+  }
+
+  rpc CreateAddressBookEntry(CreateAddressBookEntryRequest) returns (CreateAddressBookEntryResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/address-book-entries"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Address Book Entry"
+      description: "Create one saved address-book entry in the selected root or subaccount book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc UpdateAddressBookEntry(UpdateAddressBookEntryRequest) returns (UpdateAddressBookEntryResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/address-book-entries/{address_book_entry_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Address Book Entry"
+      description: "Update the label, note, or tags for one address-book entry."
+      tags: "Address Book"
+    };
+  }
+
+  rpc DeleteAddressBookEntry(DeleteAddressBookEntryRequest) returns (DeleteAddressBookEntryResponse) {
+    option (google.api.http) = {delete: "/v1/auth/address-book-entries/{address_book_entry_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Address Book Entry"
+      description: "Delete one address-book entry from the selected address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc CopyAddressBookEntry(CopyAddressBookEntryRequest) returns (CopyAddressBookEntryResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/address-book-entries/{address_book_entry_id}:copy"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Copy Address Book Entry"
+      description: "Copy one address-book entry into another visible root or subaccount book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc CreateAddressBookTag(CreateAddressBookTagRequest) returns (CreateAddressBookTagResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/address-book-tags"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Address Book Tag"
+      description: "Create one tag in the selected root or subaccount address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc UpdateAddressBookTag(UpdateAddressBookTagRequest) returns (UpdateAddressBookTagResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/address-book-tags/{tag_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Address Book Tag"
+      description: "Update one address-book tag."
+      tags: "Address Book"
+    };
+  }
+
+  rpc DeleteAddressBookTag(DeleteAddressBookTagRequest) returns (DeleteAddressBookTagResponse) {
+    option (google.api.http) = {delete: "/v1/auth/address-book-tags/{tag_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Address Book Tag"
+      description: "Delete one address-book tag and detach it from entries."
+      tags: "Address Book"
+    };
+  }
+
+  rpc ListTransferCounterparties(ListTransferCounterpartiesRequest) returns (ListTransferCounterpartiesResponse) {
+    option (google.api.http) = {get: "/v1/auth/transfer-counterparties"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Transfer Counterparties"
+      description: "List recent transfer counterparties, including destinations that are not saved in the address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc ListTransferDestinations(ListTransferDestinationsRequest) returns (ListTransferDestinationsResponse) {
+    option (google.api.http) = {get: "/v1/auth/transfer-destinations"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Transfer Destinations"
+      description: "List saved and whitelisted transfer destinations for one visible address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc ListInternalTransferWhitelistEntries(ListInternalTransferWhitelistEntriesRequest) returns (ListInternalTransferWhitelistEntriesResponse) {
+    option (google.api.http) = {get: "/v1/auth/internal-transfer-whitelist"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Internal Transfer Whitelist"
+      description: "List internal transfer whitelist entries for one visible address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc GetWithdrawWhitelistView(GetWithdrawWhitelistViewRequest) returns (GetWithdrawWhitelistViewResponse) {
+    option (google.api.http) = {get: "/v1/auth/withdraw-whitelist"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Withdraw Whitelist View"
+      description: "Get external withdrawal whitelist status for one visible address book."
+      tags: "Address Book"
+    };
+  }
+
+  rpc GetAddressBookView(GetAddressBookViewRequest) returns (GetAddressBookViewResponse) {
+    option (google.api.http) = {get: "/v1/auth/address-book"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Address Book View"
+      description: "Get address books, saved destinations, recent destinations, tags, and whitelist status in one response."
+      tags: "Address Book"
+    };
+  }
+}

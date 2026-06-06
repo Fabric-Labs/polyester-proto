@@ -1,0 +1,236 @@
+syntax = "proto3";
+
+package marketdata.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/marketdata/v1;marketdatav1";
+
+// HeatmapInterval controls bucket resolution for historical orderbook heatmap.
+enum HeatmapInterval {
+  INTERVAL_UNSPECIFIED = 0;
+  INTERVAL_1S = 1;
+  INTERVAL_1M = 2;
+  INTERVAL_5M = 3;
+  INTERVAL_1H = 4;
+}
+
+// HeatmapDepth controls top-N levels included per side in each heatmap bucket.
+//
+// Values intentionally mirror orderbook.v1.Depth for FE ergonomics, while
+// keeping this contract decoupled from orderbook service protos.
+enum HeatmapDepth {
+  DEPTH_UNSPECIFIED = 0;
+  DEPTH_1 = 1;
+  DEPTH_5 = 2;
+  DEPTH_10 = 3;
+  DEPTH_20 = 4;
+  DEPTH_50 = 5;
+  DEPTH_100 = 6;
+  DEPTH_200 = 7;
+  DEPTH_500 = 8;
+  DEPTH_1000 = 9;
+}
+
+// HeatmapQuantityMode controls what qty_scaled means in returned levels.
+enum HeatmapQuantityMode {
+  QTY_MODE_UNSPECIFIED = 0;
+  CLOSE = 1;
+  PEAK = 2;
+}
+
+// HeatmapTimeRange selects historical buckets by [start_time, end_time] (UTC).
+// At least one bound is required.
+message HeatmapTimeRange {
+  option (buf.validate.message).cel = {
+    id: "heatmap_time_range.non_empty"
+    message: "at least one of start_time or end_time must be set"
+    expression: "has(this.start_time) || has(this.end_time)"
+  };
+  option (buf.validate.message).cel = {
+    id: "heatmap_time_range.valid_order"
+    message: "end_time must be >= start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time >= this.start_time"
+  };
+  google.protobuf.Timestamp start_time = 1;
+  google.protobuf.Timestamp end_time = 2;
+}
+
+// HeatmapCursor selects historical buckets older than from_ts_sec (exclusive).
+message HeatmapCursor {
+  uint64 from_ts_sec = 1 [(buf.validate.field).uint64.gt = 0];
+}
+
+// GetOrderbookHeatmapRequest fetches historical heatmap buckets.
+message GetOrderbookHeatmapRequest {
+  // Engine symbol id.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Heatmap bucket interval.
+  HeatmapInterval interval = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Top-N levels per side included in each bucket.
+  HeatmapDepth depth = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Query mode:
+  // - time_range: absolute range query
+  // - cursor: keyset pagination (older-than)
+  oneof mode {
+    option (buf.validate.oneof).required = true;
+    HeatmapTimeRange time_range = 4;
+    HeatmapCursor cursor = 5;
+  }
+
+  // Maximum number of delta buckets returned (min 1, max 20000).
+  // This limit counts only `chain.deltas`; `chain.base_keyframe` is not counted.
+  uint32 limit = 6 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 20000
+  }];
+  // Quantity mode used for qty_scaled in snapshot/delta levels:
+  // - CLOSE: end-of-bucket quantity
+  // - PEAK: intra-bucket peak quantity
+  HeatmapQuantityMode quantity_mode = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// HeatmapLevels represents one side of the orderbook for snapshots.
+// Arrays are aligned by index and prices are sorted ascending for both sides:
+// - price_ticks[i] <-> qty_scaled[i]
+message HeatmapLevels {
+  option (buf.validate.message).cel = {
+    id: "heatmap_levels.equal_lengths"
+    message: "price_ticks and qty_scaled must have equal lengths"
+    expression: "size(this.price_ticks) == size(this.qty_scaled)"
+  };
+
+  repeated int64 price_ticks = 1;
+  // Quantity at each price level according to quantity_mode.
+  repeated int64 qty_scaled = 2;
+}
+
+// HeatmapDeltaLevels represents sparse per-bucket level changes for one side.
+// Arrays are aligned by index and prices are sorted ascending for both sides:
+// - price_ticks[i] <-> qty_scaled[i]
+// Delete semantics: qty_scaled[i] = 0 means delete level at price_ticks[i].
+message HeatmapDeltaLevels {
+  option (buf.validate.message).cel = {
+    id: "heatmap_delta_levels.equal_lengths"
+    message: "price_ticks and qty_scaled must have equal lengths"
+    expression: "size(this.price_ticks) == size(this.qty_scaled)"
+  };
+
+  repeated int64 price_ticks = 1;
+  repeated int64 qty_scaled = 2;
+}
+
+// HeatmapKeyframe is a full-book snapshot anchor.
+message HeatmapKeyframe {
+  // Snapshot timestamp (seconds since epoch, UTC).
+  uint64 ts_sec = 1;
+  int64 best_bid_tick = 2;
+  int64 best_ask_tick = 3;
+  int64 mid_tick = 4;
+  HeatmapLevels bids = 5;
+  HeatmapLevels asks = 6;
+  uint64 book_seq = 7;
+}
+
+// HeatmapDeltaBucket is one sparse update bucket containing both sides.
+message HeatmapDeltaBucket {
+  // Bucket start timestamp (seconds since epoch, UTC), aligned to `interval`.
+  uint64 ts_sec = 1;
+  HeatmapDeltaLevels bids = 2;
+  HeatmapDeltaLevels asks = 3;
+  // Number of upstream L2 updates aggregated into this interval bucket.
+  uint32 updates_in_bucket = 4;
+  uint64 book_seq_start = 5;
+  uint64 book_seq_end = 6;
+}
+
+// HeatmapLiveBucket is the canonical live payload for realtime heatmap updates.
+// It represents the latest state of one bucket (open or finalized).
+message HeatmapLiveBucket {
+  // Engine symbol id.
+  uint32 symbol_id = 1;
+  // Bucket interval for this payload.
+  HeatmapInterval interval = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Bucket start timestamp (seconds since epoch, UTC), aligned to `interval`.
+  uint64 ts_sec = 3;
+  // false for provisional open-bucket updates, true when bucket is finalized.
+  bool is_final = 4;
+  HeatmapDeltaLevels bids = 5;
+  HeatmapDeltaLevels asks = 6;
+  // Number of upstream L2 updates aggregated into this interval bucket.
+  uint32 updates_in_bucket = 7;
+  uint64 book_seq_start = 8;
+  uint64 book_seq_end = 9;
+  // Quantity semantics for qty_scaled in bids/asks.
+  HeatmapQuantityMode quantity_mode = 10 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Effective bin stride used by projector for this symbol (in price ticks).
+  uint64 effective_bin_ticks = 11;
+}
+
+// HeatmapDeltaChain is the historical payload for all intervals.
+// Reconstruct by applying deltas over base_keyframe.
+// Deltas are ordered oldest-first by ts_sec.
+message HeatmapDeltaChain {
+  HeatmapKeyframe base_keyframe = 1;
+  repeated HeatmapDeltaBucket deltas = 2;
+}
+
+// GetOrderbookHeatmapResponse returns a historical replay chain plus optional
+// live bucket state for explicit realtime stitching.
+message GetOrderbookHeatmapResponse {
+  // Engine symbol id returned for the requested market.
+  uint32 symbol_id = 1;
+  // Bucket interval used for the returned chain.
+  HeatmapInterval interval = 2;
+  // Top-N depth requested per side.
+  HeatmapDepth depth = 3;
+  // Always returned as snapshot + sparse deltas for the requested interval.
+  HeatmapDeltaChain chain = 4;
+
+  // Latest finalized historical bucket timestamp in seconds since epoch (UTC).
+  uint64 last_persisted_ts_sec = 5;
+  // Book sequence anchor for realtime continuation; apply live updates where book_seq_end is greater than this value.
+  uint64 live_from_book_seq_end = 6;
+  // True when live_from_book_seq_end is available and can be used as a realtime continuation anchor.
+  bool has_live_anchor = 7;
+  // True when more older buckets are available through cursor pagination.
+  bool has_more = 8;
+  // Exclusive cursor for older-than pagination in cursor mode, in seconds since epoch (UTC). Zero means no next page.
+  uint64 next_ts_sec = 9;
+  // Server response time in seconds since epoch (UTC).
+  uint64 server_time_sec = 10;
+  // Quantity mode used for all qty_scaled values in the response.
+  HeatmapQuantityMode quantity_mode = 11;
+  // Optional latest live bucket for the requested interval and depth.
+  // Present only when it is newer than the historical anchor and its quantity semantics match quantity_mode.
+  HeatmapLiveBucket live_bucket = 12;
+}
+
+// HeatmapService serves historical orderbook heatmap chains.
+service HeatmapService {
+  // Retrieve historical orderbook heatmap data for a spot symbol.
+  // - All intervals (1s/1m/5m/1h) return snapshot + sparse delta chain.
+  // - Response may also include the latest live bucket state when available.
+  // Response always includes realtime stitching anchors.
+  rpc GetOrderbookHeatmap(GetOrderbookHeatmapRequest) returns (GetOrderbookHeatmapResponse) {
+    option (polyester.api.public) = true;
+  }
+}

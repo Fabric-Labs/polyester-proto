@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// AccountIdentity is a lightweight identity view for a root account.
+message AccountIdentity {
+  // Root account identifier (opaque ID).
+  fixed64 account_id = 1;
+  // Current username for the root account (unique, case-insensitive). Empty
+  // means no username set.
+  string username = 2 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {
+      max_len: 32
+      pattern: "^[a-zA-Z0-9_.-]{3,32}$"
+    }
+  ];
+  // Avatar URL, if set. Maximum length is 256 characters.
+  string avatar_url = 3 [(buf.validate.field).string = {max_len: 256}];
+  // Root smart-account EVM address. Useful as a stable identity fallback.
+  string root_smart_account_address = 4 [(buf.validate.field).string = {max_len: 64}];
+}
+
+// UserProfile is the caller's public profile and account metadata.
+message UserProfile {
+  // Public username for the root account. Usernames are unique
+  // case-insensitively and use 3 to 32 letters, digits, underscores, dots, or
+  // hyphens. Empty means no username is set.
+  string username = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {
+      max_len: 32
+      pattern: "^[a-zA-Z0-9_.-]{3,32}$"
+    }
+  ];
+  // Short public bio. Maximum length is 256 characters.
+  string bio = 2 [(buf.validate.field).string = {max_len: 256}];
+  // Public website URL, if set. Maximum length is 256 characters.
+  string website = 3 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {max_len: 256}
+  ];
+  // X/Twitter handle without "@". Maximum length is 15 characters.
+  string twitter = 4 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {
+      max_len: 15
+      pattern: "^[A-Za-z0-9_]{1,15}$"
+    }
+  ];
+  // Whether the X/Twitter handle for this account has been verified.
+  bool twitter_verified = 8;
+  // Discord handle or username without "@". Maximum length is 64 characters.
+  string discord = 9 [(buf.validate.field).string = {max_len: 64}];
+  // Whether the Discord handle for this account has been verified.
+  bool discord_verified = 10;
+  // Avatar URL, if set. Maximum length is 256 characters.
+  string avatar_url = 5 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {max_len: 256}
+  ];
+  // Account creation time in UTC. This is the canonical "member since"
+  // timestamp.
+  google.protobuf.Timestamp created_at = 12;
+  // Next time in UTC when the username can be changed again. Omitted when no
+  // cooldown applies.
+  google.protobuf.Timestamp next_username_change_at = 6;
+
+  // Current VIP tier for this root account. A value of 0 is the base tier.
+  // Read-only.
+  int32 vip_tier = 7;
+
+  // Whether this account is currently allowed to claim/change a username.
+  bool username_unlocked = 11;
+}
+
+// UserProfilePatch is a partial profile update. Fields are
+// optional/presence-aware:
+// - if a field is omitted, it is not modified
+// - if a field is present with an empty string, it is cleared
+// Username changes are subject to account eligibility, reserved-name checks,
+// uniqueness, and cooldown rules. Case-only username changes update display
+// casing without consuming the cooldown.
+message UserProfilePatch {
+  // Public username for the root account. Use an empty string to clear it.
+  // Non-empty values must be 3 to 32 letters, digits, underscores, dots, or
+  // hyphens.
+  optional string username = 1 [(buf.validate.field).cel = {
+    id: "username.valid_or_empty"
+    message: "username must be empty or 3-32 chars of letters, digits, underscore, dot, hyphen"
+    expression: "size(this) == 0 || this.matches('^[a-zA-Z0-9_.-]{3,32}$')"
+  }];
+  // Short public bio. Use an empty string to clear it. Non-empty values must be
+  // at most 256 characters and cannot contain "<" or ">".
+  optional string bio = 2 [(buf.validate.field).cel = {
+    id: "bio.safe_or_empty"
+    message: "bio must be empty or <= 256 characters and must not contain '<' or '>'"
+    expression: "size(this) == 0 || (size(this) <= 256 && !this.contains('<') && !this.contains('>'))"
+  }];
+  // Public website URL. Use an empty string to clear it. Non-empty values must
+  // be valid http(s) URLs up to 256 characters.
+  optional string website = 3 [(buf.validate.field).cel = {
+    id: "website.valid_url_or_empty"
+    message: "website must be empty or a valid http(s) URL"
+    expression: "size(this) == 0 || (size(this) <= 256 && (this.startsWith('http://') || this.startsWith('https://')) && this.isUri() && !this.contains('<') && !this.contains('>'))"
+  }];
+  // X/Twitter handle without "@". Use an empty string to clear it. Non-empty
+  // values must be 1 to 15 letters, digits, or underscores.
+  optional string twitter = 4 [(buf.validate.field).cel = {
+    id: "twitter.valid_handle_or_empty"
+    message: "twitter must be empty or a valid handle (letters, digits, underscore; without '@')"
+    expression: "size(this) == 0 || this.matches('^[A-Za-z0-9_]{1,15}$')"
+  }];
+  // Avatar URL. Use an empty string to clear it. Non-empty values must be valid
+  // http(s) URLs up to 256 characters.
+  optional string avatar_url = 5 [(buf.validate.field).cel = {
+    id: "avatar_url.valid_url_or_empty"
+    message: "avatar_url must be empty or a valid http(s) URL"
+    expression: "size(this) == 0 || (size(this) <= 256 && (this.startsWith('http://') || this.startsWith('https://')) && this.isUri() && !this.contains('<') && !this.contains('>'))"
+  }];
+}
+
+// GetProfileRequest fetches the authenticated caller's profile.
+message GetProfileRequest {}
+
+// --- Typed errors for ProfileService ---
+
+// High-level error codes for profile domain errors (ProfileService).
+enum ProfileErrorCode {
+  // No profile error code specified.
+  PROFILE_UNSPECIFIED = 0;
+  // Generic invalid field (format/characters).
+  PROFILE_INVALID_FIELD = 1;
+  // Field exceeds configured max length.
+  PROFILE_FIELD_TOO_LONG = 2;
+  // URL is syntactically invalid.
+  PROFILE_URL_INVALID = 3;
+  // URL scheme is not allowed (e.g., non-http(s)).
+  PROFILE_URL_SCHEME_INVALID = 4;
+}
+
+// ProfileErrorDetail describes a profile validation failure returned by the API.
+message ProfileErrorDetail {
+  // Stable machine-readable profile error code.
+  ProfileErrorCode code = 1;
+  // Field name associated with the error, such as "bio", "website", "twitter",
+  // or "avatar_url".
+  string field = 2;
+  // Human-friendly message for UI/debugging.
+  string message = 3;
+}
+
+// UsernameHistoryEntry records a previous username claim for the caller.
+message UsernameHistoryEntry {
+  // Username value that was set.
+  string username = 1;
+  // Time in UTC when this username was set.
+  google.protobuf.Timestamp set_at = 2;
+}
+
+// GetUsernameHistoryRequest fetches recent username changes for the
+// authenticated caller.
+message GetUsernameHistoryRequest {}
+
+// GetUsernameHistoryResponse contains the caller's recent username history,
+// newest first. At most 20 entries are returned.
+message GetUsernameHistoryResponse {
+  // Recent username history entries, newest first.
+  repeated UsernameHistoryEntry history = 1;
+}
+
+// ProfileService manages the authenticated caller's public profile.
+service ProfileService {
+  // Get the caller's profile.
+  rpc GetProfile(GetProfileRequest) returns (UserProfile) {
+    option (google.api.http) = {get: "/v1/auth/profile"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Profile"
+      description: "Retrieve the caller's profile."
+      tags: "Auth Service"
+    };
+  }
+
+  // Update the caller's mutable profile fields. Omitted fields are unchanged;
+  // present empty strings clear optional text fields.
+  rpc UpdateProfile(UserProfilePatch) returns (UserProfile) {
+    option (google.api.http) = {
+      patch: "/v1/auth/profile"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Profile"
+      description: "Update the caller's mutable profile fields. Omitted fields are unchanged; present empty strings clear optional text fields."
+      tags: "Auth Service"
+    };
+  }
+
+  // Get recent username history for the caller, newest first. Returns at most
+  // 20 entries.
+  rpc GetUsernameHistory(GetUsernameHistoryRequest) returns (GetUsernameHistoryResponse) {
+    option (google.api.http) = {get: "/v1/auth/profile/username-history"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Username History"
+      description: "Retrieve recent username history entries for the caller, newest first. Returns at most 20 entries."
+      tags: "Auth Service"
+    };
+  }
+}

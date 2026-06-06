@@ -1,0 +1,1687 @@
+{
+  "types": [
+    {
+      "name": "triggers.v1.CancelTriggerRequest",
+      "kind": "message",
+      "doc": "CancelTriggerRequest cancels an active trigger by ID.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to cancel.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account for authorization.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.CancelTriggerResponse",
+      "kind": "message",
+      "doc": "CancelTriggerResponse returns the final status after cancellation.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID that was canceled.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Final status (should be CANCELLED).",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "ts",
+            "jsonName": "ts",
+            "number": 3,
+            "doc": "Server timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 4,
+            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.CreateTriggerRequest",
+      "kind": "message",
+      "doc": "CreateTriggerRequest creates a standalone trigger (stop order, TWAP, ladder,\n etc.). Standalone triggers have independent lifecycle and arm immediately\n after creation.",
+      "message": {
+        "cel": [
+          {
+            "id": "create_trigger.stop.trigger_price_required",
+            "message": "trigger_price_ticks must be \u003e 0 for STOP_LOSS and TAKE_PROFIT",
+            "expression": "(this.trigger_type != 1 \u0026\u0026 this.trigger_type != 2) || this.trigger_price_ticks \u003e 0"
+          },
+          {
+            "id": "create_trigger.limit.limit_price_required",
+            "message": "limit_price_ticks required for LIMIT child orders",
+            "expression": "this.order_type != 1 || this.limit_price_ticks \u003e 0 || this.trigger_type == 5"
+          },
+          {
+            "id": "create_trigger.trailing.trailing_distance_required",
+            "message": "trailing_distance required for TRAILING_STOP",
+            "expression": "this.trigger_type != 3 || (has(this.trailing_distance_ticks) || has(this.trailing_distance_bps))"
+          },
+          {
+            "id": "create_trigger.twap.window_valid",
+            "message": "twap_duration_ms and twap_slice_interval_ms invalid",
+            "expression": "this.trigger_type != 4 || (this.twap_duration_ms \u003e= 1000 \u0026\u0026 this.twap_slice_interval_ms \u003e= 100 \u0026\u0026 this.twap_slice_interval_ms \u003c= this.twap_duration_ms)"
+          },
+          {
+            "id": "create_trigger.ladder.range_valid",
+            "message": "ladder_price_min_ticks/ladder_price_max_ticks invalid",
+            "expression": "this.trigger_type != 5 || (this.ladder_price_min_ticks \u003e 0 \u0026\u0026 this.ladder_price_max_ticks \u003e 0 \u0026\u0026 this.ladder_price_max_ticks \u003e this.ladder_price_min_ticks)"
+          },
+          {
+            "id": "create_trigger.ladder.levels_valid",
+            "message": "ladder_levels must be [2,100]",
+            "expression": "this.trigger_type != 5 || (this.ladder_levels \u003e= 2 \u0026\u0026 this.ladder_levels \u003c= 100)"
+          }
+        ],
+        "oneofs": [
+          {
+            "name": "trailing_distance",
+            "fields": [
+              "trailing_distance_ticks",
+              "trailing_distance_bps"
+            ]
+          },
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Target sub-account. When empty or omitted, uses the caller's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 2,
+            "doc": "Symbol, for example \"BTC-USDT\"; resolved to a numeric symbol ID.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          },
+          {
+            "name": "trigger_type",
+            "jsonName": "triggerType",
+            "number": 3,
+            "doc": "Type of trigger. Required.",
+            "protoRef": "triggers.v1.TriggerType",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "trigger_price_ticks",
+            "jsonName": "triggerPriceTicks",
+            "number": 10,
+            "doc": "Trigger price in ticks. Required for STOP_LOSS/TAKE_PROFIT.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 11,
+            "doc": "Price source for trigger evaluation. Defaults to LAST_PRICE.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 20,
+            "doc": "Side for the child order. Required.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "order_type",
+            "jsonName": "orderType",
+            "number": 21,
+            "doc": "Order type for the child order (LIMIT or MARKET). Defaults to MARKET.",
+            "protoRef": "orders.v1.OrderType",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "tif",
+            "jsonName": "tif",
+            "number": 22,
+            "doc": "Time-in-force for the child order. Defaults to GTC for LIMIT, IOC for\n MARKET.",
+            "protoRef": "orders.v1.TIF",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 23,
+            "doc": "Quantity in base asset scale units. Required.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 24,
+            "doc": "Limit price in ticks for LIMIT child orders.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "fee_source",
+            "jsonName": "feeSource",
+            "number": 25,
+            "doc": "Fee source selection for BUY child orders. SELL child orders always pay in\n QUOTE.\n\n When omitted (UNSPECIFIED), defaults to QUOTE.",
+            "protoRef": "orders.v1.FeeSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "stp_mode",
+            "jsonName": "stpMode",
+            "number": 26,
+            "doc": "Self-trade prevention mode for child orders.\n\n When omitted (UNSPECIFIED), defaults to EXPIRE_MAKER.",
+            "protoRef": "orders.v1.STPMode",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 27,
+            "doc": "If true, child LIMIT orders are post-only (rejected if they would cross).",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "trailing_distance_ticks",
+            "jsonName": "trailingDistanceTicks",
+            "number": 30,
+            "doc": "Trailing distance in absolute ticks.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "trailing_distance_bps",
+            "jsonName": "trailingDistanceBps",
+            "number": 31,
+            "doc": "Trailing distance in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "activation_price_ticks",
+            "jsonName": "activationPriceTicks",
+            "number": 32,
+            "doc": "Optional activation price: trailing only starts after this price is\n reached.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 33,
+            "doc": "Maximum allowed slippage in absolute ticks.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 34,
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "twap_duration_ms",
+            "jsonName": "twapDurationMs",
+            "number": 40,
+            "doc": "Total duration of TWAP execution in milliseconds. Required for TWAP.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "twap_slice_interval_ms",
+            "jsonName": "twapSliceIntervalMs",
+            "number": 41,
+            "doc": "Interval between TWAP slices in milliseconds. Required for TWAP.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "ladder_price_min_ticks",
+            "jsonName": "ladderPriceMinTicks",
+            "number": 50,
+            "doc": "Minimum price in ticks for the ladder range.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "ladder_price_max_ticks",
+            "jsonName": "ladderPriceMaxTicks",
+            "number": 51,
+            "doc": "Maximum price in ticks for the ladder range.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "ladder_levels",
+            "jsonName": "ladderLevels",
+            "number": 52,
+            "doc": "Number of price levels in the ladder.\n Required for LADDER; valid range is 2..100.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "ladder_distribution",
+            "jsonName": "ladderDistribution",
+            "number": 53,
+            "doc": "Distribution of quantity across levels.",
+            "protoRef": "triggers.v1.LadderDistribution",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "client_trigger_id",
+            "jsonName": "clientTriggerId",
+            "number": 60,
+            "doc": "Client-provided trigger ID for idempotency. Required.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.CreateTriggerResponse",
+      "kind": "message",
+      "doc": "CreateTriggerResponse returns the accepted trigger identifier and status.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Unique trigger ID assigned by the system.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Current status of the trigger.",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "client_trigger_id",
+            "jsonName": "clientTriggerId",
+            "number": 3,
+            "doc": "Echoed back if provided in request.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "ts",
+            "jsonName": "ts",
+            "number": 4,
+            "doc": "Server timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 5,
+            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.GetTriggerRequest",
+      "kind": "message",
+      "doc": "GetTriggerRequest retrieves one trigger by ID.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to retrieve.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account for authorization.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.GetTriggerResponse",
+      "kind": "message",
+      "doc": "GetTriggerResponse returns the requested trigger.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger",
+            "jsonName": "trigger",
+            "number": 1,
+            "doc": "Trigger state and configuration.",
+            "protoRef": "triggers.v1.Trigger"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.LadderDetails",
+      "kind": "message",
+      "doc": "LadderDetails contains configuration for LADDER triggers.",
+      "message": {
+        "fields": [
+          {
+            "name": "ladder_price_min_ticks",
+            "jsonName": "ladderPriceMinTicks",
+            "number": 1,
+            "doc": "Minimum price in ticks for the ladder range (6 decimals).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "ladder_price_max_ticks",
+            "jsonName": "ladderPriceMaxTicks",
+            "number": 2,
+            "doc": "Maximum price in ticks for the ladder range (6 decimals).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "ladder_levels",
+            "jsonName": "ladderLevels",
+            "number": 3,
+            "doc": "Number of price levels in the ladder.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "ladder_distribution",
+            "jsonName": "ladderDistribution",
+            "number": 4,
+            "doc": "Quantity distribution across ladder levels.",
+            "protoRef": "triggers.v1.LadderDistribution"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.LadderDistribution",
+      "kind": "enum",
+      "doc": "LadderDistribution defines how quantity is distributed across ladder levels.",
+      "enum": {
+        "values": [
+          {
+            "name": "LINEAR",
+            "number": 1,
+            "doc": "Equal quantity at each level."
+          },
+          {
+            "name": "GEOMETRIC",
+            "number": 2,
+            "doc": "More quantity toward the edges (U-shape)."
+          },
+          {
+            "name": "WEIGHTED_FAVORABLE",
+            "number": 3,
+            "doc": "More quantity at favorable prices."
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ListTriggerEventsRequest",
+      "kind": "message",
+      "doc": "ListTriggerEventsRequest lists historical events for one trigger.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to list events for.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account (authorization). When empty or omitted, uses the\n caller's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Page size. Defaults to 100 when omitted; maximum 1000.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "1",
+                "lte": "1000"
+              }
+            }
+          },
+          {
+            "name": "before_ts_ns",
+            "jsonName": "beforeTsNs",
+            "number": 4,
+            "doc": "Exclusive reverse-time cursor in nanoseconds since epoch (UTC).\n Zero means start from the latest event.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ListTriggerEventsResponse",
+      "kind": "message",
+      "doc": "ListTriggerEventsResponse returns historical events ordered newest-first.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Events ordered by event time descending, then child sequence descending.",
+            "repeated": true,
+            "protoRef": "triggers.v1.TriggerEvent"
+          },
+          {
+            "name": "next_before_ts_ns",
+            "jsonName": "nextBeforeTsNs",
+            "number": 2,
+            "doc": "Cursor for the next page; pass as before_ts_ns to request strictly older events.\n Zero means this response is empty.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ListTriggersRequest",
+      "kind": "message",
+      "doc": "ListTriggersRequest lists triggers for an account.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional sub-account to list triggers for. When empty or omitted, uses the\n caller's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 2,
+            "doc": "Optional filter by symbol.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 3,
+            "doc": "Optional filter by status (can specify multiple).",
+            "repeated": true,
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "trigger_type",
+            "jsonName": "triggerType",
+            "number": 4,
+            "doc": "Optional filter by type.",
+            "protoRef": "triggers.v1.TriggerType",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "parent_order_id",
+            "jsonName": "parentOrderId",
+            "number": 5,
+            "doc": "Optional filter by attached parent order ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 10,
+            "doc": "Page size. Defaults to 100 when omitted; maximum 1000.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "1",
+                "lte": "1000"
+              }
+            }
+          },
+          {
+            "name": "offset",
+            "jsonName": "offset",
+            "number": 11,
+            "doc": "Zero-based result offset for page-number style pagination. Defaults to 0.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ListTriggersResponse",
+      "kind": "message",
+      "doc": "ListTriggersResponse returns triggers ordered newest-first.",
+      "message": {
+        "fields": [
+          {
+            "name": "triggers",
+            "jsonName": "triggers",
+            "number": 1,
+            "doc": "Triggers ordered by creation time descending, then trigger ID descending.",
+            "repeated": true,
+            "protoRef": "triggers.v1.Trigger"
+          },
+          {
+            "name": "total",
+            "jsonName": "total",
+            "number": 2,
+            "doc": "Total count matching the filter (for pagination).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ModifyTriggerRequest",
+      "kind": "message",
+      "doc": "ModifyTriggerRequest applies a limited patch to an existing trigger.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "trailing_distance",
+            "fields": [
+              "trailing_distance_ticks",
+              "trailing_distance_bps"
+            ]
+          },
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to modify.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account for authorization.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "trigger_price_ticks",
+            "jsonName": "triggerPriceTicks",
+            "number": 10,
+            "doc": "Patch fields for safe price, trailing-distance, and slippage edits.\n For stop/take-profit:\n Updated trigger price in ticks.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 11,
+            "doc": "Updated limit price in ticks for LIMIT child orders.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trailing_distance_ticks",
+            "jsonName": "trailingDistanceTicks",
+            "number": 12,
+            "doc": "Updated trailing distance in absolute ticks.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "trailing_distance_bps",
+            "jsonName": "trailingDistanceBps",
+            "number": 13,
+            "doc": "Updated trailing distance in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "activation_price_ticks",
+            "jsonName": "activationPriceTicks",
+            "number": 14,
+            "doc": "Updated activation price in ticks.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 15,
+            "doc": "Updated maximum allowed slippage in absolute ticks.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 16,
+            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "oneof": "max_slippage"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ModifyTriggerResponse",
+      "kind": "message",
+      "doc": "ModifyTriggerResponse returns the trigger status after modification.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Modified trigger ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Current trigger status after modification.",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "ts",
+            "jsonName": "ts",
+            "number": 3,
+            "doc": "Server timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 4,
+            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.PauseTriggerRequest",
+      "kind": "message",
+      "doc": "PauseTriggerRequest pauses an active trigger by ID.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to pause.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account for authorization.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.PauseTriggerResponse",
+      "kind": "message",
+      "doc": "PauseTriggerResponse returns the trigger status after pausing.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Paused trigger ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Current trigger status after pausing.",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "ts",
+            "jsonName": "ts",
+            "number": 3,
+            "doc": "Server timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 4,
+            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ResumeTriggerRequest",
+      "kind": "message",
+      "doc": "ResumeTriggerRequest resumes a paused trigger by ID.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID to resume.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Optional sub-account for authorization.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ResumeTriggerResponse",
+      "kind": "message",
+      "doc": "ResumeTriggerResponse returns the trigger status after resuming.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Resumed trigger ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Current trigger status after resuming.",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "ts",
+            "jsonName": "ts",
+            "number": 3,
+            "doc": "Server timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 4,
+            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.StopDetails",
+      "kind": "message",
+      "doc": "StopDetails contains configuration for STOP_LOSS and TAKE_PROFIT triggers.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_price_ticks",
+            "jsonName": "triggerPriceTicks",
+            "number": 1,
+            "doc": "Trigger threshold price in ticks (6 decimals).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 2,
+            "doc": "Price source used for trigger evaluation.",
+            "protoRef": "orders.v1.TriggerPriceSource"
+          },
+          {
+            "name": "trigger_direction",
+            "jsonName": "triggerDirection",
+            "number": 3,
+            "doc": "Direction the price must cross to fire the trigger.",
+            "protoRef": "orders.v1.TriggerDirection"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TrailingDetails",
+      "kind": "message",
+      "doc": "TrailingDetails contains configuration and runtime state for TRAILING_STOP\n triggers.",
+      "message": {
+        "fields": [
+          {
+            "name": "trailing_distance_ticks",
+            "jsonName": "trailingDistanceTicks",
+            "number": 1,
+            "doc": "Trailing distance in absolute ticks (6 decimals).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "activation_price_ticks",
+            "jsonName": "activationPriceTicks",
+            "number": 2,
+            "doc": "Optional activation price: trailing only starts after this price is\n reached.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "peak_price_ticks",
+            "jsonName": "peakPriceTicks",
+            "number": 3,
+            "doc": "Current peak price in ticks for sell trailing stops.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trough_price_ticks",
+            "jsonName": "troughPriceTicks",
+            "number": 4,
+            "doc": "Current trough price in ticks for buy trailing stops.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trailing_distance_bps",
+            "jsonName": "trailingDistanceBps",
+            "number": 5,
+            "doc": "Trailing distance in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 6,
+            "doc": "Optional maximum allowed slippage in absolute ticks.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 7,
+            "doc": "Optional maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 8,
+            "doc": "Direction/source are fixed per trigger; exposed for completeness.",
+            "protoRef": "orders.v1.TriggerPriceSource"
+          },
+          {
+            "name": "trigger_direction",
+            "jsonName": "triggerDirection",
+            "number": 9,
+            "protoRef": "orders.v1.TriggerDirection"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.Trigger",
+      "kind": "message",
+      "doc": "Trigger represents a trigger with its full state.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "details",
+            "fields": [
+              "stop",
+              "trailing",
+              "twap",
+              "ladder"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Public account or sub-account ID associated with the trigger.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 3,
+            "doc": "Trading symbol numeric identifier.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 4,
+            "doc": "Trading symbol, for example \"BTC-USDT\".",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "trigger_type",
+            "jsonName": "triggerType",
+            "number": 5,
+            "doc": "Trigger category.",
+            "protoRef": "triggers.v1.TriggerType"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 6,
+            "doc": "Current trigger lifecycle status.",
+            "protoRef": "triggers.v1.TriggerStatus"
+          },
+          {
+            "name": "parent_order_id",
+            "jsonName": "parentOrderId",
+            "number": 7,
+            "doc": "Parent order ID for attached-risk triggers; empty for standalone triggers.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 20,
+            "doc": "Child order side.",
+            "protoRef": "orders.v1.Side"
+          },
+          {
+            "name": "order_type",
+            "jsonName": "orderType",
+            "number": 21,
+            "doc": "Child order type.",
+            "protoRef": "orders.v1.OrderType"
+          },
+          {
+            "name": "tif",
+            "jsonName": "tif",
+            "number": 22,
+            "doc": "Child order time-in-force policy.",
+            "protoRef": "orders.v1.TIF"
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 23,
+            "doc": "Child order quantity in scaled base units.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 24,
+            "doc": "Child LIMIT order price in ticks. Zero for MARKET child orders.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "fee_source",
+            "jsonName": "feeSource",
+            "number": 25,
+            "doc": "Fee source for BUY child orders.",
+            "protoRef": "orders.v1.FeeSource"
+          },
+          {
+            "name": "stp_mode",
+            "jsonName": "stpMode",
+            "number": 26,
+            "doc": "Self-trade prevention mode for child orders.",
+            "protoRef": "orders.v1.STPMode"
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 27,
+            "doc": "True if child LIMIT orders are post-only.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "stop",
+            "jsonName": "stop",
+            "number": 100,
+            "doc": "Stop-loss or take-profit trigger details.",
+            "protoRef": "triggers.v1.StopDetails",
+            "oneof": "details"
+          },
+          {
+            "name": "trailing",
+            "jsonName": "trailing",
+            "number": 101,
+            "doc": "Trailing-stop trigger details.",
+            "protoRef": "triggers.v1.TrailingDetails",
+            "oneof": "details"
+          },
+          {
+            "name": "twap",
+            "jsonName": "twap",
+            "number": 102,
+            "doc": "TWAP trigger details.",
+            "protoRef": "triggers.v1.TwapDetails",
+            "oneof": "details"
+          },
+          {
+            "name": "ladder",
+            "jsonName": "ladder",
+            "number": 103,
+            "doc": "Ladder trigger details.",
+            "protoRef": "triggers.v1.LadderDetails",
+            "oneof": "details"
+          },
+          {
+            "name": "client_trigger_id",
+            "jsonName": "clientTriggerId",
+            "number": 60,
+            "doc": "Client-provided trigger ID for idempotency and correlation.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 61,
+            "doc": "Creation timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "updated_at",
+            "jsonName": "updatedAt",
+            "number": 62,
+            "doc": "Last update timestamp.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "armed_at",
+            "jsonName": "armedAt",
+            "number": 63,
+            "doc": "Timestamp when the trigger became armed.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "completed_at",
+            "jsonName": "completedAt",
+            "number": 64,
+            "doc": "Timestamp when the trigger reached a terminal successful state.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "child_order_ids",
+            "jsonName": "childOrderIds",
+            "number": 70,
+            "doc": "Child orders spawned by this trigger.",
+            "repeated": true,
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerEvent",
+      "kind": "message",
+      "doc": "TriggerEvent describes one historical trigger lifecycle event.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_id",
+            "jsonName": "triggerId",
+            "number": 1,
+            "doc": "Trigger ID associated with the event.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Public account or sub-account ID associated with the trigger.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 3,
+            "doc": "Trading symbol numeric identifier.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "trigger_type",
+            "jsonName": "triggerType",
+            "number": 4,
+            "doc": "Trigger type at the time of the event.",
+            "protoRef": "triggers.v1.TriggerType"
+          },
+          {
+            "name": "event_type",
+            "jsonName": "eventType",
+            "number": 5,
+            "doc": "Event category.",
+            "protoRef": "triggers.v1.TriggerEventType"
+          },
+          {
+            "name": "ts_ns",
+            "jsonName": "tsNs",
+            "number": 10,
+            "doc": "Event timestamp in nanoseconds since epoch (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "child_seq",
+            "jsonName": "childSeq",
+            "number": 11,
+            "doc": "Child sequence number for multi-child trigger strategies.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "child_order_id",
+            "jsonName": "childOrderId",
+            "number": 12,
+            "doc": "Child order ID created by this event, if any.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "fire_px_ticks",
+            "jsonName": "firePxTicks",
+            "number": 13,
+            "doc": "Price that caused the trigger to fire, in ticks. Zero when not applicable.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 20,
+            "doc": "Optional cancel reason.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerEventType",
+      "kind": "enum",
+      "doc": "TriggerEventType defines append-only trigger lifecycle events for history.",
+      "enum": {
+        "values": [
+          {
+            "name": "FIRED",
+            "number": 1,
+            "doc": "Trigger fired and may have created a child order."
+          },
+          {
+            "name": "CANCELED",
+            "number": 2,
+            "doc": "Trigger was canceled."
+          },
+          {
+            "name": "UPDATED",
+            "number": 3,
+            "doc": "Trigger configuration or lifecycle state was updated."
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerStatus",
+      "kind": "enum",
+      "doc": "TriggerStatus represents the lifecycle state of a trigger.",
+      "enum": {
+        "values": [
+          {
+            "name": "CREATED",
+            "number": 1,
+            "doc": "Trigger was created and is pending activation."
+          },
+          {
+            "name": "ARMED",
+            "number": 2,
+            "doc": "Trigger admitted and actively evaluating conditions."
+          },
+          {
+            "name": "RUNNING",
+            "number": 3,
+            "doc": "Trigger is actively executing (for example, TWAP slices in progress)."
+          },
+          {
+            "name": "COMPLETED",
+            "number": 4,
+            "doc": "Trigger completed successfully (all child orders placed/filled)."
+          },
+          {
+            "name": "CANCELLED",
+            "number": 5,
+            "doc": "Trigger was canceled by user."
+          },
+          {
+            "name": "FAILED",
+            "number": 6,
+            "doc": "Trigger failed (for example, reservation failure, child order rejection)."
+          },
+          {
+            "name": "PAUSED",
+            "number": 7,
+            "doc": "Trigger is paused (user-initiated, can be resumed)."
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerType",
+      "kind": "enum",
+      "doc": "TriggerType defines the category of standalone trigger.",
+      "enum": {
+        "values": [
+          {
+            "name": "STOP_LOSS",
+            "number": 1,
+            "doc": "Stop-loss: fires when the price crosses a threshold."
+          },
+          {
+            "name": "TAKE_PROFIT",
+            "number": 2,
+            "doc": "Take-profit: fires when the price crosses a threshold."
+          },
+          {
+            "name": "TRAILING_STOP",
+            "number": 3,
+            "doc": "Trailing stop: dynamic stop that trails price by a distance."
+          },
+          {
+            "name": "TWAP",
+            "number": 4,
+            "doc": "TWAP: Time-Weighted Average Price execution over a duration."
+          },
+          {
+            "name": "LADDER",
+            "number": 5,
+            "doc": "Ladder/Scaled: Multiple orders placed across a price range."
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TwapDetails",
+      "kind": "message",
+      "doc": "TwapDetails contains configuration and runtime state for TWAP triggers.",
+      "message": {
+        "fields": [
+          {
+            "name": "twap_duration_ms",
+            "jsonName": "twapDurationMs",
+            "number": 1,
+            "doc": "Total duration of TWAP execution in milliseconds.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "twap_slice_interval_ms",
+            "jsonName": "twapSliceIntervalMs",
+            "number": 2,
+            "doc": "Interval between TWAP slices in milliseconds.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "slice_idx",
+            "jsonName": "sliceIdx",
+            "number": 4,
+            "doc": "Current slice index, zero-based.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "slice_count",
+            "jsonName": "sliceCount",
+            "number": 5,
+            "doc": "Total number of planned slices.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "executed_qty_scaled",
+            "jsonName": "executedQtyScaled",
+            "number": 6,
+            "doc": "Cumulative executed quantity in scaled base units.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          }
+        ]
+      }
+    }
+  ]
+}

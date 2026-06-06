@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package orderbook.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orderbook/v1;orderbookv1";
+// Document-level OpenAPI metadata for Orderbook API
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Orderbook Service"
+      description: "Public read surface for spot orderbook depth snapshots."
+    }
+  ]
+};
+
+// Depth specifies the number of price levels per side.
+enum Depth {
+  // Default depth (50 levels per side).
+  DEPTH_UNSPECIFIED = 0;
+  // 1 level per side (top of book / best bid-ask).
+  DEPTH_1 = 1;
+  // 5 levels per side.
+  DEPTH_5 = 2;
+  // 10 levels per side.
+  DEPTH_10 = 3;
+  // 20 levels per side.
+  DEPTH_20 = 4;
+  // 50 levels per side.
+  DEPTH_50 = 5;
+  // 100 levels per side.
+  DEPTH_100 = 6;
+  // 200 levels per side.
+  DEPTH_200 = 7;
+  // 500 levels per side.
+  DEPTH_500 = 8;
+  // 1000 levels per side.
+  DEPTH_1000 = 9;
+}
+
+// GetOrderBookRequest describes a snapshot view request.
+message GetOrderBookRequest {
+  // e.g. "BTC-USDT"; resolved to symbol_id server-side.
+  string symbol = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 20
+  }];
+
+  // Requested depth per side (number of price levels). Default is 50.
+  Depth depth = 2 [(buf.validate.field).enum.defined_only = true];
+}
+
+// PriceLevel uses scaled integers for the binary (protobuf) API (low-latency).
+// Any REST surface should expose decimal strings via DTO conversion.
+message PriceLevel {
+  // Price in ticks (scaled integer); same semantics as orders APIs (see orders.v1).
+  int64 price_ticks = 1;
+  // Quantity in base units (scaled integer); same semantics as orders APIs.
+  int64 qty_scaled = 2;
+}
+
+// GetOrderBookResponse is a depth snapshot for the binary (protobuf) API (scaled integers).
+// Any REST surface should expose decimal strings via DTO conversion.
+message GetOrderBookResponse {
+  // Numeric symbol identifier (client resolves to symbol string).
+  uint32 symbol_id = 1;
+  // Monotonic book sequence for this symbol.
+  uint64 book_seq = 2;
+  // Best bid first; descending price.
+  repeated PriceLevel bids = 3;
+  // Best ask first; ascending price.
+  repeated PriceLevel asks = 4;
+  // Timestamp associated with this snapshot (best-effort).
+  google.protobuf.Timestamp ts = 5;
+}
+
+// OrderBookDelta is an incremental update to the orderbook state.
+// Uses scaled integers (binary protobuf) for realtime streaming performance.
+//
+// Semantics:
+// - For each side, each [price_ticks] entry is a SET at that price:
+//   - qty_scaled > 0 => set/replace that level quantity
+//   - qty_scaled == 0 => delete that level
+// - reset=true indicates the book should be cleared before applying any levels.
+//
+// Clients are expected to initialize from GetOrderBook (snapshot) and then
+// apply deltas in order. If a gap is detected, clients should refetch a
+// snapshot.
+message OrderBookDelta {
+  // Numeric symbol identifier.
+  uint32 symbol_id = 1;
+
+  // Monotonic book sequence range covered by this update.
+  // When reset=true, book_seq_start may be 0.
+  uint64 book_seq_start = 2;
+  uint64 book_seq_end = 3;
+
+  // Bid-side updates (SET semantics at price_ticks).
+  repeated PriceLevel bids = 4;
+  // Ask-side updates (SET semantics at price_ticks).
+  repeated PriceLevel asks = 5;
+
+  // If true, consumers should clear their local book state before applying
+  // updates.
+  bool reset = 6;
+
+  // Timestamp associated with this update (best-effort).
+  google.protobuf.Timestamp ts = 7;
+}
+
+service OrderbookService {
+  // Retrieve a spot order book depth snapshot for a symbol.
+  // Supports selectable depth per side and returns best bid/ask levels.
+  rpc GetOrderBook(GetOrderBookRequest) returns (GetOrderBookResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/orderbook/{symbol}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Order Book"
+      description:
+        "Retrieve a spot order book depth snapshot for a symbol. "
+        "Supports selectable depth per side and returns best bid/ask levels."
+      tags: "Orderbook Service"
+    };
+  }
+}

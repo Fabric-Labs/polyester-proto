@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package marketoverview.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/marketoverview/v1;marketoverviewv1";
+// Document-level OpenAPI metadata for Market Overview API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Market Overview Service"
+      description:
+        "Public read surface for per-market overview (ticker-like) "
+        "stats and optional sparklines."
+    }
+  ]
+};
+
+enum SparklineInterval {
+  // Unspecified interval. When requested, server may default to 24H.
+  SPARKLINE_INTERVAL_UNSPECIFIED = 0;
+  // 1 hour sparkline. Typically returns up to 60 points (1-minute buckets).
+  SPARKLINE_1H = 1;
+  // 24 hour sparkline. Typically returns up to 1440 points (1-minute buckets).
+  SPARKLINE_24H = 2;
+  // 1 week sparkline. Typically returns up to 168 points (1-hour buckets).
+  SPARKLINE_1W = 3;
+  // 1 month sparkline. Typically returns up to 30 points (1-day buckets).
+  SPARKLINE_1M = 4;
+}
+
+enum MarketOrderBy {
+  MARKET_ORDER_BY_UNSPECIFIED = 0;
+  // Sort by absolute 24h change (basis points).
+  ORDER_BY_CHANGE_24H_BP = 1;
+  // Sort by 24h quote volume (scaled quote units).
+  ORDER_BY_VOLUME_24H_QUOTE = 2;
+  // Sort by last price ticks.
+  ORDER_BY_LAST_PRICE = 3;
+  // Sort by listing time (new listings first).
+  ORDER_BY_DATE_ADDED = 4;
+}
+
+enum SortDirection {
+  SORT_DIRECTION_UNSPECIFIED = 0;
+  // Ascending (oldest/lowest first).
+  SORT_ASC = 1;
+  // Descending (newest/highest first).
+  SORT_DESC = 2;
+}
+
+// ErrorCode is a stable domain error code enum for Market Overview.
+// It is used for consistent error surfaces across ConnectRPC and REST.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_BAD_REQUEST = 1;
+  ERROR_CODE_INVALID_ARGUMENT = 2;
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_UNAVAILABLE = 4;
+  ERROR_CODE_UPSTREAM_ERROR = 5;
+}
+
+// ErrorDetail carries a typed domain error code for machine-readable handling.
+message ErrorDetail {
+  // Stable error code for programmatic matching.
+  ErrorCode code = 1;
+}
+
+message Sparkline {
+  SparklineInterval interval = 1 [(buf.validate.field).enum.defined_only = true];
+  // Newest-first close prices (ticks).
+  repeated int64 close_ticks = 2;
+}
+
+message MarketOverview {
+  // Engine symbol id.
+  uint32 symbol_id = 1;
+  // Canonical pair symbol, e.g. "BTC-USDT".
+  string symbol = 2;
+
+  // Last traded price (ticks) and timestamp.
+  int64 last_price_ticks = 3;
+  // Last trade timestamp in nanoseconds since epoch.
+  uint64 last_trade_ts_ns = 4;
+
+  // Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%.
+  int32 change_24h_bp = 5;
+
+  // Rolling 24h stats.
+  int64 high_24h_ticks = 6;
+  int64 low_24h_ticks = 7;
+  // Rolling 24h base volume, in scaled base units.
+  int64 volume_24h_base_scaled = 8;
+  // Rolling 24h quote volume, in scaled quote units.
+  int64 volume_24h_quote_scaled = 14;
+
+  // Listing timestamp in nanoseconds since epoch.
+  uint64 listed_ts_ns = 15;
+
+  // Current top-of-book (ticks).
+  int64 best_bid_ticks = 9;
+  // Best bid quantity, in scaled base units.
+  int64 best_bid_qty_scaled = 10;
+  int64 best_ask_ticks = 11;
+  // Best ask quantity, in scaled base units.
+  int64 best_ask_qty_scaled = 12;
+
+  // Optional sparklines (requested explicitly).
+  repeated Sparkline sparklines = 13;
+}
+
+message ListMarketOverviewRequest {
+  // Filter by specific symbols; when empty, returns all enabled markets.
+  repeated string symbols = 1;
+
+  // Pagination (simple page/limit). Page numbers are 1-based. Server defaults
+  // limit to 50 and clamps to a maximum of 2000.
+  uint32 limit = 2;
+  // Page number (1-based). When unset/0, defaults to 1.
+  uint32 page = 3;
+
+  // Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.
+  MarketOrderBy order_by = 4 [(buf.validate.field).enum.defined_only = true];
+  // Sort direction (DESC=newest/highest first).
+  SortDirection sort = 5 [(buf.validate.field).enum.defined_only = true];
+
+  // When true, include sparklines in each MarketOverview.
+  bool include_sparklines = 6;
+  // Which sparklines to include. If empty and include_sparklines is true,
+  // server defaults to 24h.
+  repeated SparklineInterval sparkline_intervals = 7 [(buf.validate.field).repeated.items.enum.defined_only = true];
+}
+
+message ListMarketOverviewResponse {
+  // Market overview rows for the requested page.
+  repeated MarketOverview markets = 1;
+  // Total count (best-effort). When unset/zero, clients can treat as unknown.
+  uint32 total = 2;
+}
+
+// MarketOverviewBatch is a websocket payload carrying batched market overview
+// updates. It is published to a single all-markets channel at a fixed cadence.
+message MarketOverviewBatch {
+  // Market overviews included in this batch.
+  repeated MarketOverview markets = 1;
+  // Batch publish timestamp in nanoseconds since epoch.
+  uint64 ts_ns = 2;
+}
+
+// List ticker-style market overview rows with optional sparklines.
+// Supports symbol filtering, sorting, and pagination controls.
+service MarketOverviewService {
+  rpc ListMarketOverview(ListMarketOverviewRequest) returns (ListMarketOverviewResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/spot/markets/overview"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Market Overviews"
+      description:
+        "List ticker-style market overview rows with optional sparklines. "
+        "Supports symbol filtering, sorting, and pagination controls."
+      tags: "Market Overview Service"
+    };
+  }
+}

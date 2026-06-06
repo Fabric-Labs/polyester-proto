@@ -1,0 +1,276 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// Status of an API key.
+enum ApiKeyStatus {
+  // No API key status specified.
+  API_KEY_STATUS_UNSPECIFIED = 0;
+  // Key can authenticate requests.
+  ACTIVE = 1;
+  // Key has been permanently revoked and cannot be used again.
+  REVOKED = 2;
+  // Key is temporarily disabled and cannot authenticate requests until re-enabled.
+  DISABLED = 3;
+}
+
+// ApiKey is public API key metadata. It never includes the private key or seed.
+message ApiKey {
+  // Stable opaque identifier used to refer to this key, formatted as "ak_"
+  // followed by 32 lowercase hex characters.
+  string key_id = 2 [(buf.validate.field).string.pattern = "^ak_[a-f0-9]{32}$"];
+  // Human-readable label for the key. Maximum length is 64 characters.
+  string label = 3;
+  // Optional user-chosen icon/emoji for UI display.
+  string icon = 9 [(buf.validate.field).string.max_len = 32];
+  // Optional user-chosen color token for UI display.
+  string color = 10 [(buf.validate.field).string.max_len = 32];
+  // Optional CIDR whitelist. Empty means no IP restriction. Maximum 32 unique
+  // entries.
+  repeated string ip_whitelist = 4 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 32
+    },
+    (buf.validate.field).repeated.items.string.ip_with_prefixlen = true
+  ];
+  // Current key status.
+  ApiKeyStatus status = 6;
+  // Optional sub-account this key is scoped to (opaque ID; empty = root-level).
+  optional fixed64 subaccount_id = 7;
+  // Optional API policy attached to this key (opaque ID).
+  // Empty means "no per-key policy", so only the sub-account policy (and roles) apply.
+  optional fixed64 policy_id = 8;
+  // Time in UTC when this key was created.
+  google.protobuf.Timestamp created_at = 20;
+  // Last time in UTC when this key authenticated a request. Omitted when the
+  // key has not been used.
+  google.protobuf.Timestamp last_used_at = 21;
+  // Ed25519 public key bytes associated with this API key. The private key or
+  // seed is never returned by the API.
+  bytes public_key_ed25519 = 22;
+  // Optional expiry time in UTC. When set, the key cannot authenticate requests
+  // after this time, regardless of status.
+  google.protobuf.Timestamp expires_at = 23;
+  // Read-only actor label describing who created this key, such as a username
+  // or account label.
+  string created_by_actor = 24;
+}
+
+// IpWhitelist replaces or clears an API key IP whitelist during updates.
+message IpWhitelist {
+  // CIDR strings, e.g. "1.2.3.4/32". Maximum 32 unique entries.
+  repeated string cidrs = 1 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 32
+    },
+    (buf.validate.field).repeated.items.string.ip_with_prefixlen = true
+  ];
+}
+
+// CreateApiKeyRequest creates a new API key. Clients generate the Ed25519 key
+// pair locally and submit only the public key.
+message CreateApiKeyRequest {
+  // Human-readable label for the key. Required; 1 to 64 characters.
+  string label = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional sub-account to scope this key to (opaque ID). If unset, the key is
+  // root-level.
+  optional fixed64 subaccount_id = 3;
+  // Optional user-chosen icon/emoji for UI display.
+  string icon = 6 [(buf.validate.field).string.max_len = 32];
+  // Optional user-chosen color token for UI display.
+  string color = 7 [(buf.validate.field).string.max_len = 32];
+  // Optional CIDR whitelist. Empty means no IP restriction. Maximum 32 unique
+  // entries.
+  repeated string ip_whitelist = 4 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 32
+    },
+    (buf.validate.field).repeated.items.string.ip_with_prefixlen = true
+  ];
+  // Ed25519 public key bytes. Must be exactly 32 bytes. The private key or seed
+  // must never be sent to the API.
+  bytes public_key_ed25519 = 5 [
+    (buf.validate.field).bytes.len = 32,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// CreateApiKeyResponse returns the created API key metadata.
+message CreateApiKeyResponse {
+  // Created API key metadata. The private key or seed is never returned.
+  ApiKey api_key = 1;
+}
+
+// ListApiKeysRequest lists non-revoked API keys owned by the caller.
+message ListApiKeysRequest {
+  // Optional filter: only keys scoped to this sub-account (opaque ID). If unset,
+  // all non-revoked keys owned by the caller are returned.
+  optional fixed64 subaccount_id = 1;
+}
+
+// ListApiKeysResponse contains matching API keys, newest first by creation time.
+message ListApiKeysResponse {
+  // Matching API keys, newest first. Revoked keys are excluded.
+  repeated ApiKey api_keys = 1;
+}
+
+// DeleteApiKeyRequest permanently revokes an API key.
+message DeleteApiKeyRequest {
+  // Opaque API key identifier (e.g. "ak_<hex>"). This is the stable public
+  // handle for a key.
+  string key_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.pattern = "^ak_[a-f0-9]{32}$",
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// DeleteApiKeyResponse is empty when revocation succeeds.
+message DeleteApiKeyResponse {}
+
+// GetApiKeyRequest returns a single API key owned by the caller's account.
+message GetApiKeyRequest {
+  // Opaque API key identifier, formatted as "ak_" followed by 32 lowercase hex
+  // characters.
+  string key_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.pattern = "^ak_[a-f0-9]{32}$",
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// GetApiKeyResponse returns one API key owned by the caller.
+message GetApiKeyResponse {
+  // Matching API key metadata.
+  ApiKey api_key = 1;
+}
+
+// UpdateApiKeyRequest updates mutable metadata for an existing API key.
+message UpdateApiKeyRequest {
+  option (buf.validate.message).cel = {
+    id: "expires_at_future_or_zero"
+    message: "expires_at must be in the future or zero"
+    expression: "!has(this.expires_at) ? true : this.expires_at == timestamp('1970-01-01T00:00:00Z') ? true : this.expires_at > now"
+  };
+
+  // Opaque API key identifier to update.
+  string key_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.pattern = "^ak_[a-f0-9]{32}$",
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // New human-friendly label for the key. If empty, label is left unchanged.
+  // Maximum length is 64 characters.
+  string label = 2 [(buf.validate.field).string.max_len = 64];
+
+  // New user-chosen icon/emoji for UI display. If empty, left unchanged.
+  string icon = 6 [(buf.validate.field).string.max_len = 32];
+  // New user-chosen color token for UI display. If empty, left unchanged.
+  string color = 7 [(buf.validate.field).string.max_len = 32];
+
+  // Optional new status. ACTIVE and DISABLED are allowed; REVOKED must be done
+  // via DeleteApiKey and is terminal.
+  ApiKeyStatus status = 3 [
+    // Allow UNSPECIFIED to mean "no change", but reject unknown values and
+    // forbid REVOKED (revocation must go through DeleteApiKey).
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [2]
+    }
+  ];
+
+  // Optional new IP whitelist. If this field is omitted, the whitelist is left
+  // unchanged. If it is present:
+  // - cidrs non-empty replaces the existing whitelist.
+  // - cidrs empty clears the whitelist (no IP restriction).
+  IpWhitelist ip_whitelist = 4;
+
+  // Optional new expiry time in UTC. If this field is present:
+  // - Non-zero timestamp sets/updates the expiry.
+  // - Zero/epoch timestamp clears the expiry (no automatic expiry).
+  // If this field is omitted, the expiry is left unchanged.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// UpdateApiKeyResponse returns the API key after applying the update.
+message UpdateApiKeyResponse {
+  // Updated API key metadata.
+  ApiKey api_key = 1;
+}
+
+// ApiKeyService manages API keys for authenticated callers.
+service ApiKeyService {
+  // Create a new API key for the caller. Account security settings may require
+  // MFA enrollment or a fresh step-up proof.
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/api-keys"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create API Key"
+      description: "Create a new API key for the caller account, including public key material and metadata."
+      tags: "Auth Service"
+    };
+  }
+
+  // List non-revoked API keys owned by the caller, newest first.
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse) {
+    option (google.api.http) = {get: "/v1/auth/api-keys"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List API Keys"
+      description: "List non-revoked API keys for the caller account, newest first, optionally filtered by sub-account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Get a single API key owned by the caller.
+  rpc GetApiKey(GetApiKeyRequest) returns (GetApiKeyResponse) {
+    option (google.api.http) = {get: "/v1/auth/api-keys/{key_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get API Key"
+      description: "Retrieve a single API key owned by the caller account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Revoke an API key permanently.
+  rpc DeleteApiKey(DeleteApiKeyRequest) returns (DeleteApiKeyResponse) {
+    option (google.api.http) = {delete: "/v1/auth/api-keys/{key_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete API Key"
+      description: "Revoke an API key owned by the caller account. Revocation is permanent."
+      tags: "Auth Service"
+    };
+  }
+
+  // Update API key metadata and allowed status transitions. Revocation must use
+  // DeleteApiKey.
+  rpc UpdateApiKey(UpdateApiKeyRequest) returns (UpdateApiKeyResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/api-keys/{key_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update API Key"
+      description: "Update mutable API key fields, including label, status, whitelist, and expiry."
+      tags: "Auth Service"
+    };
+  }
+}

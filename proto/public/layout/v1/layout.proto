@@ -1,0 +1,573 @@
+syntax = "proto3";
+
+package layout.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polychart/v1/polychart.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/layout/v1;layoutv1";
+// Document-level OpenAPI metadata for Layout persistence + sharing.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Layouts Service"
+      description: "Persistence and sharing for layout editor workspaces and widget configurations."
+    }
+  ]
+};
+
+// WidgetType identifies the kind of editor widget stored in a layout.
+enum WidgetType {
+  // Widget type is not specified.
+  WIDGET_TYPE_UNSPECIFIED = 0;
+  // Price chart widget.
+  CHART = 1;
+  // Order book widget.
+  ORDERBOOK = 2;
+  // Recent trades widget.
+  TRADES = 3;
+  // Positions widget.
+  POSITIONS = 4;
+  // Orders widget.
+  ORDERS = 5;
+}
+
+// LayoutWidget stores one widget instance and its widget-specific configuration.
+message LayoutWidget {
+  // Stable widget identifier within the layout, such as "chart-1".
+  string widget_id = 1 [(buf.validate.field).string.min_len = 1];
+  // Widget kind that determines how widget_config is decoded.
+  WidgetType widget_type = 2 [(buf.validate.field).enum.defined_only = true];
+  // Serialized widget configuration bytes for the selected widget_type.
+  bytes widget_config = 3;
+}
+
+// Layout is a saved editor workspace owned by one viewer.
+message Layout {
+  // Viewer that owns the saved layout.
+  fixed64 viewer_id = 1;
+  // Layout identifier unique within the viewer's saved layouts.
+  fixed64 layout_id = 2;
+
+  // Human-readable layout name.
+  string name = 3;
+  // True when this is the viewer's default layout.
+  bool is_default = 4;
+
+  // Serialized editor panel arrangement snapshot.
+  bytes dockview_state = 5;
+  // Widgets contained in the layout.
+  repeated LayoutWidget widgets = 6;
+
+  // Last update time in milliseconds since epoch (UTC).
+  fixed64 updated_at_ms = 7;
+}
+
+// -----------------------------------------------------------------------------
+// Widget configs
+// -----------------------------------------------------------------------------
+
+// Chart widget config (stored in LayoutWidget.widget_config when widget_type == CHART).
+message ChartWidgetConfig {
+  // Engine symbol identifier for the chart market.
+  uint32 engine_symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Candle timeframe, such as "1m", "5m", "1h", or "1d".
+  string timeframe = 2 [(buf.validate.field).string.min_len = 1];
+  // Indicators configured for this chart.
+  repeated ChartIndicator indicators = 3;
+  // Visual style options for this chart.
+  ChartStyle style = 4;
+
+  // Optional: per-widget layer visibility overrides.
+  // If empty, use layer subscriptions defaults for this market.
+  repeated LayerVisibilityOverride layer_overrides = 5;
+
+  // When true, chart follows the latest candle/price (UI behavior).
+  bool follow_latest = 6;
+}
+
+// ChartIndicator stores one configured technical indicator.
+message ChartIndicator {
+  // Indicator type, such as "RSI", "MACD", or "BB".
+  string indicator_type = 1 [(buf.validate.field).string.min_len = 1];
+  // Serialized indicator parameters understood by the chart client.
+  bytes params = 2;
+}
+
+// ChartStyle stores visual chart style settings.
+message ChartStyle {
+  // Serialized style settings understood by the chart client.
+  bytes style_bytes = 1;
+}
+
+// LayerVisibilityOverride sets per-chart visibility for one chart layer.
+message LayerVisibilityOverride {
+  // Chart layer whose visibility is overridden.
+  polychart.v1.LayerRef layer = 1;
+  // True when the layer should be visible in this chart.
+  bool visible = 2;
+}
+
+// =============================================================================
+// Snapshots
+// =============================================================================
+
+// GetLayoutsRequest lists saved layouts for the authenticated caller.
+message GetLayoutsRequest {}
+
+// GetLayoutsResponse contains the caller's saved layouts.
+message GetLayoutsResponse {
+  // Saved layouts for the caller, returned newest-updated first.
+  repeated Layout layouts = 1;
+}
+
+// GetLayoutRequest fetches one saved layout by ID.
+message GetLayoutRequest {
+  // Layout identifier to fetch.
+  fixed64 layout_id = 1;
+}
+
+// GetLayoutResponse contains one saved layout.
+message GetLayoutResponse {
+  // Saved layout matching the requested id.
+  Layout layout = 1;
+}
+
+// =============================================================================
+// Share links (create/revoke) and share token resolution (no auth)
+// =============================================================================
+
+// Resolve a share token to a layout snapshot (template). No auth required.
+message ResolveLayoutShareTokenRequest {
+  // Opaque share token from a layout share link.
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// ResolveLayoutShareTokenResponse returns the immutable layout snapshot for a share token.
+message ResolveLayoutShareTokenResponse {
+  // Shared layout snapshot.
+  Layout layout = 1;
+  // Viewer that owns the shared template.
+  fixed64 owner_id = 2;
+  // Template identifier referenced by the share token.
+  fixed64 template_id = 3;
+  // Immutable template version referenced by the share token.
+  uint32 version = 4;
+}
+
+// CreateLayoutShareLinkRequest creates a share token for one saved layout.
+message CreateLayoutShareLinkRequest {
+  // Saved layout identifier to share.
+  fixed64 layout_id = 1;
+  // Expiration time in milliseconds since epoch (UTC); 0 means the link does not expire.
+  fixed64 expires_at_ms = 2;
+}
+
+// CreateLayoutShareLinkResponse returns the minted share token and target snapshot.
+message CreateLayoutShareLinkResponse {
+  // Opaque share token that can resolve the layout snapshot.
+  string token = 1;
+  // Viewer that owns the shared template.
+  fixed64 owner_id = 2;
+  // Template identifier created or reused for this layout.
+  fixed64 template_id = 3;
+  // Immutable template version captured by this share link.
+  uint32 version = 4;
+}
+
+// RevokeLayoutShareLinkRequest revokes one previously minted share token.
+message RevokeLayoutShareLinkRequest {
+  // Opaque share token to revoke.
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// RevokeLayoutShareLinkResponse is empty when the token was revoked.
+message RevokeLayoutShareLinkResponse {}
+
+// =============================================================================
+// Templates (versioned community layouts)
+// =============================================================================
+
+// LayoutTemplateRef identifies a published layout template.
+message LayoutTemplateRef {
+  // Viewer that owns the template.
+  fixed64 owner_id = 1;
+  // Template identifier unique within the owner.
+  fixed64 template_id = 2;
+}
+
+// LayoutTemplate contains discovery metadata for a versioned layout template.
+message LayoutTemplate {
+  // Template identifier.
+  LayoutTemplateRef template = 1;
+  // Public display title.
+  string title = 2;
+  // Public description shown with the template.
+  string description = 3;
+  // Public tags used for grouping or filtering.
+  repeated string tags = 4;
+  // True when the template appears in discovery listings.
+  bool is_listed = 5;
+  // Latest immutable version number for this template.
+  uint32 latest_version = 6;
+  // Initial publication time in milliseconds since epoch (UTC).
+  fixed64 published_at_ms = 7;
+  // Last metadata update time in milliseconds since epoch (UTC).
+  fixed64 updated_at_ms = 8;
+}
+
+// LayoutTemplateVersionInfo contains metadata for one immutable template version.
+message LayoutTemplateVersionInfo {
+  // Immutable template version number.
+  uint32 version = 1;
+  // Optional release notes for this version.
+  string changelog = 2;
+  // Version creation time in milliseconds since epoch (UTC).
+  fixed64 created_at_ms = 3;
+}
+
+// ListOwnerPublishedLayoutsRequest lists published templates owned by one viewer.
+message ListOwnerPublishedLayoutsRequest {
+  // Owner whose published layouts should be listed.
+  fixed64 owner_id = 1;
+  // Maximum number of templates to return; the service may apply a smaller default or maximum.
+  uint32 limit = 2;
+  // Opaque keyset cursor component from the previous response; 0 starts from the first page.
+  fixed64 after_published_at_ms = 3;
+  // Opaque keyset cursor component from the previous response; 0 starts from the first page.
+  fixed64 after_layout_id = 4;
+}
+
+// ListOwnerPublishedLayoutsResponse contains one page of published templates.
+message ListOwnerPublishedLayoutsResponse {
+  // Published templates for the owner, returned newest-published first.
+  repeated LayoutTemplate templates = 1;
+  // Cursor timestamp for the next page; 0 means there are no more pages.
+  fixed64 next_after_published_at_ms = 2;
+  // Cursor layout ID for the next page; 0 means there are no more pages.
+  fixed64 next_after_layout_id = 3;
+}
+
+// ListLayoutTemplateVersionsRequest lists immutable versions for one template.
+message ListLayoutTemplateVersionsRequest {
+  // Viewer that owns the template.
+  fixed64 owner_id = 1;
+  // Template identifier.
+  fixed64 template_id = 2;
+  // Maximum number of versions to return; the service may apply a smaller default or maximum.
+  uint32 limit = 3;
+  // Exclusive version cursor; 0 starts from the latest version.
+  uint32 after_version = 4;
+}
+
+// ListLayoutTemplateVersionsResponse contains version metadata for a template.
+message ListLayoutTemplateVersionsResponse {
+  // Template versions, returned newest version first.
+  repeated LayoutTemplateVersionInfo versions = 1;
+}
+
+// GetLayoutTemplateVersionRequest fetches one immutable template version.
+message GetLayoutTemplateVersionRequest {
+  // Viewer that owns the template.
+  fixed64 owner_id = 1;
+  // Template identifier.
+  fixed64 template_id = 2;
+  // Immutable version number to fetch.
+  uint32 version = 3;
+}
+
+// GetLayoutTemplateVersionResponse returns one immutable template snapshot.
+message GetLayoutTemplateVersionResponse {
+  // Layout snapshot captured for the requested version.
+  Layout layout = 1;
+  // Viewer that owns the template.
+  fixed64 owner_id = 2;
+  // Template identifier.
+  fixed64 template_id = 3;
+  // Immutable version number returned.
+  uint32 version = 4;
+}
+
+// PublishLayoutRequest creates a new immutable template version from a saved layout.
+message PublishLayoutRequest {
+  // Saved layout identifier to publish.
+  fixed64 layout_id = 1;
+  // Public display title.
+  string title = 2 [(buf.validate.field).string.min_len = 1];
+  // Public description shown with the template.
+  string description = 3;
+  // Public tags used for grouping or filtering.
+  repeated string tags = 4;
+  // True when the template should appear in discovery listings.
+  bool is_listed = 5;
+  // Optional release notes for the new immutable version.
+  string changelog = 6;
+}
+
+// PublishLayoutResponse returns the published template and version number.
+message PublishLayoutResponse {
+  // Published template metadata after the update.
+  LayoutTemplate template = 1;
+  // Immutable version number created by this publish operation.
+  uint32 version = 2;
+}
+
+// UnpublishLayoutRequest removes a template from discovery listings.
+message UnpublishLayoutRequest {
+  // Removes the template from discovery (unlisted). Versions and share links remain.
+  fixed64 template_id = 1;
+}
+
+// UnpublishLayoutResponse is empty when the template was removed from discovery.
+message UnpublishLayoutResponse {}
+
+// SetLayoutTemplateSubscriptionRequest follows a template by tracking latest or pinning a version.
+message SetLayoutTemplateSubscriptionRequest {
+  // Viewer that owns the template.
+  fixed64 owner_id = 1;
+  // Template identifier to follow.
+  fixed64 template_id = 2;
+  // True to follow the latest version automatically.
+  bool track_latest = 3;
+  // Version to follow when track_latest is false.
+  optional uint32 pinned_version = 4;
+}
+
+// SetLayoutTemplateSubscriptionResponse is empty when the subscription was saved.
+message SetLayoutTemplateSubscriptionResponse {}
+
+// DeleteLayoutTemplateSubscriptionRequest deletes one followed template.
+message DeleteLayoutTemplateSubscriptionRequest {
+  // Viewer that owns the template.
+  fixed64 owner_id = 1;
+  // Template identifier to unfollow.
+  fixed64 template_id = 2;
+}
+
+// DeleteLayoutTemplateSubscriptionResponse is empty when the subscription was deleted.
+message DeleteLayoutTemplateSubscriptionResponse {}
+
+// LayoutTemplateSubscription describes one template followed by a viewer.
+message LayoutTemplateSubscription {
+  // Viewer that follows the template.
+  fixed64 viewer_id = 1;
+  // Viewer that owns the template.
+  fixed64 owner_id = 2;
+  // Followed template identifier.
+  fixed64 template_id = 3;
+  // True when the subscription follows the latest version automatically.
+  bool track_latest = 4;
+  // Version followed when track_latest is false.
+  optional uint32 pinned_version = 5;
+  // Subscription update time in milliseconds since epoch (UTC).
+  fixed64 updated_at_ms = 6;
+}
+
+// ListMyLayoutTemplateSubscriptionsRequest lists templates followed by the authenticated caller.
+message ListMyLayoutTemplateSubscriptionsRequest {}
+
+// ListMyLayoutTemplateSubscriptionsResponse contains the caller's followed templates.
+message ListMyLayoutTemplateSubscriptionsResponse {
+  // Followed templates for the caller, returned newest-updated first.
+  repeated LayoutTemplateSubscription subscriptions = 1;
+}
+
+// =============================================================================
+// Mutations
+// =============================================================================
+
+// UpsertLayoutRequest creates or updates a saved layout for the authenticated caller.
+message UpsertLayoutRequest {
+  // Layout payload to save.
+  Layout layout = 1;
+}
+
+// UpsertLayoutResponse returns the saved layout.
+message UpsertLayoutResponse {
+  // Saved layout after server-side ownership and timestamp handling.
+  Layout layout = 1;
+}
+
+// DeleteLayoutRequest deletes one saved layout owned by the authenticated caller.
+message DeleteLayoutRequest {
+  // Layout identifier to delete.
+  fixed64 layout_id = 1;
+}
+
+// DeleteLayoutResponse is empty when the layout was deleted.
+message DeleteLayoutResponse {}
+
+// LayoutService persists saved layouts and manages public layout sharing.
+service LayoutService {
+  // GetLayouts returns the caller's saved layouts.
+  rpc GetLayouts(GetLayoutsRequest) returns (GetLayoutsResponse) {
+    option (google.api.http) = {get: "/v1/layouts"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Layouts"
+      description: "List saved layouts for the caller."
+      tags: "Layouts Service"
+    };
+  }
+
+  // GetLayout returns a single layout by id.
+  rpc GetLayout(GetLayoutRequest) returns (GetLayoutResponse) {
+    option (google.api.http) = {get: "/v1/layouts/{layout_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Layout"
+      description: "Retrieve a single layout by layout ID."
+      tags: "Layouts Service"
+    };
+  }
+
+  // UpsertLayout creates or updates a layout (owner-only).
+  rpc UpsertLayout(UpsertLayoutRequest) returns (UpsertLayoutResponse) {
+    option (google.api.http) = {
+      post: "/v1/layouts"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Upsert Layout"
+      description: "Create or update a layout, including layout editor state and widget configuration."
+      tags: "Layouts Service"
+    };
+  }
+
+  // DeleteLayout deletes a layout by id (owner-only).
+  rpc DeleteLayout(DeleteLayoutRequest) returns (DeleteLayoutResponse) {
+    option (google.api.http) = {delete: "/v1/layouts/{layout_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Layout"
+      description: "Delete a layout by layout ID."
+      tags: "Layouts Service"
+    };
+  }
+
+  // ResolveLayoutShareToken resolves an unauthenticated share token to a layout snapshot (template).
+  rpc ResolveLayoutShareToken(ResolveLayoutShareTokenRequest) returns (ResolveLayoutShareTokenResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/share/layout/{token}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Resolve Layout Share Token"
+      description: "Resolve a share token to a view-only layout template snapshot."
+      tags: "Layouts Service"
+    };
+  }
+
+  // CreateLayoutShareLink mints a share token for a layout (owner-only).
+  rpc CreateLayoutShareLink(CreateLayoutShareLinkRequest) returns (CreateLayoutShareLinkResponse) {
+    option (google.api.http) = {
+      post: "/v1/layouts/share-links"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Layout Share Link"
+      description: "Create a share token for a layout template."
+      tags: "Layouts Service"
+    };
+  }
+
+  // RevokeLayoutShareLink revokes a previously minted share token (owner-only).
+  rpc RevokeLayoutShareLink(RevokeLayoutShareLinkRequest) returns (RevokeLayoutShareLinkResponse) {
+    option (google.api.http) = {delete: "/v1/layouts/share-links/{token}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Revoke Layout Share Link"
+      description: "Revoke a share token for a layout template."
+      tags: "Layouts Service"
+    };
+  }
+
+  // ListOwnerPublishedLayouts lists listed/published layouts for an owner (profile/gallery surfaces).
+  rpc ListOwnerPublishedLayouts(ListOwnerPublishedLayoutsRequest) returns (ListOwnerPublishedLayoutsResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/layouts/owners/{owner_id}/published"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Owner Published Layouts"
+      description: "List layouts the owner has published for discovery."
+      tags: "Layouts Service"
+    };
+  }
+
+  // PublishLayout publishes a layout for discovery (owner-only).
+  rpc PublishLayout(PublishLayoutRequest) returns (PublishLayoutResponse) {
+    option (google.api.http) = {
+      post: "/v1/layouts/published"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Publish Layout"
+      description: "Publish a layout for discovery."
+      tags: "Layouts Service"
+    };
+  }
+
+  // UnpublishLayout removes a layout from discovery (owner-only).
+  rpc UnpublishLayout(UnpublishLayoutRequest) returns (UnpublishLayoutResponse) {
+    option (google.api.http) = {
+      post: "/v1/layouts/published/unpublish"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Unpublish Layout"
+      description: "Remove a layout from discovery listings."
+      tags: "Layouts Service"
+    };
+  }
+
+  // List available versions for a template (metadata only).
+  rpc ListLayoutTemplateVersions(ListLayoutTemplateVersionsRequest) returns (ListLayoutTemplateVersionsResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/layouts/templates/{owner_id}/{template_id}/versions"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Layout Template Versions"
+      description: "List immutable versions for a layout template."
+      tags: "Layouts Service"
+    };
+  }
+
+  // Get a specific version snapshot for a template.
+  rpc GetLayoutTemplateVersion(GetLayoutTemplateVersionRequest) returns (GetLayoutTemplateVersionResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/layouts/templates/{owner_id}/{template_id}/versions/{version}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Layout Template Version"
+      description: "Retrieve a specific layout template version snapshot."
+      tags: "Layouts Service"
+    };
+  }
+
+  // Subscribe (follow) a template (pin version or track latest).
+  rpc SetLayoutTemplateSubscription(SetLayoutTemplateSubscriptionRequest) returns (SetLayoutTemplateSubscriptionResponse) {
+    option (google.api.http) = {
+      put: "/v1/layouts/templates/{owner_id}/{template_id}/subscription"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set Layout Template Subscription"
+      description: "Set a layout template subscription to a pinned version or latest."
+      tags: "Layouts Service"
+    };
+  }
+
+  // DeleteLayoutTemplateSubscription unfollows a layout template for the caller.
+  rpc DeleteLayoutTemplateSubscription(DeleteLayoutTemplateSubscriptionRequest) returns (DeleteLayoutTemplateSubscriptionResponse) {
+    option (google.api.http) = {delete: "/v1/layouts/templates/{owner_id}/{template_id}/subscription"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Layout Template Subscription"
+      description: "Delete a layout template subscription."
+      tags: "Layouts Service"
+    };
+  }
+
+  // ListMyLayoutTemplateSubscriptions lists layout templates followed by the caller.
+  rpc ListMyLayoutTemplateSubscriptions(ListMyLayoutTemplateSubscriptionsRequest) returns (ListMyLayoutTemplateSubscriptionsResponse) {
+    option (google.api.http) = {get: "/v1/layouts/templates/subscriptions"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List My Layout Template Subscriptions"
+      description: "List layout templates followed by the caller."
+      tags: "Layouts Service"
+    };
+  }
+}

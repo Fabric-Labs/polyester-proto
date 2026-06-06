@@ -1,0 +1,619 @@
+syntax = "proto3";
+
+package chain.lifecycle.v1;
+
+import "buf/validate/validate.proto";
+import "chain/lifecycle/v1/types.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "polyester/api/options.proto";
+import "polyester/type/v1/u128.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/chain/lifecycle/v1;chainlifecyclev1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Lifecycle"
+      description: "Read lifecycle flow state, history, and progress."
+    }
+  ]
+};
+
+// GetFlowResponse returns one lifecycle flow with summary, factual steps, and
+// estimated timeline data when available.
+message GetFlowResponse {
+  // Lifecycle flow detail for the requested intent id.
+  FlowDetailView flow = 1;
+}
+
+// GetFlowByIdRequest selects one lifecycle flow by its public flow id.
+message GetFlowByIdRequest {
+  // Public, URL-safe lifecycle identifier returned by list/search responses.
+  string flow_id = 1 [(buf.validate.field).string = {
+    min_len: 6
+    max_len: 64
+    pattern: "^flow_[1-9A-HJ-NP-Za-km-z]+$"
+  }];
+}
+
+// TxLookupKind controls which transaction reference fields are searched.
+enum TxLookupKind {
+  // Lookup mode was not specified.
+  TX_UNSPECIFIED = 0;
+
+  // Match only the original source transaction hash for a flow.
+  TX_SOURCE = 1;
+
+  // Match either the source transaction hash or the latest known activity
+  // transaction reference.
+  TX_ANY = 2;
+}
+
+// ListFlowsByTxRequest searches lifecycle flows by transaction hash. A single
+// transaction can map to zero, one, or many lifecycle flows.
+message ListFlowsByTxRequest {
+  // Hex transaction hash to search for. Must be 0x-prefixed and 32 bytes.
+  string tx_hash = 1 [(buf.validate.field).string = {
+    len: 66
+    pattern: "^0x[0-9a-fA-F]{64}$"
+  }];
+
+  // Lookup mode that determines which transaction references are searched.
+  TxLookupKind lookup_kind = 2 [(buf.validate.field).enum.defined_only = true];
+
+  // Maximum number of matches to return. Defaults to 100 when omitted; maximum
+  // is 500.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 500];
+
+  // Opaque keyset pagination cursor returned by a previous response.
+  string page_token = 4 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListScope selects which lifecycle state bucket should be returned.
+enum ListScope {
+  // No explicit scope; server defaults decide which buckets are included.
+  LIST_UNSPECIFIED = 0;
+
+  // Include both open and terminal flows.
+  LIST_ALL = 1;
+
+  // Include only flows that are still progressing.
+  LIST_OPEN_ONLY = 2;
+
+  // Include only flows that reached a terminal state.
+  LIST_TERMINAL_ONLY = 3;
+}
+
+// ListFlowsRequest filters and paginates lifecycle flow summaries.
+message ListFlowsRequest {
+  // Maximum number of flows to return. Defaults to 100 when omitted; maximum is
+  // 500.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 500];
+
+  // Sort newest first when true; oldest first when false.
+  bool reversed = 2;
+
+  // Optional product flow kind filter. Unspecified includes all kinds.
+  FlowKind flow_kind = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional lifecycle state filter. Unspecified includes all states permitted
+  // by the selected scope.
+  FlowState flow_state = 4 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional transaction reference filter. Matches source or latest activity
+  // transaction hashes. Must be 0x-prefixed and 32 bytes when provided.
+  string tx_ref = 5 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {
+      len: 66
+      pattern: "^0x[0-9a-fA-F]{64}$"
+    }
+  ];
+
+  // Selects open, terminal, or all lifecycle flows.
+  ListScope scope = 6 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional account selector. Omit to list across accounts the caller is
+  // allowed to inspect.
+  oneof account_selector {
+    // Public account identifier for a main account or subaccount.
+    fixed64 owner_account_id = 7 [(buf.validate.field).fixed64.gt = 0];
+
+    // Smart account address on Polyester Chain.
+    string smart_account_address = 8 [(buf.validate.field).string = {
+      len: 42
+      pattern: "^0x[0-9a-fA-F]{40}$"
+    }];
+  }
+
+  // Optional Polyester Chain ids to include. Maximum 100 unique ids.
+  repeated uint32 polyester_chain_ids = 9 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Optional chain asset mapping ids to include. Maximum 100 unique ids.
+  repeated uint32 zipped_asset_ids = 10 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Optional unified asset ids to include. Maximum 100 unique ids.
+  repeated uint32 unified_asset_ids = 11 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Opaque keyset pagination cursor returned by a previous response. It must be
+  // reused with the same sort direction.
+  string page_token = 12 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListFlowsResponse returns one page of flow summaries.
+message ListFlowsResponse {
+  // Flow summaries ordered by last activity time, then public flow id. Sort order is
+  // controlled by the request `reversed` flag.
+  repeated FlowSummaryView flows = 1;
+
+  // Opaque cursor for the next page; empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// FlowTxMatchView is one lifecycle flow matched by a transaction-hash search.
+message FlowTxMatchView {
+  // Public, URL-safe lifecycle identifier for display, URLs, and user search.
+  string flow_id = 1;
+
+  // Product flow family.
+  FlowKind flow_kind = 3;
+
+  // First observed source transaction hash for the flow when known.
+  string source_tx_hash = 4;
+
+  // Latest transaction reference associated with the current visible state.
+  string latest_tx_ref = 5;
+
+  // Stable occurrence discriminator within a transaction. For source-chain
+  // deposits this is the batched leg index; for on-chain facts it is the log or
+  // equivalent per-tx occurrence index when available.
+  uint64 tx_occurrence_index = 6;
+
+  // Product domain where the overall flow starts.
+  FlowDomain source_domain = 7;
+
+  // Product domain where the overall flow ends or currently settles.
+  FlowDomain destination_domain = 8;
+
+  // Latest business-facing visible step for this flow.
+  FlowStep latest_step = 9;
+
+  // True when this flow is still progressing.
+  bool is_open = 10;
+
+  // True when this flow reached a final state.
+  bool is_terminal = 11;
+
+  // Asset identifiers involved in this flow.
+  AssetIds asset_ids = 12;
+
+  // Polyester Chain id associated with this flow.
+  uint32 polyester_chain_id = 13;
+
+  // Principal or visible amount for this flow in 18-decimal asset units.
+  polyester.type.v1.U128 amount_e18 = 14;
+
+  // Source address to show for this flow.
+  string source_address = 15;
+
+  // Destination address to show for this flow.
+  string destination_address = 16;
+
+  // Product-facing reason code for failed, dropped, or otherwise notable flows;
+  // zero means no reason code is present.
+  uint32 reason_code = 17;
+
+  // Timestamp used for list ordering in milliseconds since epoch (UTC).
+  uint64 last_activity_at_unix_ms = 18;
+}
+
+// ListFlowsByTxResponse returns a page of lifecycle flows that reference one
+// transaction hash.
+message ListFlowsByTxResponse {
+  // Transaction hash searched by the request.
+  string tx_hash = 1;
+
+  // Matching flows ordered by tx occurrence, flow kind, domains, activity time,
+  // and stable identifiers.
+  repeated FlowTxMatchView matches = 2;
+
+  // Opaque cursor for the next page; empty when no more results exist.
+  string next_page_token = 3 [(buf.validate.field).string.max_len = 512];
+}
+
+// FlowStep is the public lifecycle step shown in API and realtime read
+// models. It is business-facing and intentionally hides the lower-level
+// technical milestone taxonomy.
+enum FlowStep {
+  // Step is not specified.
+  FLOW_STEP_UNSPECIFIED = 0;
+
+  // External-chain / relayer source tracking before Polyester can continue.
+  FLOW_STEP_SOURCE = 1;
+
+  // Deposit-side mint and downstream crediting / transfer stage.
+  FLOW_STEP_TRANSFER = 2;
+
+  // Polyester request creation stage.
+  FLOW_STEP_REQUEST = 3;
+
+  // Polyester validation / quorum stage.
+  FLOW_STEP_VALIDATION = 4;
+
+  // Polyester execution stage.
+  FLOW_STEP_EXECUTION = 5;
+
+  // Withdraw zAsset burn / on-chain fulfillment before final ledger settlement.
+  FLOW_STEP_ASSET_BURNED = 6;
+
+  // Flow was dropped before success.
+  FLOW_STEP_DROPPED = 7;
+
+  // Flow failed in a user-visible way.
+  FLOW_STEP_FAILED = 8;
+
+  // Flow reached a refund or reversal result.
+  FLOW_STEP_REFUNDED = 9;
+
+  // Withdraw destination tx hash was committed and the flow is waiting for the
+  // final fulfillment confirmation.
+  FLOW_STEP_FULFILLING = 10;
+
+  // Off-chain ledger settlement was durably confirmed.
+  FLOW_STEP_SETTLEMENT = 11;
+}
+
+// FlowSummaryView is the compact lifecycle representation used by lists,
+// realtime updates, and the header of a detail view.
+message FlowSummaryView {
+  // Public account identifier for the account the flow belongs to.
+  fixed64 owner_account_id = 1;
+
+  // Public, URL-safe lifecycle identifier for display, URLs, and user search.
+  string flow_id = 33;
+
+  // Product flow family.
+  FlowKind flow_kind = 4;
+
+  // Latest business-facing visible step for this flow.
+  FlowStep latest_step = 6;
+
+  // Asset identifiers involved in the flow.
+  AssetIds asset_ids = 7;
+
+  // Polyester Chain id associated with this flow when known.
+  uint32 polyester_chain_id = 8;
+
+  // Principal or visible amount for the flow in 18-decimal asset units. For
+  // settled fee-bearing flows this is the visible net amount.
+  polyester.type.v1.U128 amount_e18 = 9;
+
+  // Request-scoped fee details when a fee applies and should be visible for the
+  // current step.
+  RequestFee request_fee = 28;
+
+  // First observed source transaction hash for the flow when known.
+  string source_tx_hash = 11;
+
+  // Stable occurrence discriminator within a transaction. For source-chain
+  // deposits this is the batched leg index; for on-chain facts it is the log or
+  // equivalent per-tx occurrence index when available.
+  uint64 tx_occurrence_index = 32;
+
+  // Source address to show for the overall flow. For internal transfers this is
+  // the source smart account address.
+  string source_address = 13;
+
+  // Destination address to show for the overall flow. For internal transfers
+  // this is the destination smart account address.
+  string destination_address = 14;
+
+  // Latest transaction reference associated with the current visible state.
+  string latest_tx_ref = 15;
+
+  // Product domain where the overall flow starts. Use with
+  // `destination_domain` for route labels such as Funding to Trading.
+  FlowDomain source_domain = 29;
+
+  // Product domain where the overall flow ends or currently settles. Do not
+  // derive route labels from per-step settlement activity.
+  FlowDomain destination_domain = 30;
+
+  // Provenance of the latest meaningful lifecycle activity reflected in this
+  // summary. This is not necessarily the source of the entire flow.
+  LifecycleSource latest_lifecycle_source = 16;
+
+  // Product-facing reason code for failed, dropped, or otherwise notable flows;
+  // zero means no reason code is present.
+  uint32 reason_code = 17;
+
+  // First observed business timestamp in milliseconds since epoch (UTC).
+  uint64 started_at_unix_ms = 18;
+
+  // Last summary update timestamp in milliseconds since epoch (UTC).
+  uint64 updated_at_unix_ms = 19;
+
+  // Terminal timestamp in milliseconds since epoch (UTC), or zero while open.
+  uint64 terminal_at_unix_ms = 20;
+
+  // Timestamp used for list ordering in milliseconds since epoch (UTC).
+  uint64 last_activity_at_unix_ms = 21;
+
+  // True when the flow is still progressing.
+  bool is_open = 22;
+
+  // True when the flow reached a final state.
+  bool is_terminal = 23;
+
+  // One-based sequence of the latest visible step in the summary timeline.
+  uint32 latest_step_sequence = 24;
+
+  // Progress data for the current visible step when the flow is open.
+  FlowSummaryProgressView current_progress = 25;
+
+  // Estimated and observed top-level timeline for list/header UI.
+  repeated FlowTimelineItemView summary_timeline = 26;
+
+  // Estimated Unix completion timestamp in milliseconds.
+  uint64 estimated_completion_unix_ms = 27;
+}
+
+// FlowSummaryProgressView describes progress within the current visible step.
+message FlowSummaryProgressView {
+  // Timestamp when the current visible step started, in milliseconds since epoch
+  // (UTC).
+  uint64 current_step_started_at_unix_ms = 1;
+
+  // Expected duration for the current visible step in milliseconds.
+  uint64 current_step_expected_duration_ms = 2;
+
+  // Current source confirmation count when confirmations apply.
+  uint32 current_confirmations = 5;
+
+  // Required source confirmation count when confirmations apply.
+  uint32 required_confirmations = 6;
+
+  // Current approval count when validation applies.
+  uint32 approve_count = 7;
+
+  // Current rejection count when validation applies.
+  uint32 reject_count = 8;
+
+  // Validator set size when validation applies.
+  uint32 validator_count = 9;
+
+  // Approval count required for the current validation step.
+  uint32 required_approvals = 10;
+
+  // Rejection count that would fail the current validation step.
+  uint32 required_rejections = 11;
+}
+
+// FlowStepView is one factual visible step in the lifecycle detail view.
+message FlowStepView {
+  // One-based visible step sequence for display.
+  uint32 sequence = 1;
+
+  // Business-facing visible step.
+  FlowStep step = 3;
+
+  // Asset identifiers involved in this step.
+  AssetIds asset_ids = 7;
+
+  // Polyester Chain id associated with this step when known.
+  uint32 polyester_chain_id = 8;
+
+  // Amount represented by this step in 18-decimal asset units.
+  polyester.type.v1.U128 amount_e18 = 9;
+
+  // Request-scoped fee details when a fee applies to this step.
+  RequestFee request_fee = 24;
+
+  // Transaction reference most relevant to this step.
+  string milestone_tx_ref = 11;
+
+  // Source that produced this visible step.
+  LifecycleSource lifecycle_source = 12;
+
+  // Product-facing reason code for failed, dropped, or otherwise notable steps;
+  // zero means no reason code is present.
+  uint32 reason_code = 13;
+
+  // Current source confirmation count when confirmations apply.
+  uint32 current_confirmations = 14;
+
+  // Required source confirmation count when confirmations apply.
+  uint32 required_confirmations = 15;
+
+  // Current approval count when validation applies.
+  uint32 approve_count = 16;
+
+  // Current rejection count when validation applies.
+  uint32 reject_count = 17;
+
+  // Validator set size when validation applies.
+  uint32 validator_count = 18;
+
+  // Approval count required for this validation step.
+  uint32 required_approvals = 22;
+
+  // Rejection count that would fail this validation step.
+  uint32 required_rejections = 23;
+
+  // Step occurrence timestamp in milliseconds since epoch (UTC).
+  uint64 occurred_at_unix_ms = 19;
+
+  // Source-chain block time moving average in milliseconds when known.
+  uint64 block_time_moving_average_ms = 20;
+
+  // Nested activity rows for expandable UI detail. The top-level step remains
+  // one visible lifecycle stage while activities expose the underlying on-chain
+  // evidence that advanced it.
+  repeated FlowStepActivityView activities = 21;
+}
+
+enum FlowStepActivityKind {
+  // Activity kind is not specified.
+  ACTIVITY_UNSPECIFIED = 0;
+
+  // Mapped asset was minted on Polyester Chain.
+  ACTIVITY_MINTED = 1;
+
+  // Funding account received the credit.
+  ACTIVITY_FUNDING = 2;
+
+  // Trading account received the credit.
+  ACTIVITY_TRADING = 3;
+}
+
+// FlowStepActivityView is an expandable detail row underneath a visible step.
+message FlowStepActivityView {
+  // Sequence of the underlying activity within the flow.
+  uint32 sequence = 1;
+
+  // Transaction reference associated with this activity.
+  string tx_ref = 2;
+
+  // Activity occurrence timestamp in milliseconds since epoch (UTC).
+  uint64 occurred_at_unix_ms = 3;
+
+  // Source that produced this activity.
+  LifecycleSource lifecycle_source = 4;
+
+  // Product-facing reason code for notable activity states; zero means no
+  // reason code is present.
+  uint32 reason_code = 5;
+
+  // Current source confirmation count when confirmations apply.
+  uint32 current_confirmations = 6;
+
+  // Required source confirmation count when confirmations apply.
+  uint32 required_confirmations = 7;
+
+  // Current approval count when validation applies.
+  uint32 approve_count = 8;
+
+  // Current rejection count when validation applies.
+  uint32 reject_count = 9;
+
+  // Validator set size when validation applies.
+  uint32 validator_count = 10;
+
+  // Activity kind for display grouping.
+  FlowStepActivityKind kind = 11;
+
+  // Approval count required for this activity.
+  uint32 required_approvals = 12;
+
+  // Rejection count that would fail this activity.
+  uint32 required_rejections = 13;
+
+  // Amount posted by the underlying movement represented by this activity.
+  polyester.type.v1.U128 amount_e18 = 14;
+
+  // Ledger transfer identifier for ledger-sourced settlement activities.
+  string ledger_transfer_id = 15;
+}
+
+// FlowTimelineStatus describes how a planned timeline item relates to observed
+// lifecycle facts.
+enum FlowTimelineStatus {
+  // Timeline status is not specified.
+  TIMELINE_STATUS_UNSPECIFIED = 0;
+
+  // Step has been observed or is behind the latest observed step.
+  TIMELINE_STATUS_COMPLETED = 1;
+
+  // Step is the current active step.
+  TIMELINE_STATUS_CURRENT = 2;
+
+  // Step is expected but has not been observed yet.
+  TIMELINE_STATUS_PLANNED = 3;
+}
+
+// FlowTimelineItemView is one item in the expected visible lifecycle path.
+message FlowTimelineItemView {
+  // One-based sequence within the expected timeline.
+  uint32 sequence = 1;
+
+  // Visible lifecycle step.
+  FlowStep step = 2;
+
+  // Observed/planned status for this timeline item.
+  FlowTimelineStatus status = 3;
+
+  // Expected duration of this visible step in milliseconds, derived from recent
+  // observed timing data for the same flow type.
+  uint64 expected_duration_ms = 4;
+}
+
+// FlowDetailView is the full lifecycle detail response model.
+message FlowDetailView {
+  // Compact flow summary for headers and list-style display.
+  FlowSummaryView summary = 1;
+
+  // Factual visible steps observed for this flow, ordered by sequence.
+  repeated FlowStepView steps = 2;
+
+  // True when this detail was served from live in-memory state rather than
+  // historical terminal state.
+  bool from_live_state = 3;
+
+  // Expected visible lifecycle path, enriched with observed step status.
+  repeated FlowTimelineItemView timeline = 4;
+}
+
+// LifecycleReadService exposes lifecycle flow lookup and listing APIs.
+service LifecycleReadService {
+  // GetFlowById retrieves one lifecycle flow by public flow id.
+  rpc GetFlowById(GetFlowByIdRequest) returns (GetFlowResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/chain/flows/{flow_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Flow By Id"
+      description: "Retrieve one lifecycle flow by public flow id."
+      tags: "Lifecycle"
+    };
+  }
+
+  // ListFlows lists lifecycle flows with optional filters and keyset
+  // pagination.
+  rpc ListFlows(ListFlowsRequest) returns (ListFlowsResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/chain/flows"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Flows"
+      description: "List lifecycle flows with optional account, chain, asset, and state filters."
+      tags: "Lifecycle"
+    };
+  }
+
+  // ListFlowsByTx lists lifecycle flows that reference a transaction hash.
+  rpc ListFlowsByTx(ListFlowsByTxRequest) returns (ListFlowsByTxResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/chain/flows/by-tx/{tx_hash}/matches"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Flows By Tx"
+      description: "List lifecycle flows that reference a transaction hash."
+      tags: "Lifecycle"
+    };
+  }
+}

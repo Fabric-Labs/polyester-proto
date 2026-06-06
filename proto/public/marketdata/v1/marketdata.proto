@@ -1,0 +1,451 @@
+syntax = "proto3";
+
+package marketdata.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/marketdata/v1;marketdatav1";
+
+// SideFilter controls which aggressor side of trades to return.
+enum SideFilter {
+  // Return trades from both BUY and SELL aggressors.
+  SIDE_UNSPECIFIED = 0;
+
+  // Return trades where the taker/aggressor was buying the base asset.
+  BUY = 1;
+
+  // Return trades where the taker/aggressor was selling the base asset.
+  SELL = 2;
+}
+
+// Timeframe represents an OHLCV candle bucket.
+//
+// Most values are fixed-duration buckets. `MONTH_1` is calendar-based (UTC
+// month boundaries).
+enum Timeframe {
+  TIMEFRAME_UNSPECIFIED = 0;
+  SEC_1 = 1; // 1 second
+  MIN_1 = 2; // 1 minute
+  MIN_5 = 3; // 5 minutes
+  MIN_15 = 4; // 15 minutes
+  MIN_30 = 5; // 30 minutes
+  HOUR_1 = 6; // 1 hour
+  HOUR_4 = 7; // 4 hours
+  DAY_1 = 8; // 1 day
+  HOUR_12 = 9; // 12 hours
+  WEEK_1 = 10; // 1 week
+  MONTH_1 = 11; // 1 month (calendar month, UTC)
+}
+
+// ---------------------------------------------------------------------------
+// GetTrades: Binary (protobuf) request/response with scaled integers.
+// Any REST surface should expose decimal strings via generated DTO conversion.
+// ---------------------------------------------------------------------------
+
+// GetTradesRequest selects recent public trades for one spot market.
+//
+// Results are ordered newest-first by execution timestamp, with match_id as a
+// tie-breaker. When both start_time and end_time are set, both bounds are
+// inclusive.
+message GetTradesRequest {
+  option (buf.validate.message).cel = {
+    id: "get_trades.time_range_valid"
+    message: "end_time must be >= start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time >= this.start_time"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_trades.time_not_future"
+    message: "start_time and end_time must not be more than 5 minutes in the future"
+    expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+
+  // Stable numeric pair id from GetSpotConfig.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+
+  // Maximum number of trades to return. Defaults to 100 when unset; max 1000.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
+
+  // Inclusive lower bound for trade execution time. Must not be more than
+  // 5 minutes in the future.
+  google.protobuf.Timestamp start_time = 3;
+
+  // Inclusive upper bound for trade execution time. Must be greater than or
+  // equal to start_time when both are set, and must not be more than 5 minutes
+  // in the future.
+  google.protobuf.Timestamp end_time = 4;
+
+  // Optional filter by trade aggressor side. Unspecified returns both sides.
+  SideFilter side = 5 [(buf.validate.field).enum.defined_only = true];
+
+  // Exclusive keyset cursor for older trades. Pass next_match_id from the
+  // previous response to continue after that page; only trades with lower
+  // match_id values are returned.
+  uint64 from_match_id = 6;
+}
+
+// MarketTrade is one public trade print represented with scaled integers.
+//
+// REST responses render price and quantity as decimal strings.
+message MarketTrade {
+  // Stable numeric pair id from GetSpotConfig.
+  uint32 symbol_id = 1;
+
+  // Stable trade id within the symbol, suitable for pagination and de-duplication.
+  uint64 match_id = 2;
+
+  // True when the taker/aggressor bought the base asset; false when the
+  // taker/aggressor sold the base asset.
+  bool is_buy = 3;
+
+  // Trade price in quote-asset units scaled by 1e6.
+  int64 price_ticks = 4;
+
+  // Traded base-asset quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig.
+  int64 qty_scaled = 5;
+
+  // Trade execution timestamp, in nanoseconds since the Unix epoch (UTC).
+  uint64 ts_ns = 6;
+}
+
+// GetTradesResponse contains public trades for one spot market.
+message GetTradesResponse {
+  // Trades ordered newest-first by execution timestamp, with match_id as a
+  // tie-breaker.
+  repeated MarketTrade trades = 1;
+
+  // Cursor for the next older page. Pass this as from_match_id on the next
+  // request. This is 0 when fewer than limit trades were returned.
+  uint64 next_match_id = 2;
+}
+
+// ---------------------------------------------------------------------------
+// GetCandles: Binary (protobuf) request/response with scaled integers.
+// Any REST surface should expose decimal string responses via generated DTO conversion.
+// ---------------------------------------------------------------------------
+
+// GetCandlesRequest selects a spot market candle series.
+//
+// The response is ordered newest-first by candle bucket start time. When both
+// start_time and end_time are set, both bounds are inclusive.
+message GetCandlesRequest {
+  option (buf.validate.message).cel = {
+    id: "get_candles.time_range_valid"
+    message: "end_time must be >= start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time >= this.start_time"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_candles.time_not_future"
+    message: "start_time and end_time must not be more than 5 minutes in the future"
+    expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+
+  // Numeric spot market identifier.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Candle bucket size. Required for ConnectRPC clients.
+  Timeframe timeframe = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Maximum number of closed candles to return. Defaults to 500 when unset;
+  // max 10000.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 10000];
+  // Inclusive lower bound for candle bucket start time, as a UTC timestamp.
+  // Must not be more than 5 minutes in the future.
+  google.protobuf.Timestamp start_time = 4;
+  // Inclusive upper bound for candle bucket start time, as a UTC timestamp.
+  // Must be greater than or equal to start_time when both are set, and must not
+  // be more than 5 minutes in the future.
+  google.protobuf.Timestamp end_time = 5;
+  // Include the current open candle when it is available and inside the
+  // requested range.
+  // The open candle is prepended to the newest-first candle list and does not
+  // count toward the closed-candle limit.
+  bool include_incomplete = 6;
+  // Include the composite reference market candle series for the same market,
+  // timeframe, and time range.
+  // The reference series can be empty when no reference series is available for
+  // the requested timeframe.
+  bool include_reference = 7;
+}
+
+// GetCandlesColumnsRequest selects a spot market candle series for columnar output.
+//
+// The response is ordered oldest-first for efficient chart ingestion. When both
+// start_time and end_time are set, both bounds are inclusive.
+message GetCandlesColumnsRequest {
+  option (buf.validate.message).cel = {
+    id: "get_candles_columns.time_range_valid"
+    message: "end_time must be >= start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time >= this.start_time"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_candles_columns.time_not_future"
+    message: "start_time and end_time must not be more than 5 minutes in the future"
+    expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+
+  // Numeric spot market identifier.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Candle bucket size. Required for ConnectRPC clients.
+  Timeframe timeframe = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Maximum number of closed candles to return. Defaults to 500 when unset;
+  // max 10000.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 10000];
+  // Inclusive lower bound for candle bucket start time, as a UTC timestamp.
+  // Must not be more than 5 minutes in the future.
+  google.protobuf.Timestamp start_time = 4;
+  // Inclusive upper bound for candle bucket start time, as a UTC timestamp.
+  // Must be greater than or equal to start_time when both are set, and must not
+  // be more than 5 minutes in the future.
+  google.protobuf.Timestamp end_time = 5;
+  // Include the current open candle when it is available and inside the
+  // requested range.
+  // The open candle is prepended to the newest-first candle list and does not
+  // count toward the closed-candle limit.
+  bool include_incomplete = 6;
+  // Include the composite reference market candle series for the same market,
+  // timeframe, and time range.
+  // The reference series can be empty when no reference series is available for
+  // the requested timeframe.
+  bool include_reference = 7;
+}
+
+// CandlePoint is one OHLCV bucket represented with scaled integers.
+//
+// REST responses render these values as decimal strings in tuple order:
+// [ts_sec, open, high, low, close, volume].
+message CandlePoint {
+  // Candle bucket start timestamp, in seconds since epoch (UTC).
+  uint64 ts_sec = 1;
+  // Opening price in quote units scaled by 1e6.
+  int64 open = 2;
+  // Highest traded price in quote units scaled by 1e6.
+  int64 high = 3;
+  // Lowest traded price in quote units scaled by 1e6.
+  int64 low = 4;
+  // Closing price in quote units scaled by 1e6.
+  int64 close = 5;
+  // Traded base-asset quantity scaled by the market's base asset quantity_scale
+  // from GetSpotConfig.
+  int64 volume = 6;
+  // True only for WebSocket terminal updates of a closed bucket.
+  // Historical API rows and current open-candle rows set this to false.
+  bool is_closed = 7;
+}
+
+// GetCandlesResponse contains OHLCV candles for one spot market and timeframe.
+//
+// Candles and reference_candles are ordered newest-first by ts_sec. REST
+// responses render price and volume values as decimal strings.
+message GetCandlesResponse {
+  // Numeric spot market identifier echoed from the request.
+  uint32 symbol_id = 1;
+  // Candle bucket size used for the returned series.
+  Timeframe timeframe = 2;
+  // Primary market candle series, ordered newest-first by ts_sec.
+  repeated CandlePoint candles = 3;
+  // Composite reference market candle series, ordered newest-first by ts_sec.
+  // Populated only when include_reference is true and reference data is
+  // available.
+  repeated CandlePoint reference_candles = 4;
+}
+
+// GetCandlesColumnsResponse returns the same candle series as GetCandles but in columnar form.
+// This is optimized for charting clients that ingest arrays of each field (binary only).
+//
+// Ordering: values are returned oldest-first (ascending ts_sec).
+message GetCandlesColumnsResponse {
+  // Engine symbol id.
+  uint32 symbol_id = 1;
+
+  // Timeframe of this series.
+  Timeframe timeframe = 2;
+
+  // Candle bucket start timestamps (seconds since epoch, UTC).
+  repeated uint64 ts_sec = 3;
+
+  // OHLCV values in engine tick/scale units.
+  repeated int64 open = 4;
+  repeated int64 high = 5;
+  repeated int64 low = 6;
+  repeated int64 close = 7;
+  repeated int64 volume = 8;
+
+  // Reference candle series in columnar form (same ordering as ts_sec: oldest-first).
+  // Only populated when request.include_reference=true.
+  repeated uint64 reference_ts_sec = 9;
+  repeated int64 reference_open = 10;
+  repeated int64 reference_high = 11;
+  repeated int64 reference_low = 12;
+  repeated int64 reference_close = 13;
+  repeated int64 reference_volume = 14;
+}
+
+// ---------------------------------------------------------------------------
+// Candle DTO shared by public candle reads and backend current-candle lookup.
+// ---------------------------------------------------------------------------
+
+// Candle represents a single OHLCV bucket for a symbol and timeframe.
+// Values are expressed in the same tick/scale units as the matching engine.
+message Candle {
+  uint32 symbol_id = 1; // engine symbol id
+  Timeframe timeframe = 2; // timeframe of this candle
+  uint64 ts_sec = 3; // bucket start timestamp (seconds since epoch, UTC)
+  int64 open = 4; // open
+  int64 high = 5; // high
+  int64 low = 6; // low
+  int64 close = 7; // close
+  // volume in base units, scaled by the base asset quantity_scale (see GetSpotConfig).
+  int64 volume = 8;
+}
+
+// ---------------------------------------------------------------------------
+// GetSpotConfig: spot assets and pair reference data.
+// ---------------------------------------------------------------------------
+
+// AssetConfig describes one spot asset returned by GetSpotConfig.
+message AssetConfig {
+  // Asset code, e.g. "USDT" or "BTC".
+  string asset = 1;
+
+  // Stable numeric asset id used by account, balance, and order APIs.
+  uint32 ledger_id = 2;
+
+  // Human-friendly display name, e.g. "Bitcoin".
+  string name = 3;
+
+  // Suggested decimal precision for displaying user-facing asset amounts.
+  uint32 quantity_display_decimals = 4;
+
+  // Integer scale for quantities and balances in this asset (0..18).
+  // A scale of 8 means one whole asset is represented as 100000000 in scaled
+  // integer fields such as qty_scaled.
+  uint32 quantity_scale = 5;
+}
+
+// PairMarketdataConfig describes market-data display settings for a spot pair.
+message PairMarketdataConfig {
+  // Suggested order book aggregation bucket sizes in quote-asset price units,
+  // e.g. 0.01, 0.1, 1, or 10.
+  repeated double orderbook_price_buckets = 1;
+}
+
+// PairConfig describes one spot trading pair and its trading constraints.
+message PairConfig {
+  // Stable numeric pair id used by low-latency ConnectRPC requests and streams.
+  uint32 symbol_id = 1;
+
+  // Trading pair symbol, e.g. "BTC-USDT".
+  string symbol = 2;
+
+  // Base asset code. For BTC-USDT, this is "BTC".
+  string base_asset = 3;
+
+  // Quote asset code. For BTC-USDT, this is "USDT".
+  string quote_asset = 4;
+
+  // Minimum allowed price increment as a decimal string in quote-asset units.
+  // Prices use 6 decimal places in scaled integer fields; for example "0.01"
+  // means orders must be priced in 0.01 quote-asset increments.
+  string tick_size = 5;
+
+  // Minimum allowed quantity increment as a decimal string in base-asset units.
+  string step_size = 6;
+
+  // Minimum order notional as a decimal string in quote-asset units.
+  string min_notional_quote = 7;
+
+  // Minimum order quantity as a decimal string in base-asset units.
+  string min_qty_base = 8;
+
+  // Whether BUY order fees may be paid from the received base asset instead of
+  // the spent quote asset when the order request selects that fee source.
+  bool allow_buy_fee_from_received = 9;
+
+  // Quantity scale for base-asset amounts in this pair.
+  uint32 base_quantity_scale = 10;
+
+  // Quantity scale for quote-asset amounts in this pair.
+  uint32 quote_quantity_scale = 11;
+
+  // Market-data display settings for this pair.
+  PairMarketdataConfig marketdata = 12;
+
+  // Scheduled listing timestamp. When unset, the pair has no explicit future
+  // listing time.
+  google.protobuf.Timestamp listing_at = 13;
+
+  // Scheduled delisting timestamp. When unset, the pair has no explicit
+  // delisting time.
+  google.protobuf.Timestamp delisting_at = 14;
+
+  // Current trading status: enabled, disabled, cancel_only, post_only, or
+  // reduce_only.
+  string status = 15;
+
+  // Default MARKET order slippage cap for BUY orders, in basis points
+  // (1 bp = 0.01%). A request-level slippage setting can override this value.
+  int32 default_market_slippage_bps_buy = 16;
+
+  // Default MARKET order slippage cap for SELL orders, in basis points
+  // (1 bp = 0.01%). A request-level slippage setting can override this value.
+  int32 default_market_slippage_bps_sell = 17;
+
+  // Maximum allowed drift between client reference price and server reference
+  // price for MARKET orders, in basis points (1 bp = 0.01%), when client
+  // reference pricing is used.
+  int32 max_client_ref_drift_bps = 18;
+}
+
+// GetSpotConfigRequest has no parameters.
+message GetSpotConfigRequest {}
+
+// GetSpotConfigResponse contains a cacheable spot reference-data snapshot.
+message GetSpotConfigResponse {
+  // Assets ordered by asset code in ascending alphabetical order.
+  repeated AssetConfig assets = 1;
+
+  // Pairs ordered by symbol in ascending alphabetical order.
+  repeated PairConfig pairs = 2;
+
+  // Snapshot generation timestamp, in seconds since the Unix epoch (UTC).
+  uint64 ts_sec = 3;
+}
+
+// ---------------------------------------------------------------------------
+// MarketDataService
+// ---------------------------------------------------------------------------
+
+service MarketDataService {
+  // Retrieve recent public trades for a spot market.
+  // Results are ordered newest-first and support optional aggressor side,
+  // inclusive time-range, and from_match_id keyset pagination filters.
+  rpc GetTrades(GetTradesRequest) returns (GetTradesResponse) {
+    option (polyester.api.public) = true;
+  }
+
+  // Retrieve OHLCV candles for a spot market and timeframe.
+  // Results are ordered newest-first and support inclusive time bounds, optional
+  // current open candle inclusion, and optional composite reference candles.
+  rpc GetCandles(GetCandlesRequest) returns (GetCandlesResponse) {
+    option (polyester.api.public) = true;
+  }
+
+  // GetCandlesColumns returns OHLCV candles in a columnar representation optimized for charting.
+  // This method is intended for ConnectRPC clients (binary protobuf) and returns raw tick/scale ints.
+  rpc GetCandlesColumns(GetCandlesColumnsRequest) returns (GetCandlesColumnsResponse) {
+    option (polyester.api.public) = true;
+    option (polyester.api.hidden) = true;
+  }
+
+  // Retrieve a cacheable snapshot of spot assets and pairs, including precision and trading constraints.
+  rpc GetSpotConfig(GetSpotConfigRequest) returns (GetSpotConfigResponse) {
+    option (polyester.api.public) = true;
+  }
+}

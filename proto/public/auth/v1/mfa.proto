@@ -1,0 +1,653 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// Session assurance level for the current interactive authentication context.
+enum SessionLevel {
+  // No session assurance level was specified.
+  SESSION_LEVEL_UNSPECIFIED = 0;
+  // Primary login has completed, but MFA has not elevated this session.
+  PRIMARY_AUTHENTICATED = 1;
+  // MFA has elevated this session for ordinary protected account activity.
+  MFA_ELEVATED = 2;
+  // A short-lived proof for one high-risk action.
+  FRESH_STEP_UP = 3;
+}
+
+// Type of MFA factor or one-time recovery method.
+enum MFAFactorType {
+  // No MFA factor type was specified.
+  MFA_FACTOR_TYPE_UNSPECIFIED = 0;
+  // Time-based one-time password from an authenticator app.
+  MFA_FACTOR_TYPE_TOTP = 1;
+  // Passkey factor using device or hardware-key authentication.
+  MFA_FACTOR_TYPE_PASSKEY = 2;
+  // One-time recovery code.
+  MFA_FACTOR_TYPE_RECOVERY_CODE = 3;
+}
+
+// Reason a user is completing an MFA challenge.
+enum MFAChallengePurpose {
+  // No MFA challenge purpose was specified.
+  MFA_CHALLENGE_PURPOSE_UNSPECIFIED = 0;
+  // Elevates the current session after successful MFA.
+  MFA_CHALLENGE_PURPOSE_SESSION_ELEVATION = 1;
+  // Creates a short-lived proof for one high-risk action.
+  MFA_CHALLENGE_PURPOSE_FRESH_STEP_UP = 2;
+}
+
+// Current assurance details for an interactive session.
+message SessionInfo {
+  // Stable session identifier shared by the primary and MFA-elevated tokens.
+  string session_id = 1 [(buf.validate.field).string.max_len = 64];
+  // Assurance level represented by this session response.
+  SessionLevel session_level = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Authentication methods used for this session state, such as wallet, TOTP, passkey, or recovery code. Maximum 8 unique values.
+  repeated string authentication_methods = 3 [
+    (buf.validate.field).repeated = {
+      max_items: 8
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string = {
+      min_len: 1
+      max_len: 32
+    }
+  ];
+  // Time when the session was authenticated or elevated.
+  google.protobuf.Timestamp auth_time = 4;
+}
+
+// Enrolled MFA factor metadata visible to the account owner.
+message MFAFactor {
+  // MFA factor identifier. Format: "mfa_" followed by 32 lowercase hex characters.
+  string factor_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // Type of enrolled factor.
+  MFAFactorType factor_type = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Human-friendly label for the factor. Empty when no label is set.
+  string label = 3 [(buf.validate.field).string.max_len = 128];
+  // Time when the factor was enrolled.
+  google.protobuf.Timestamp created_at = 4;
+  // Time when the factor was last used. Empty if the factor has not been used.
+  google.protobuf.Timestamp last_used_at = 5;
+}
+
+// Request to list the caller's MFA factors.
+message ListMFAFactorsRequest {}
+
+// Response containing the caller's enrolled MFA factors.
+message ListMFAFactorsResponse {
+  // Enrolled MFA factors, ordered oldest first.
+  repeated MFAFactor factors = 1;
+  // True when the caller has at least one unused recovery code.
+  bool has_recovery_codes = 2;
+}
+
+// Request to begin authenticator-app enrollment.
+message BeginTOTPEnrollmentRequest {
+  // Optional human-friendly label. Defaults to "Authenticator App" when empty. Maximum 128 characters.
+  string label = 1 [(buf.validate.field).string.max_len = 128];
+}
+
+// Response containing the authenticator-app enrollment secret.
+message BeginTOTPEnrollmentResponse {
+  // Enrollment challenge identifier. Format: "mfa_" followed by 32 lowercase hex characters.
+  string enrollment_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // Shared secret to enter into an authenticator app. Returned only when enrollment begins.
+  string secret = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Authenticator-app setup URI for QR-code display. Returned only when enrollment begins.
+  string otpauth_uri = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Time when this enrollment challenge expires.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// Request to finish authenticator-app enrollment.
+message FinishTOTPEnrollmentRequest {
+  // Enrollment challenge identifier returned by BeginTOTPEnrollment.
+  string enrollment_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Current 6 to 8 digit code from the authenticator app.
+  string code = 2 [
+    (buf.validate.field).string = {pattern: "^[0-9]{6,8}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response returned after authenticator-app enrollment succeeds.
+message FinishTOTPEnrollmentResponse {
+  // Newly enrolled MFA factor.
+  MFAFactor factor = 1;
+  // One-time recovery codes generated for the account. Store these securely; they are only returned in this response.
+  repeated string recovery_codes = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Request to begin passkey enrollment.
+message BeginPasskeyEnrollmentRequest {
+  // Optional human-friendly label for the passkey. Maximum 128 characters.
+  string label = 1 [(buf.validate.field).string.max_len = 128];
+}
+
+// Response containing passkey enrollment options.
+message BeginPasskeyEnrollmentResponse {
+  // Enrollment challenge identifier. Format: "mfa_" followed by 32 lowercase hex characters.
+  string enrollment_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // Passkey creation options to pass to the browser or device authenticator.
+  google.protobuf.Struct public_key = 2;
+  // Time when this enrollment challenge expires.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// Request to finish passkey enrollment.
+message FinishPasskeyEnrollmentRequest {
+  // Enrollment challenge identifier returned by BeginPasskeyEnrollment.
+  string enrollment_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Passkey creation response returned by the browser or device authenticator.
+  google.protobuf.Struct credential = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Response returned after passkey enrollment succeeds.
+message FinishPasskeyEnrollmentResponse {
+  // Newly enrolled MFA factor.
+  MFAFactor factor = 1;
+  // One-time recovery codes generated for the account. Store these securely; they are only returned in this response.
+  repeated string recovery_codes = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Request to start an MFA challenge.
+message BeginMFAChallengeRequest {
+  // Desired challenge outcome: session elevation or fresh step-up.
+  MFAChallengePurpose purpose = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response returned after starting an MFA challenge.
+message BeginMFAChallengeResponse {
+  // Challenge identifier to submit when verifying a factor. Format: "mfa_" followed by 32 lowercase hex characters.
+  string challenge_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // Factor types the caller may use for this challenge. Maximum 8 unique values.
+  repeated MFAFactorType allowed_factor_types = 2 [
+    (buf.validate.field).repeated = {
+      max_items: 8
+      unique: true
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // Passkey request options when passkey verification is available. Empty when passkeys are not available.
+  google.protobuf.Struct public_key = 3;
+  // Time when this challenge expires.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// Request to verify an MFA challenge with an authenticator-app code.
+message VerifyTOTPChallengeRequest {
+  // Challenge identifier returned by BeginMFAChallenge.
+  string challenge_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Current 6 to 8 digit code from the authenticator app.
+  string code = 2 [
+    (buf.validate.field).string = {pattern: "^[0-9]{6,8}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Request to verify an MFA challenge with a passkey.
+message FinishPasskeyChallengeRequest {
+  // Challenge identifier returned by BeginMFAChallenge.
+  string challenge_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Passkey authentication response returned by the browser or device authenticator.
+  google.protobuf.Struct credential = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Request to verify an MFA challenge with a recovery code.
+message VerifyRecoveryCodeChallengeRequest {
+  // Challenge identifier returned by BeginMFAChallenge.
+  string challenge_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // One-time recovery code. Accepted format is 8 to 64 letters, numbers, or hyphens.
+  string recovery_code = 2 [
+    (buf.validate.field).string = {
+      min_len: 8
+      max_len: 64
+      pattern: "^[A-Za-z0-9-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response returned after an MFA challenge is completed.
+message CompleteMFAChallengeResponse {
+  // Session assurance details after completing the challenge.
+  SessionInfo session = 1;
+  // MFA-elevated session token returned for session-elevation challenges. Empty for fresh step-up challenges.
+  string access_token = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Time when access_token expires. Empty when no access_token is returned.
+  google.protobuf.Timestamp access_token_expires_at = 3;
+  // Fresh step-up token returned for fresh step-up challenges. Empty for session-elevation challenges.
+  string step_up_token = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Time when step_up_token expires. Empty when no step_up_token is returned.
+  google.protobuf.Timestamp step_up_expires_at = 5;
+}
+
+// Request to bind a fresh step-up proof to one protected request.
+message ClaimFreshStepUpRequest {
+  // Client-generated request identifier for the protected request. Maximum 128 characters.
+  string request_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product action being protected, such as a withdrawal or security setting change. Maximum 64 characters.
+  string action_type = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^[a-z0-9._:-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product subject for the protected action, such as the target account, destination, or resource identifier. Maximum 128 characters.
+  string subject = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response returned after a fresh step-up proof is claimed.
+message ClaimFreshStepUpResponse {
+  // Fresh step-up proof identifier. Format: "mfa_" followed by 32 lowercase hex characters.
+  string step_up_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // One-time nonce that must be echoed when consuming or releasing the claim.
+  string claim_nonce = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+    pattern: "^mfa_[a-f0-9]{32}$"
+  }];
+  // Time when this claim expires if it is not consumed or released.
+  google.protobuf.Timestamp claim_expires_at = 3;
+}
+
+// Request to consume a claimed fresh step-up proof after the protected request succeeds.
+message ConsumeFreshStepUpRequest {
+  // Fresh step-up proof identifier returned by ClaimFreshStepUp.
+  string step_up_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Client-generated request identifier used when the proof was claimed.
+  string request_id = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product action type used when the proof was claimed.
+  string action_type = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^[a-z0-9._:-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product subject used when the proof was claimed.
+  string subject = 4 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // One-time nonce returned by ClaimFreshStepUp.
+  string claim_nonce = 5 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Empty response returned after a fresh step-up proof is consumed.
+message ConsumeFreshStepUpResponse {}
+
+// Request to release a claimed fresh step-up proof when the protected request does not complete.
+message ReleaseFreshStepUpRequest {
+  // Fresh step-up proof identifier returned by ClaimFreshStepUp.
+  string step_up_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Client-generated request identifier used when the proof was claimed.
+  string request_id = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product action type used when the proof was claimed.
+  string action_type = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^[a-z0-9._:-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Product subject used when the proof was claimed.
+  string subject = 4 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // One-time nonce returned by ClaimFreshStepUp.
+  string claim_nonce = 5 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional product-facing reason for releasing the claim. Maximum 128 characters.
+  string reason = 6 [(buf.validate.field).string.max_len = 128];
+}
+
+// Empty response returned after a fresh step-up proof is released.
+message ReleaseFreshStepUpResponse {}
+
+// Request to update an MFA factor label.
+message UpdateMFAFactorRequest {
+  // MFA factor identifier to update.
+  string factor_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // New human-friendly label for the factor. Empty clears the label.
+  string label = 2 [(buf.validate.field).string.max_len = 128];
+}
+
+// Response containing the updated MFA factor.
+message UpdateMFAFactorResponse {
+  // Updated MFA factor metadata.
+  MFAFactor factor = 1;
+}
+
+// Request to delete an MFA factor.
+message DeleteMFAFactorRequest {
+  // MFA factor identifier to delete.
+  string factor_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^mfa_[a-f0-9]{32}$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Empty response returned after an MFA factor is deleted.
+message DeleteMFAFactorResponse {}
+
+// Request to rotate recovery codes.
+message RegenerateRecoveryCodesRequest {}
+
+// Response containing newly generated recovery codes.
+message RegenerateRecoveryCodesResponse {
+  // New one-time recovery codes. Store these securely; they are only returned in this response.
+  repeated string recovery_codes = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// MFA management service for enrollment, challenges, fresh step-up proofs, and recovery codes.
+service MFAService {
+  // List the caller's enrolled MFA factors.
+  rpc ListMFAFactors(ListMFAFactorsRequest) returns (ListMFAFactorsResponse) {
+    option (google.api.http) = {get: "/v1/auth/mfa/factors"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List MFA Factors"
+      description: "List the caller's MFA factors and recovery-code availability."
+      tags: "Auth Service"
+    };
+  }
+
+  // Start authenticator-app enrollment.
+  rpc BeginTOTPEnrollment(BeginTOTPEnrollmentRequest) returns (BeginTOTPEnrollmentResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/totp:begin-enrollment"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Begin TOTP Enrollment"
+      description: "Generate a TOTP secret and enrollment challenge for the caller."
+      tags: "Auth Service"
+    };
+  }
+
+  // Finish authenticator-app enrollment.
+  rpc FinishTOTPEnrollment(FinishTOTPEnrollmentRequest) returns (FinishTOTPEnrollmentResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/totp:finish-enrollment"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Finish TOTP Enrollment"
+      description: "Verify the first TOTP code and activate the factor."
+      tags: "Auth Service"
+    };
+  }
+
+  // Start passkey enrollment.
+  rpc BeginPasskeyEnrollment(BeginPasskeyEnrollmentRequest) returns (BeginPasskeyEnrollmentResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/passkeys:begin-enrollment"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Begin Passkey Enrollment"
+      description: "Create passkey registration options for a new passkey."
+      tags: "Auth Service"
+    };
+  }
+
+  // Finish passkey enrollment.
+  rpc FinishPasskeyEnrollment(FinishPasskeyEnrollmentRequest) returns (FinishPasskeyEnrollmentResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/passkeys:finish-enrollment"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Finish Passkey Enrollment"
+      description: "Verify a passkey registration response and activate the factor."
+      tags: "Auth Service"
+    };
+  }
+
+  // Start an MFA challenge for session elevation or fresh step-up.
+  rpc BeginMFAChallenge(BeginMFAChallengeRequest) returns (BeginMFAChallengeResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/challenges"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Begin MFA Challenge"
+      description: "Start session elevation or fresh step-up using an enrolled MFA factor."
+      tags: "Auth Service"
+    };
+  }
+
+  // Verify an MFA challenge with an authenticator-app code.
+  rpc VerifyTOTPChallenge(VerifyTOTPChallengeRequest) returns (CompleteMFAChallengeResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/challenges/{challenge_id}:verify-totp"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Verify TOTP Challenge"
+      description: "Verify a TOTP code for session elevation or fresh step-up."
+      tags: "Auth Service"
+    };
+  }
+
+  // Verify an MFA challenge with a passkey.
+  rpc FinishPasskeyChallenge(FinishPasskeyChallengeRequest) returns (CompleteMFAChallengeResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/challenges/{challenge_id}:finish-passkey"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Finish Passkey Challenge"
+      description: "Verify a passkey authentication response for session elevation or fresh step-up."
+      tags: "Auth Service"
+    };
+  }
+
+  // Verify an MFA challenge with a recovery code.
+  rpc VerifyRecoveryCodeChallenge(VerifyRecoveryCodeChallengeRequest) returns (CompleteMFAChallengeResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/challenges/{challenge_id}:verify-recovery-code"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Verify Recovery Code Challenge"
+      description: "Consume a recovery code for session elevation or fresh step-up."
+      tags: "Auth Service"
+    };
+  }
+
+  // Update an enrolled MFA factor label.
+  rpc UpdateMFAFactor(UpdateMFAFactorRequest) returns (UpdateMFAFactorResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/mfa/factors/{factor_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update MFA Factor"
+      description: "Update mutable metadata for an enrolled MFA factor."
+      tags: "Auth Service"
+    };
+  }
+
+  // Delete an enrolled MFA factor.
+  rpc DeleteMFAFactor(DeleteMFAFactorRequest) returns (DeleteMFAFactorResponse) {
+    option (google.api.http) = {delete: "/v1/auth/mfa/factors/{factor_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete MFA Factor"
+      description: "Remove an MFA factor after a fresh step-up check."
+      tags: "Auth Service"
+    };
+  }
+
+  // Rotate the caller's recovery codes.
+  rpc RegenerateRecoveryCodes(RegenerateRecoveryCodesRequest) returns (RegenerateRecoveryCodesResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/mfa/recovery-codes:regenerate"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Regenerate Recovery Codes"
+      description: "Rotate recovery codes after a fresh step-up check."
+      tags: "Auth Service"
+    };
+  }
+
+  // Claim a fresh step-up proof for one protected request.
+  rpc ClaimFreshStepUp(ClaimFreshStepUpRequest) returns (ClaimFreshStepUpResponse);
+
+  // Consume a claimed fresh step-up proof after the protected request succeeds.
+  rpc ConsumeFreshStepUp(ConsumeFreshStepUpRequest) returns (ConsumeFreshStepUpResponse);
+
+  // Release a claimed fresh step-up proof when the protected request does not complete.
+  rpc ReleaseFreshStepUp(ReleaseFreshStepUpRequest) returns (ReleaseFreshStepUpResponse);
+}

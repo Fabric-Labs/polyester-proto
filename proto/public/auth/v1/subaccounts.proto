@@ -1,0 +1,643 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/api_keys.proto";
+import "auth/v1/policies.proto";
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "ledger/read/v1/ledger_read.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// Role granted to a root account on a sub-account.
+enum SubaccountRole {
+  // No sub-account role was specified.
+  SUBACCOUNT_ROLE_UNSPECIFIED = 0;
+  // Can view permitted sub-account data.
+  VIEWER = 1;
+  // Can place and manage spot orders where policy allows.
+  TRADER = 2;
+  // Can place and manage spot and leverage-enabled orders where policy allows.
+  LEVERAGED_TRADER = 3;
+  // Can manage permitted funding and treasury actions where policy allows.
+  TREASURY = 4;
+  // Can administer delegated members and settings, except owner-only controls.
+  ADMIN = 5;
+  // Owns the sub-account and can administer all sub-account settings.
+  OWNER = 6;
+}
+
+// Role summary for one sub-account visible to the caller.
+message SubaccountRoleView {
+  // Sub-account identifier (opaque ID).
+  fixed64 subaccount_id = 1;
+  // Effective role of the caller on this sub-account.
+  SubaccountRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+// Sub-account summary visible to the caller.
+message Subaccount {
+  // Sub-account identifier (opaque ID).
+  fixed64 id = 1;
+  // Role of the current caller on this sub-account.
+  SubaccountRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Optional human-readable label for this sub-account.
+  string label = 3 [(buf.validate.field).string.max_len = 64];
+  // Optional user-chosen icon/emoji for UI display.
+  string icon = 10 [(buf.validate.field).string.max_len = 32];
+  // Optional user-chosen color token for UI display. Tokens use lowercase letters, numbers, underscores, or hyphens.
+  string color = 11 [(buf.validate.field).string.max_len = 32];
+  // Current status of the sub-account, such as "active" or "disabled".
+  string status = 4 [(buf.validate.field).string.max_len = 32];
+  // Smart Account EVM address backing this sub-account.
+  string smart_account_address = 5;
+  // Owner (root account) public username, if set. Useful for shared views.
+  string owner_username = 6;
+  // Owner (root account) avatar URL, if set.
+  string owner_avatar_url = 7;
+  // Owner (root account) primary Smart Account address, when available. Allows
+  // clients to display a stable identity even when no username is set.
+  string owner_root_smart_account_address = 8;
+  // Optional sub-account policy identifier (opaque ID). 0 means no
+  // explicit policy attached.
+  fixed64 subaccount_policy_id = 9;
+  // Owner-controlled security baseline for delegated interactive members on
+  // protected sub-account actions. This does not apply to read-only real-time
+  // subscriptions.
+  bool require_member_mfa = 12;
+}
+
+// Request to list sub-accounts owned by or shared with the caller.
+message ListSubaccountsRequest {}
+
+// Response containing sub-accounts visible to the caller.
+message ListSubaccountsResponse {
+  // Sub-accounts owned by or shared with the caller, ordered by sub-account ID ascending.
+  repeated Subaccount subaccounts = 1;
+  // Total number of sub-accounts that have ever been created for this root,
+  // including soft-deleted ones. Can be used by clients to derive a stable
+  // salt/index for new Smart Accounts.
+  uint32 total_created = 2;
+}
+
+// Request to create a new sub-account under the caller's root account.
+message CreateSubaccountRequest {
+  // Optional human label for display in UI.
+  string label = 1 [
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).cel = {
+      id: "label.no_angle_brackets"
+      message: "label must not contain '<' or '>'"
+      expression: "!this.contains('<') && !this.contains('>')"
+    },
+    (buf.validate.field).string.example = "Treasury"
+  ];
+
+  // Optional user-chosen icon/emoji for UI display.
+  string icon = 7 [(buf.validate.field).string.max_len = 32];
+  // Optional user-chosen color token for UI display. Tokens use lowercase letters, numbers, underscores, or hyphens.
+  string color = 8 [(buf.validate.field).string.max_len = 32];
+
+  // Smart Account EVM address for the new sub-account.
+  string smart_account_address = 2 [
+    (buf.validate.field).string = {
+      len: 42
+      pattern: "^0x[0-9a-fA-F]{40}$"
+    },
+    (buf.validate.field).string.example = "0x0000000000000000000000000000000000000000",
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Nonce returned by GetNonce for this smart account.
+  string nonce = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Signature over the canonical login message containing the nonce.
+  string signature = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional primary wallet address supplied by the client. Sub-account ownership is proven by the Smart Account signature.
+  optional string primary_wallet_address = 5 [
+    (buf.validate.field).string = {
+      len: 42
+      pattern: "^0x[0-9a-fA-F]{40}$"
+    },
+    (buf.validate.field).string.example = "0x0000000000000000000000000000000000000000"
+  ];
+  // Optional provider hint supplied by the client. Sub-account creation does not depend on this value.
+  string wallet_provider = 6;
+}
+
+// Response returned after creating a sub-account.
+message CreateSubaccountResponse {
+  // Identifier for the created sub-account (opaque ID).
+  fixed64 subaccount_id = 1;
+  // Total number of sub-accounts that have ever been created for this root,
+  // including soft-deleted ones. Returned here so clients can immediately
+  // derive the next salt/index without requiring a fresh ListSubaccounts call.
+  uint32 total_created = 2;
+}
+
+// Request to update mutable display and status fields for a sub-account.
+message UpdateSubaccountRequest {
+  // Sub-account to update (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // New label for the sub-account. If empty, the label is left unchanged.
+  string label = 2 [
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).cel = {
+      id: "label.no_angle_brackets"
+      message: "label must not contain '<' or '>'"
+      expression: "!this.contains('<') && !this.contains('>')"
+    },
+    (buf.validate.field).string.example = "Treasury"
+  ];
+  // New user-chosen icon/emoji for UI display. If empty, left unchanged.
+  string icon = 4 [(buf.validate.field).string.max_len = 32];
+  // New user-chosen color token for UI display. If empty, left unchanged. Tokens use lowercase letters, numbers, underscores, or hyphens.
+  string color = 5 [(buf.validate.field).string.max_len = 32];
+  // New status for the sub-account, such as "active" or "disabled". If empty, the status is left unchanged.
+  string status = 3 [(buf.validate.field).string.max_len = 32];
+}
+
+// Empty response returned after updating a sub-account.
+message UpdateSubaccountResponse {}
+
+// Request to update the delegated-member MFA requirement for a sub-account.
+message SetSubaccountMemberMFARequirementRequest {
+  // Sub-account whose delegated-member MFA requirement should be updated (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // When true, delegated interactive members must satisfy MFA requirements for
+  // protected sub-account actions. This does not apply to read-only real-time
+  // subscriptions.
+  bool require_member_mfa = 2;
+}
+
+// Empty response returned after updating the delegated-member MFA requirement.
+message SetSubaccountMemberMFARequirementResponse {}
+
+// Member summary for a root account with access to a sub-account.
+message SubaccountMemberView {
+  // Identifier for the member's root account (opaque ID).
+  fixed64 account_id = 1;
+  // Effective role on this sub-account.
+  SubaccountRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Optional username for the member's root account.
+  string username = 3;
+  // Smart Account address for the member's root account, if any.
+  string smart_account_address = 4;
+  // Optional avatar URL for the member's root account.
+  string avatar_url = 5;
+  // True when the member has at least one MFA factor enrolled on their root account.
+  bool mfa_enrolled = 6;
+}
+
+// Request to list members for a sub-account.
+message ListSubaccountMembersRequest {
+  // Sub-account to inspect (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response containing the members of a sub-account.
+message ListSubaccountMembersResponse {
+  // Members for the sub-account. The owner is first, followed by delegated members oldest first.
+  repeated SubaccountMemberView members = 1;
+}
+
+// Request to remove a delegated member from a sub-account.
+message RemoveSubaccountMemberRequest {
+  // Sub-account to modify (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Root account ID of the member to revoke (opaque ID).
+  fixed64 grantee_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// Empty response returned after removing a sub-account member.
+message RemoveSubaccountMemberResponse {}
+
+// Request to change the role of an existing sub-account member without sending a new invitation.
+message UpdateSubaccountMemberRoleRequest {
+  // Sub-account to modify (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Root account ID of the member whose role should be updated (opaque ID).
+  fixed64 grantee_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+
+  // New role to assign.
+  SubaccountRole role = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Empty response returned after updating a member role.
+message UpdateSubaccountMemberRoleResponse {}
+
+// Status of an invitation to join a sub-account.
+enum SubaccountInviteStatus {
+  // No invitation status was specified.
+  SUBACCOUNT_INVITE_STATUS_UNSPECIFIED = 0;
+  // Invitation is waiting for the grantee to respond.
+  SUBACCOUNT_INVITE_STATUS_PENDING = 1;
+  // Invitation was accepted and access was granted.
+  SUBACCOUNT_INVITE_STATUS_ACCEPTED = 2;
+  // Invitation was declined by the grantee.
+  SUBACCOUNT_INVITE_STATUS_DECLINED = 3;
+  // Invitation was cancelled by the inviter.
+  SUBACCOUNT_INVITE_STATUS_CANCELLED = 4;
+}
+
+// View of a pending or historical invitation to a sub-account.
+message SubaccountInvite {
+  // Invite identifier (opaque ID).
+  fixed64 id = 1;
+
+  // Target sub-account (opaque ID).
+  fixed64 subaccount_id = 2;
+
+  // Grantee root account ID the invite is for (opaque ID).
+  fixed64 grantee_account_id = 3;
+
+  // Inviter root account ID (opaque ID).
+  fixed64 inviter_account_id = 4;
+
+  // Requested role for the grantee.
+  SubaccountRole role = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Current invitation status.
+  SubaccountInviteStatus status = 6;
+
+  // Time when the invitation was created.
+  google.protobuf.Timestamp created_at = 7;
+  // Time when the invitation was accepted, declined, or cancelled. Empty while pending.
+  google.protobuf.Timestamp responded_at = 8;
+
+  // Optional usernames for better UX in invite lists.
+  string grantee_username = 9;
+  string inviter_username = 10;
+
+  // Optional label for the target sub-account, for display in invite lists.
+  string subaccount_label = 11;
+
+  // Inviter (root account) primary Smart Account address, when available.
+  // Useful for displaying a stable identity when no username is set.
+  string inviter_root_smart_account_address = 12;
+
+  // Grantee (root account) primary Smart Account address, when available.
+  // Useful for displaying a stable identity when no username is set.
+  string grantee_root_smart_account_address = 13;
+
+  // Current delegated-member MFA requirement on the target sub-account. If true, accepting the invite requires MFA enrollment and fresh step-up.
+  bool require_member_mfa = 14;
+}
+
+// Request to invite another root account to a sub-account.
+message InviteSubaccountMemberRequest {
+  // Sub-account to share (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Root account ID of the grantee (opaque ID).
+  fixed64 grantee_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+
+  // Role to grant if the invite is accepted.
+  SubaccountRole role = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response containing the created or refreshed invitation.
+message InviteSubaccountMemberResponse {
+  // Pending invitation.
+  SubaccountInvite invite = 1;
+}
+
+// Request to list sub-account invitations.
+message ListSubaccountInvitesRequest {
+  // Optional direction filter. Use "incoming" for invites where the caller is grantee, "outgoing" for invites sent by the caller, or empty for both.
+  string direction = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string = {
+      in: [
+        "incoming",
+        "outgoing"
+      ]
+      max_len: 16
+    }
+  ];
+}
+
+// Response containing sub-account invitations.
+message ListSubaccountInvitesResponse {
+  // Invitations for the caller, ordered newest first.
+  repeated SubaccountInvite invites = 1;
+}
+
+// Action to take on a sub-account invitation.
+enum SubaccountInviteAction {
+  // No invitation action was specified.
+  SUBACCOUNT_INVITE_ACTION_UNSPECIFIED = 0;
+  // Accept an incoming invitation as the grantee.
+  SUBACCOUNT_INVITE_ACTION_ACCEPT = 1;
+  // Decline an incoming invitation as the grantee.
+  SUBACCOUNT_INVITE_ACTION_DECLINE = 2;
+  // Cancel an outgoing invitation as the inviter.
+  SUBACCOUNT_INVITE_ACTION_CANCEL = 3;
+}
+
+// Request to accept, decline, or cancel an invitation.
+message RespondSubaccountInviteRequest {
+  // Invite identifier (opaque ID).
+  fixed64 invite_id = 1;
+  // Action to apply to the invitation.
+  SubaccountInviteAction action = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response containing the updated invitation.
+message RespondSubaccountInviteResponse {
+  // Invitation after applying the response action.
+  SubaccountInvite invite = 1;
+}
+
+// Request for an aggregated sub-account read view.
+message GetSubaccountRequest {
+  // Target sub-account (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Include API keys scoped to this sub-account.
+  bool include_api_keys = 2;
+  // Include members for this sub-account. Only owner and admin callers receive members.
+  bool include_members = 3;
+  // Include invitations for the caller.
+  bool include_invites = 4;
+  // Include the attached sub-account policy, when one is attached.
+  bool include_policy = 5;
+  // Include current balances for this sub-account.
+  bool include_balances = 6;
+
+  // Optional invitation direction filter. Use "incoming", "outgoing", or empty for both.
+  string invites_direction = 7;
+}
+
+// Aggregated sub-account read view.
+message GetSubaccountResponse {
+  // Requested sub-account summary.
+  Subaccount subaccount = 1;
+
+  // API keys scoped to this sub-account when include_api_keys is true.
+  repeated ApiKey api_keys = 2;
+  // Members for this sub-account when include_members is true and the caller is owner or admin.
+  repeated SubaccountMemberView members = 3;
+  // Invitations for the caller when include_invites is true.
+  repeated SubaccountInvite invites = 4;
+  // Attached policy when include_policy is true and the sub-account has a policy.
+  SubaccountPolicyView policy = 5;
+  // Current balances when include_balances is true.
+  ledger.read.v1.GetBalancesResponse balances = 6;
+}
+
+// Activity or audit event for a sub-account.
+message ActivityEvent {
+  // Opaque cursor value for pagination (do not parse in clients).
+  string cursor = 1;
+
+  // Time when the event occurred.
+  google.protobuf.Timestamp created_at = 2;
+
+  // Type of entity changed, such as "subaccount", "api_key", or "invite".
+  string entity_kind = 3 [(buf.validate.field).string.max_len = 32];
+  // Action that occurred, such as "created", "updated", or "removed".
+  string event_action = 4 [(buf.validate.field).string.max_len = 32];
+
+  // Source of the event, such as "web", "mobile", or "api".
+  string source = 5 [(buf.validate.field).string.max_len = 32];
+  // Origin IP address. Masked for non-owner and non-admin callers.
+  string ip = 6 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 64
+  ];
+  // User agent associated with the event, when available.
+  string user_agent = 7 [(buf.validate.field).string.max_len = 512];
+
+  // Account that performed the action (opaque ID).
+  fixed64 actor_account_id = 8;
+
+  // Structured event details as a JSON string. Maximum 64 KiB.
+  string payload_json = 9 [(buf.validate.field).string.max_bytes = 65536];
+}
+
+// Request to list sub-account activity.
+message ListSubaccountEventsRequest {
+  // Target sub-account (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Maximum number of events to return. Defaults to 50 and is capped at 200.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 500];
+
+  // Opaque pagination cursor from a previous response. The cursor is exclusive.
+  string cursor = 3 [(buf.validate.field).string.max_len = 256];
+}
+
+// Response containing sub-account activity events.
+message ListSubaccountEventsResponse {
+  // Activity events ordered newest first.
+  repeated ActivityEvent events = 1;
+  // Opaque cursor to pass on the next request. Empty when this page contains no events.
+  string next_cursor = 2;
+}
+
+// Read service for aggregated sub-account pages.
+service SubaccountViewService {
+  // Aggregate commonly-needed read data for a sub-account dashboard page.
+  rpc GetSubaccount(GetSubaccountRequest) returns (GetSubaccountResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Subaccount View"
+      description:
+        "Return a single payload containing the sub-account and "
+        "requested related read models, such as members, API keys, "
+        "invites, policy, and balances."
+      tags: "Auth Service"
+    };
+  }
+
+  // List audit and activity events for a sub-account.
+  rpc ListSubaccountActivity(ListSubaccountEventsRequest) returns (ListSubaccountEventsResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}/events"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Subaccount Activity"
+      description: "List audit and activity events for a sub-account, newest first."
+      tags: "Auth Service"
+    };
+  }
+}
+
+// Service for creating, updating, sharing, and listing sub-accounts.
+service SubaccountService {
+  // List sub-accounts owned by or shared with the caller.
+  rpc ListSubaccounts(ListSubaccountsRequest) returns (ListSubaccountsResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Subaccounts"
+      description: "List sub-accounts owned by or shared with the caller, including role and label."
+      tags: "Auth Service"
+    };
+  }
+
+  // Create a new sub-account under the caller's root account.
+  rpc CreateSubaccount(CreateSubaccountRequest) returns (CreateSubaccountResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/subaccounts"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Subaccount"
+      description: "Create a new sub-account under the caller's root account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Update mutable sub-account fields (label/status/icon/color).
+  rpc UpdateSubaccount(UpdateSubaccountRequest) returns (UpdateSubaccountResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/subaccounts/{subaccount_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Subaccount"
+      description: "Update mutable sub-account fields such as label, icon, color, and status."
+      tags: "Auth Service"
+    };
+  }
+
+  // Toggle the delegated member MFA requirement for one sub-account (owner only).
+  rpc SetSubaccountMemberMFARequirement(SetSubaccountMemberMFARequirementRequest) returns (SetSubaccountMemberMFARequirementResponse) {
+    option (google.api.http) = {
+      patch: "/v1/auth/subaccounts/{subaccount_id}/member-mfa"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set Subaccount Member MFA Requirement"
+      description: "Enable or disable the owner-controlled MFA requirement for protected delegated-member actions."
+      tags: "Auth Service"
+    };
+  }
+
+  // List members for a sub-account (owner/admin only).
+  rpc ListSubaccountMembers(ListSubaccountMembersRequest) returns (ListSubaccountMembersResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}/members"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Subaccount Members"
+      description: "List all members and roles for a sub-account, including the owner."
+      tags: "Auth Service"
+    };
+  }
+
+  // Remove a member from a sub-account (owner/admin only).
+  rpc RemoveSubaccountMember(RemoveSubaccountMemberRequest) returns (RemoveSubaccountMemberResponse) {
+    option (google.api.http) = {delete:
+        "/v1/auth/subaccounts/{subaccount_id}/members/"
+        "{grantee_account_id}"
+};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Remove Subaccount Member"
+      description: "Remove a member from a sub-account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Update an existing sub-account member's role (owner/admin only).
+  rpc UpdateSubaccountMemberRole(UpdateSubaccountMemberRoleRequest) returns (UpdateSubaccountMemberRoleResponse) {
+    option (google.api.http) = {
+      patch:
+        "/v1/auth/subaccounts/{subaccount_id}/members/"
+        "{grantee_account_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Subaccount Member Role"
+      description: "Update the role of an existing sub-account member."
+      tags: "Auth Service"
+    };
+  }
+
+  // Invite a member to a sub-account.
+  rpc InviteSubaccountMember(InviteSubaccountMemberRequest) returns (InviteSubaccountMemberResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/subaccounts/{subaccount_id}/invites"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Invite Subaccount Member"
+      description: "Create a pending invitation to grant a role on a sub-account."
+      tags: "Auth Service"
+    };
+  }
+
+  // List incoming/outgoing sub-account invitations.
+  rpc ListSubaccountInvites(ListSubaccountInvitesRequest) returns (ListSubaccountInvitesResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts:invites"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Subaccount Invites"
+      description: "List incoming and outgoing sub-account invitations for the caller."
+      tags: "Auth Service"
+    };
+  }
+
+  // Accept/decline an invite (grantee) or cancel an invite (inviter).
+  rpc RespondSubaccountInvite(RespondSubaccountInviteRequest) returns (RespondSubaccountInviteResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/subaccounts/invites/{invite_id}:respond"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Respond Subaccount Invite"
+      description: "Accept or decline an invite as grantee, or cancel it as inviter."
+      tags: "Auth Service"
+    };
+  }
+}

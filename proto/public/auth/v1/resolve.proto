@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// ResolveHint controls how ResolveAccount interprets the query.
+enum ResolveHint {
+  // Auto-detect the query shape. EVM addresses are treated as smart-account
+  // addresses, short Base58-looking values are tried as account IDs, and other
+  // valid names are treated as usernames.
+  RESOLVE_HINT_UNSPECIFIED = 0;
+  // Treat query as a username. Username lookups resolve root accounts only.
+  USERNAME = 1;
+  // Treat query as an opaque root account or sub-account ID.
+  ID = 2;
+  // Treat query as an EVM smart-account address.
+  SMART_ACCOUNT = 3;
+}
+
+// ResolvedAccount represents a lightweight view of a destination account for
+// sharing or internal transfers.
+message ResolvedAccount {
+  // Smart-account address that would receive funds. This is the address that
+  // will receive the transfer, whether it belongs to a root account or a
+  // sub-account.
+  string smart_account_address = 1;
+
+  // Kind of account that owns this address: "root" or "sub".
+  string kind = 2;
+
+  // Root account username for the result. For sub-account results, this is the
+  // parent root account username. Empty means the root account has no username.
+  string root_username = 3;
+
+  // Optional sub-account label when kind == "sub".
+  string subaccount_label = 4;
+
+  // Target account identifier (opaque ID). For root results this is an account
+  // ID; for sub-account results this is a sub-account ID.
+  fixed64 account_id = 5;
+}
+
+// ResolveAccountRequest searches for a transfer or sharing destination by
+// username, account ID, or smart-account address.
+message ResolveAccountRequest {
+  // Free-form query typed by the user. Can be:
+  // - a username, 3 to 64 characters using letters, digits, underscore, dot, or hyphen
+  // - an opaque root account or sub-account ID
+  // - an EVM smart-account address formatted as 0x plus 40 hex characters
+  // Maximum length is 128 characters.
+  string query = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 128,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Optional hint for how to parse query. When unspecified, the service
+  // auto-detects by query shape.
+  ResolveHint hint = 2 [(buf.validate.field).enum = {defined_only: true}];
+
+  // When true, allow matches on sub-accounts as well as root accounts. Use
+  // this for internal transfer flows where the caller may want to resolve a
+  // specific sub-account by its ID or smart-account address. Username
+  // lookups remain root-only regardless of this flag.
+  bool include_subaccounts = 3;
+}
+
+// ResolveAccountResponse contains matching accounts. Username and root-only
+// smart-account lookups return at most 5 matches; smart-account lookups with
+// include_subaccounts may return at most 10 matches.
+message ResolveAccountResponse {
+  // Matching destination accounts. Empty means no account matched the query.
+  repeated ResolvedAccount matches = 1;
+}
+
+// ResolveService resolves authenticated account destinations for sharing and
+// transfer flows.
+service ResolveService {
+  // Resolve an account by username, account ID, or smart-account address.
+  // Use this before sharing or transferring so the caller can confirm the target.
+  rpc ResolveAccount(ResolveAccountRequest) returns (ResolveAccountResponse) {
+    option (google.api.http) = {get: "/v1/auth/accounts:resolve"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Resolve Account"
+      description: "Resolve an account by username, account ID, or smart-account address for transfer and sharing flows."
+      tags: "Auth Service"
+    };
+  }
+}

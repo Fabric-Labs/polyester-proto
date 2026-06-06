@@ -1,0 +1,441 @@
+syntax = "proto3";
+
+package collab.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/collab/v1;collabv1";
+// Document-level OpenAPI metadata for collaboration APIs.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Whiteboard Service"
+      description: "Authenticated collaboration APIs for whiteboard metadata, sharing, and room admission."
+    }
+  ]
+};
+
+// BoardAudience controls which audience rule applies when no explicit ACL entry matches.
+enum BoardAudience {
+  // Audience is not specified.
+  AUDIENCE_UNSPECIFIED = 0;
+  // Only the owner and explicit ACL entries have access.
+  PRIVATE = 1;
+  // Any caller gets the board default role.
+  PUBLIC = 2;
+  // Followers of the owner get the board default role.
+  FOLLOWERS = 3;
+}
+
+// BoardRole is the resolved capability level for a caller on a board.
+enum BoardRole {
+  // Role is not specified, which means the caller has no board access.
+  ROLE_UNSPECIFIED = 0;
+  // Viewer can read board metadata and join the room as read-only.
+  VIEWER = 1;
+  // Editor can view and edit board content in the room.
+  EDITOR = 2;
+  // Owner can view, edit, archive, and manage sharing settings.
+  OWNER = 3;
+}
+
+// BoardAclSubjectType identifies the explicit ACL subject domain.
+enum BoardAclSubjectType {
+  // ACL subject type is not specified.
+  SUBJECT_TYPE_UNSPECIFIED = 0;
+  // ACL entry applies to one account.
+  USER_SUBJECT = 1;
+  // ACL entry applies to one collaboration group.
+  GROUP_SUBJECT = 2;
+}
+
+// BoardAclEntry grants a role to one explicit ACL subject.
+message BoardAclEntry {
+  // Subject domain for the ACL row.
+  BoardAclSubjectType subject_type = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Subject public ID. For USER_SUBJECT this is an account ID; for GROUP_SUBJECT this is a group ID.
+  fixed64 subject_id = 2 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Granted role for the subject. Only VIEWER and EDITOR are valid ACL roles.
+  BoardRole role = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      in: [
+        1,
+        2
+      ]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// BoardPermissions is the resolved permission set for the caller.
+message BoardPermissions {
+  // Whether the caller may view metadata and join the room.
+  bool can_view = 1;
+  // Whether the caller may edit board content in the room.
+  bool can_edit = 2;
+  // Whether the caller may manage sharing and board settings.
+  bool can_manage = 3;
+}
+
+// BoardAccess is the resolved caller access for a board.
+// Access resolution prefers owner, explicit user ACL, explicit group ACL, then audience policy.
+message BoardAccess {
+  // Highest resolved role for the caller.
+  BoardRole role = 1 [(buf.validate.field).enum = {defined_only: true}];
+  // Expanded permission flags for the caller.
+  BoardPermissions permissions = 2;
+}
+
+// Board is the persisted metadata for a collaborative whiteboard.
+message Board {
+  // Stable board identifier as a UUID string.
+  string board_id = 1;
+  // Board owner account public ID.
+  fixed64 owner_account_id = 2;
+  // Human-readable board title, max 200 characters and 400 bytes.
+  string title = 3;
+  // Default audience policy used when no explicit ACL entry matches.
+  BoardAudience audience = 4 [(buf.validate.field).enum = {defined_only: true}];
+  // Default role granted by the audience policy. This is always VIEWER or EDITOR.
+  BoardRole default_role = 5 [(buf.validate.field).enum = {defined_only: true}];
+  // Monotonic access version incremented when audience, default role, ACL, or archive state changes.
+  uint64 access_version = 6;
+  // Optional initial document snapshot as a JSON object.
+  google.protobuf.Struct initial_snapshot = 7;
+  // Creation time in UTC.
+  google.protobuf.Timestamp created_at = 8;
+  // Last update time in UTC.
+  google.protobuf.Timestamp updated_at = 9;
+  // Archive time in UTC. Unset when the board is active.
+  optional google.protobuf.Timestamp archived_at = 10;
+}
+
+// BoardListItem is one visible board plus the caller's resolved access.
+message BoardListItem {
+  // Board metadata.
+  Board board = 1;
+  // Resolved access for the current caller.
+  BoardAccess access = 2;
+}
+
+// PresencePayload is a lightweight identity payload the client can reuse locally.
+message PresencePayload {
+  // Caller account public ID.
+  fixed64 account_id = 1;
+  // Resolved board role for this join.
+  BoardRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+// CreateBoardRequest creates a new board owned by the caller.
+message CreateBoardRequest {
+  option (buf.validate.message).cel = {
+    id: "create_board.title_non_blank"
+    message: "title must contain at least one non-whitespace character"
+    expression: "this.title.matches('.*\\\\S.*')"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_board.acl_subjects_unique"
+    message: "acl_entries must not contain duplicate subjects"
+    expression: "this.acl_entries.map(e, string(int(e.subject_type)) + ':' + string(e.subject_id)).unique()"
+  };
+  // Board title, max 200 characters and 400 bytes.
+  string title = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 200,
+    (buf.validate.field).string.max_bytes = 400,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Initial audience policy for the board.
+  BoardAudience audience = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Default audience role for callers admitted by PUBLIC or FOLLOWERS audience policy.
+  BoardRole default_role = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      in: [
+        1,
+        2
+      ]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional explicit ACL entries created with the board, max 256 entries.
+  repeated BoardAclEntry acl_entries = 4 [(buf.validate.field).repeated.max_items = 256];
+  // Optional initial document snapshot as a JSON object.
+  google.protobuf.Struct initial_snapshot = 5;
+}
+
+// CreateBoardResponse returns the created board and resolved caller access.
+message CreateBoardResponse {
+  // Created board metadata.
+  Board board = 1;
+  // Stored explicit ACL entries ordered by creation time, subject type, then subject ID.
+  repeated BoardAclEntry acl_entries = 2;
+  // Resolved caller access for the board.
+  BoardAccess access = 3;
+}
+
+// GetBoardRequest loads one board by ID.
+message GetBoardRequest {
+  // Board identifier as a UUID string.
+  string board_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// GetBoardResponse returns one visible board.
+message GetBoardResponse {
+  // Board metadata.
+  Board board = 1;
+  // Explicit ACL entries ordered by creation time, subject type, then subject ID. Returned only for callers who can manage the board.
+  repeated BoardAclEntry acl_entries = 2;
+  // Resolved caller access.
+  BoardAccess access = 3;
+}
+
+// ListBoardsRequest lists boards visible to the caller.
+message ListBoardsRequest {
+  // When true, include archived boards in the response.
+  bool include_archived = 1;
+}
+
+// ListBoardsResponse lists boards visible to the caller in most-recently-updated order.
+message ListBoardsResponse {
+  // Visible boards ordered by updated_at descending, then board_id descending.
+  repeated BoardListItem boards = 1;
+}
+
+// UpdateBoardRequest updates mutable board metadata.
+message UpdateBoardRequest {
+  option (buf.validate.message).cel = {
+    id: "update_board.has_mutation"
+    message: "at least one mutable field must be provided"
+    expression: "has(this.title) || has(this.audience) || has(this.default_role) || has(this.initial_snapshot)"
+  };
+  option (buf.validate.message).cel = {
+    id: "update_board.title_non_blank"
+    message: "title must contain at least one non-whitespace character"
+    expression: "!has(this.title) || this.title.matches('.*\\\\S.*')"
+  };
+  // Board identifier as a UUID string.
+  string board_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // New board title, max 200 characters and 400 bytes. When unset, the title is unchanged.
+  optional string title = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 200
+    max_bytes: 400
+  }];
+  // New audience policy. When unset, the audience is unchanged.
+  optional BoardAudience audience = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // New default audience role for PUBLIC or FOLLOWERS access. When unset, the role is unchanged.
+  optional BoardRole default_role = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    in: [
+      1,
+      2
+    ]
+  }];
+  // New initial snapshot as a JSON object. When unset, the snapshot is unchanged.
+  optional google.protobuf.Struct initial_snapshot = 5;
+}
+
+// UpdateBoardResponse returns the updated board.
+message UpdateBoardResponse {
+  // Updated board metadata.
+  Board board = 1;
+  // Explicit ACL entries ordered by creation time, subject type, then subject ID. Returned only for callers who can manage the board.
+  repeated BoardAclEntry acl_entries = 2;
+  // Resolved caller access.
+  BoardAccess access = 3;
+}
+
+// UpdateBoardAclRequest fully replaces the explicit ACL for a board.
+message UpdateBoardAclRequest {
+  option (buf.validate.message).cel = {
+    id: "update_board_acl.acl_subjects_unique"
+    message: "acl_entries must not contain duplicate subjects"
+    expression: "this.acl_entries.map(e, string(int(e.subject_type)) + ':' + string(e.subject_id)).unique()"
+  };
+  // Board identifier as a UUID string.
+  string board_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Full replacement ACL set for the board, max 256 entries. Existing ACL entries are replaced atomically.
+  repeated BoardAclEntry acl_entries = 2 [(buf.validate.field).repeated.max_items = 256];
+}
+
+// UpdateBoardAclResponse returns the updated board and ACL state.
+message UpdateBoardAclResponse {
+  // Updated board metadata.
+  Board board = 1;
+  // Stored ACL entries after replacement, ordered by creation time, subject type, then subject ID.
+  repeated BoardAclEntry acl_entries = 2;
+  // Resolved caller access.
+  BoardAccess access = 3;
+}
+
+// ArchiveBoardRequest archives or unarchives a board.
+message ArchiveBoardRequest {
+  // Board identifier as a UUID string.
+  string board_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Target archive state. True archives the board, false restores it.
+  bool archived = 2;
+}
+
+// ArchiveBoardResponse returns the updated archive state.
+message ArchiveBoardResponse {
+  // Updated board metadata.
+  Board board = 1;
+  // Resolved caller access.
+  BoardAccess access = 2;
+}
+
+// MintJoinTokenRequest resolves access and mints a short-lived room admission token.
+message MintJoinTokenRequest {
+  // Board identifier as a UUID string.
+  string board_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// MintJoinTokenResponse returns the signed room admission contract for the caller.
+message MintJoinTokenResponse {
+  // Board identifier as a UUID string.
+  string board_id = 1;
+  // Resolved caller access for the board.
+  BoardAccess access = 2;
+  // Token expiry time in UTC. Join tokens expire 5 minutes after issuance.
+  google.protobuf.Timestamp expires_at = 3;
+  // Signed short-lived room admission token.
+  string token = 4;
+  // Room identifier the client should join. This is the board ID.
+  string room_id = 5;
+  // Unique connection identifier embedded in the token.
+  string connection_id = 6;
+  // Realtime room URL the client should connect to.
+  string socket_path = 7;
+  // Lightweight local presence payload for the caller.
+  PresencePayload presence = 8;
+  // Access version embedded in the token; clients must refresh when the board access version changes.
+  uint64 access_version = 9;
+}
+
+// WhiteboardService provides authenticated metadata and room-admission APIs for collaborative whiteboards.
+service WhiteboardService {
+  // CreateBoard creates a new whiteboard owned by the caller.
+  rpc CreateBoard(CreateBoardRequest) returns (CreateBoardResponse) {
+    option (google.api.http) = {
+      post: "/v1/collab/whiteboards"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Whiteboard"
+      description: "Create a new collaborative whiteboard owned by the caller."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // GetBoard returns one board visible to the caller.
+  rpc GetBoard(GetBoardRequest) returns (GetBoardResponse) {
+    option (google.api.http) = {get: "/v1/collab/whiteboards/{board_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Whiteboard"
+      description: "Load one collaborative whiteboard and the caller access state."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // ListBoards lists boards visible to the caller.
+  rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse) {
+    option (google.api.http) = {get: "/v1/collab/whiteboards"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Whiteboards"
+      description: "List collaborative whiteboards visible to the caller in most-recently-updated order."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // UpdateBoard updates mutable board metadata.
+  rpc UpdateBoard(UpdateBoardRequest) returns (UpdateBoardResponse) {
+    option (google.api.http) = {
+      patch: "/v1/collab/whiteboards/{board_id}"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Whiteboard"
+      description: "Update mutable whiteboard metadata such as title, audience, and default role."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // UpdateBoardAcl fully replaces the explicit ACL for a board.
+  rpc UpdateBoardAcl(UpdateBoardAclRequest) returns (UpdateBoardAclResponse) {
+    option (google.api.http) = {
+      put: "/v1/collab/whiteboards/{board_id}/acl"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Whiteboard ACL"
+      description: "Replace the explicit sharing ACL for a collaborative whiteboard."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // ArchiveBoard archives or restores a board.
+  rpc ArchiveBoard(ArchiveBoardRequest) returns (ArchiveBoardResponse) {
+    option (google.api.http) = {
+      post: "/v1/collab/whiteboards/{board_id}:archive"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Archive Whiteboard"
+      description: "Archive or restore a collaborative whiteboard."
+      tags: "Whiteboard Service"
+    };
+  }
+
+  // MintJoinToken resolves access and mints a short-lived room admission token.
+  rpc MintJoinToken(MintJoinTokenRequest) returns (MintJoinTokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/collab/whiteboards/{board_id}:mint-join-token"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Mint Whiteboard Join Token"
+      description: "Resolve caller access and mint a short-lived room admission token."
+      tags: "Whiteboard Service"
+    };
+  }
+}
