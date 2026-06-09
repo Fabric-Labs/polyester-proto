@@ -84,14 +84,26 @@ enum ListScope {
   LIST_TERMINAL_ONLY = 3;
 }
 
+// Sort selects lifecycle list ordering.
+enum Sort {
+  // Sort order was not specified; server defaults apply.
+  SORT_UNSPECIFIED = 0;
+
+  // Return newest lifecycle activity first.
+  SORT_NEWEST = 1;
+
+  // Return oldest lifecycle activity first.
+  SORT_OLDEST = 2;
+}
+
 // ListFlowsRequest filters and paginates lifecycle flow summaries.
 message ListFlowsRequest {
   // Maximum number of flows to return. Defaults to 100 when omitted; maximum is
   // 500.
   uint32 limit = 1 [(buf.validate.field).uint32.lte = 500];
 
-  // Sort newest first when true; oldest first when false.
-  bool reversed = 2;
+  // Sort direction for lifecycle activity time.
+  Sort sort = 2 [(buf.validate.field).enum.defined_only = true];
 
   // Optional product flow kind filter. Unspecified includes all kinds.
   FlowKind flow_kind = 3 [(buf.validate.field).enum.defined_only = true];
@@ -160,8 +172,8 @@ message ListFlowsRequest {
 
 // ListFlowsResponse returns one page of flow summaries.
 message ListFlowsResponse {
-  // Flow summaries ordered by last activity time, then public flow id. Sort order is
-  // controlled by the request `reversed` flag.
+  // Flow summaries ordered by last activity time, then public flow id. Sort
+  // order is controlled by the request `sort` field.
   repeated FlowSummaryView flows = 1;
 
   // Opaque cursor for the next page; empty when no more results exist.
@@ -193,8 +205,8 @@ message FlowTxMatchView {
   // Product domain where the overall flow ends or currently settles.
   FlowDomain destination_domain = 8;
 
-  // Latest business-facing visible step for this flow.
-  FlowStep latest_step = 9;
+  // Current user-facing progress step for this flow.
+  FlowStep current_step = 9;
 
   // True when this flow is still progressing.
   bool is_open = 10;
@@ -217,9 +229,8 @@ message FlowTxMatchView {
   // Destination address to show for this flow.
   string destination_address = 16;
 
-  // Product-facing reason code for failed, dropped, or otherwise notable flows;
-  // zero means no reason code is present.
-  uint32 reason_code = 17;
+  // Product-facing reason for failed, dropped, or otherwise notable flows.
+  FlowReason reason_code = 17;
 
   // Timestamp used for list ordering in milliseconds since epoch (UTC).
   uint64 last_activity_at_unix_ms = 18;
@@ -261,8 +272,8 @@ enum FlowStep {
   // Polyester execution stage.
   FLOW_STEP_EXECUTION = 5;
 
-  // Withdraw zAsset burn / on-chain fulfillment before final ledger settlement.
-  FLOW_STEP_ASSET_BURNED = 6;
+  // Bridge fulfillment before final ledger settlement.
+  FLOW_STEP_BRIDGE_FULFILLMENT = 6;
 
   // Flow was dropped before success.
   FLOW_STEP_DROPPED = 7;
@@ -293,8 +304,9 @@ message FlowSummaryView {
   // Product flow family.
   FlowKind flow_kind = 4;
 
-  // Latest business-facing visible step for this flow.
-  FlowStep latest_step = 6;
+  // Current user-facing progress step for this flow. This may be derived from
+  // the flow state before a matching factual observed step exists.
+  FlowStep current_step = 6;
 
   // Asset identifiers involved in the flow.
   AssetIds asset_ids = 7;
@@ -341,9 +353,8 @@ message FlowSummaryView {
   // summary. This is not necessarily the source of the entire flow.
   LifecycleSource latest_lifecycle_source = 16;
 
-  // Product-facing reason code for failed, dropped, or otherwise notable flows;
-  // zero means no reason code is present.
-  uint32 reason_code = 17;
+  // Product-facing reason for failed, dropped, or otherwise notable flows.
+  FlowReason reason_code = 17;
 
   // First observed business timestamp in milliseconds since epoch (UTC).
   uint64 started_at_unix_ms = 18;
@@ -363,14 +374,15 @@ message FlowSummaryView {
   // True when the flow reached a final state.
   bool is_terminal = 23;
 
-  // One-based sequence of the latest visible step in the summary timeline.
-  uint32 latest_step_sequence = 24;
+  // One-based sequence of `current_step` in `progress_timeline`.
+  uint32 current_step_sequence = 24;
 
   // Progress data for the current visible step when the flow is open.
   FlowSummaryProgressView current_progress = 25;
 
-  // Estimated and observed top-level timeline for list/header UI.
-  repeated FlowTimelineItemView summary_timeline = 26;
+  // Progress-bar timeline for list/header UI. This timeline may include a
+  // current derived step that is ahead of the latest factual observed step.
+  repeated FlowTimelineItemView progress_timeline = 26;
 
   // Estimated Unix completion timestamp in milliseconds.
   uint64 estimated_completion_unix_ms = 27;
@@ -407,12 +419,14 @@ message FlowSummaryProgressView {
   uint32 required_rejections = 11;
 }
 
-// FlowStepView is one factual visible step in the lifecycle detail view.
+// FlowStepView is one factual observed visible step in the lifecycle detail
+// view. Use `FlowSummaryView.progress_timeline` for the current projected
+// progress state.
 message FlowStepView {
-  // One-based visible step sequence for display.
+  // One-based observed step sequence for display and audit.
   uint32 sequence = 1;
 
-  // Business-facing visible step.
+  // Business-facing observed step.
   FlowStep step = 3;
 
   // Asset identifiers involved in this step.
@@ -433,9 +447,8 @@ message FlowStepView {
   // Source that produced this visible step.
   LifecycleSource lifecycle_source = 12;
 
-  // Product-facing reason code for failed, dropped, or otherwise notable steps;
-  // zero means no reason code is present.
-  uint32 reason_code = 13;
+  // Product-facing reason for failed, dropped, or otherwise notable steps.
+  FlowReason reason_code = 13;
 
   // Current source confirmation count when confirmations apply.
   uint32 current_confirmations = 14;
@@ -498,9 +511,8 @@ message FlowStepActivityView {
   // Source that produced this activity.
   LifecycleSource lifecycle_source = 4;
 
-  // Product-facing reason code for notable activity states; zero means no
-  // reason code is present.
-  uint32 reason_code = 5;
+  // Product-facing reason for notable activity states.
+  FlowReason reason_code = 5;
 
   // Current source confirmation count when confirmations apply.
   uint32 current_confirmations = 6;
@@ -533,23 +545,24 @@ message FlowStepActivityView {
   string ledger_transfer_id = 15;
 }
 
-// FlowTimelineStatus describes how a planned timeline item relates to observed
-// lifecycle facts.
+// FlowTimelineStatus describes how a progress timeline item relates to the
+// current user-facing flow state.
 enum FlowTimelineStatus {
   // Timeline status is not specified.
   TIMELINE_STATUS_UNSPECIFIED = 0;
 
-  // Step has been observed or is behind the latest observed step.
+  // Step has been observed or is behind the current progress step.
   TIMELINE_STATUS_COMPLETED = 1;
 
-  // Step is the current active step.
+  // Step is the current active progress step.
   TIMELINE_STATUS_CURRENT = 2;
 
   // Step is expected but has not been observed yet.
   TIMELINE_STATUS_PLANNED = 3;
 }
 
-// FlowTimelineItemView is one item in the expected visible lifecycle path.
+// FlowTimelineItemView is one item in the expected visible lifecycle progress
+// path.
 message FlowTimelineItemView {
   // One-based sequence within the expected timeline.
   uint32 sequence = 1;
@@ -557,7 +570,7 @@ message FlowTimelineItemView {
   // Visible lifecycle step.
   FlowStep step = 2;
 
-  // Observed/planned status for this timeline item.
+  // Progress status for this timeline item.
   FlowTimelineStatus status = 3;
 
   // Expected duration of this visible step in milliseconds, derived from recent
@@ -570,15 +583,14 @@ message FlowDetailView {
   // Compact flow summary for headers and list-style display.
   FlowSummaryView summary = 1;
 
-  // Factual visible steps observed for this flow, ordered by sequence.
-  repeated FlowStepView steps = 2;
+  // Factual visible steps observed for this flow, ordered by sequence. Open
+  // flows may have `summary.current_step` ahead of the last observed step.
+  repeated FlowStepView observed_steps = 2;
 
   // True when this detail was served from live in-memory state rather than
   // historical terminal state.
   bool from_live_state = 3;
 
-  // Expected visible lifecycle path, enriched with observed step status.
-  repeated FlowTimelineItemView timeline = 4;
 }
 
 // LifecycleReadService exposes lifecycle flow lookup and listing APIs.
