@@ -127,9 +127,6 @@ message GetEquityHistorySeriesRequest {
   optional fixed64 subaccount_id = 1;
   // History window to return. When unset/UNSPECIFIED, defaults to 1D.
   BalanceRange range = 2 [(buf.validate.field).enum.defined_only = true];
-
-  reserved 3; // was: quote_ledger (now always USDT)
-
   // Optional subset of account buckets.
   // When empty, server returns both funding and trading.
   // Only used when group_by = ACCOUNT.
@@ -156,7 +153,6 @@ message GetEquityHistorySeriesResponse {
   string bucket = 2;
   fixed32 start_ts_sec = 3;
   fixed32 end_ts_sec = 4;
-  reserved 5; // was: quote_ledger (now always USDT)
   // Human-readable quote asset symbol (always "USDT").
   string quote_asset = 6;
   uint32 points = 7;
@@ -173,22 +169,29 @@ message ListTransfersRequest {
     message: "timestamp_max must be >= timestamp_min when both are set"
     expression: "this.timestamp_min == 0u || this.timestamp_max == 0u || this.timestamp_max >= this.timestamp_min"
   };
-
   // Optional sub-account to scope transfers to. If omitted, transfers are
   // listed for the authenticated root account derived from the JWT or API key.
   optional fixed64 subaccount_id = 1;
-  // Max number of rows to return (server may clamp). Default applied if 0.
+  // Maximum number of transfer rows to return. Defaults to 100 when omitted;
+  // maximum is 1000.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
-  // true=newest first; false=oldest first.
+  // Sort direction. When true, rows are returned newest first; when false,
+  // rows are returned oldest first.
   bool reversed = 3;
-  // Optional lower transfer timestamp bound in microseconds since epoch (inclusive).
+  // Optional lower transfer timestamp bound in microseconds since epoch (UTC),
+  // inclusive.
   uint64 timestamp_min = 4;
-  // Optional upper transfer timestamp bound in microseconds since epoch (inclusive).
+  // Optional upper transfer timestamp bound in microseconds since epoch (UTC),
+  // inclusive.
   uint64 timestamp_max = 5;
   // Optional filter by transfer reason.
   ledger.v1.TransferCode transfer_code = 6;
-  uint32 ledger = 7; // optional filter by asset ledger
-  uint64 since = 8; // cursor in microseconds since epoch: return rows with timestamp > since
+  // Optional filter by asset ledger.
+  uint32 ledger = 7;
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to the authenticated account, sub-account scope, filters, timestamp
+  // bounds, and sort direction.
+  string page_token = 9 [(buf.validate.field).string.max_len = 512];
 }
 
 // Transfer row with compact integers and client-side resolution.
@@ -211,17 +214,22 @@ message TransferRow {
 message ListTransfersResponse {
   // Transfer rows in requested order.
   repeated TransferRow transfers = 1;
-  uint64 next_cursor = 2;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 3 [(buf.validate.field).string.max_len = 512];
 }
 
 message ListHoldsRequest {
   // Optional sub-account to scope holds to. If omitted, holds are listed for
   // the authenticated root account derived from the JWT or API key.
   optional fixed64 subaccount_id = 1;
-  // Max number of rows to return (server may clamp). Default applied if 0.
+  // Maximum number of holds to return. Defaults to 100 when omitted; maximum is
+  // 1000.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
   // true=newest first; false=oldest first.
   bool reversed = 3;
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to account, sub-account scope, and sort direction.
+  string page_token = 4 [(buf.validate.field).string.max_len = 512];
 }
 
 // Hold row with compact integers and client-side resolution.
@@ -234,6 +242,8 @@ message HoldRow {
 
 message ListHoldsResponse {
   repeated HoldRow holds = 1;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
 }
 
 message GetHealthRequest {}

@@ -58,13 +58,14 @@ message HeatmapTimeRange {
   google.protobuf.Timestamp end_time = 2;
 }
 
-// HeatmapCursor selects historical buckets older than from_ts_sec (exclusive).
-message HeatmapCursor {
-  uint64 from_ts_sec = 1 [(buf.validate.field).uint64.gt = 0];
-}
-
 // GetOrderbookHeatmapRequest fetches historical heatmap buckets.
 message GetOrderbookHeatmapRequest {
+  option (buf.validate.message).cel = {
+    id: "get_orderbook_heatmap.anchor_required"
+    message: "time_range or page_token is required"
+    expression: "has(this.time_range) || this.page_token != ''"
+  };
+
   // Engine symbol id.
   uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
   // Heatmap bucket interval.
@@ -78,14 +79,13 @@ message GetOrderbookHeatmapRequest {
     not_in: [0]
   }];
 
-  // Query mode:
-  // - time_range: absolute range query
-  // - cursor: keyset pagination (older-than)
-  oneof mode {
-    option (buf.validate.oneof).required = true;
-    HeatmapTimeRange time_range = 4;
-    HeatmapCursor cursor = 5;
-  }
+  // Absolute time range for the first page. Reuse the same request filters and
+  // pass page_token from the prior response to continue older buckets.
+  HeatmapTimeRange time_range = 4;
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to symbol, interval, depth, quantity mode, and the original time
+  // range.
+  string page_token = 5 [(buf.validate.field).string.max_len = 512];
 
   // Maximum number of delta buckets returned (min 1, max 20000).
   // This limit counts only `chain.deltas`; `chain.base_keyframe` is not counted.
@@ -211,10 +211,8 @@ message GetOrderbookHeatmapResponse {
   uint64 live_from_book_seq_end = 6;
   // True when live_from_book_seq_end is available and can be used as a realtime continuation anchor.
   bool has_live_anchor = 7;
-  // True when more older buckets are available through cursor pagination.
-  bool has_more = 8;
-  // Exclusive cursor for older-than pagination in cursor mode, in seconds since epoch (UTC). Zero means no next page.
-  uint64 next_ts_sec = 9;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 8 [(buf.validate.field).string.max_len = 512];
   // Server response time in seconds since epoch (UTC).
   uint64 server_time_sec = 10;
   // Quantity mode used for all qty_scaled values in the response.
