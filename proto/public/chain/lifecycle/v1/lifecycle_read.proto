@@ -86,16 +86,29 @@ enum ListScope {
   LIST_TERMINAL_ONLY = 3;
 }
 
-// Sort selects lifecycle list ordering.
+// Sort selects lifecycle list direction.
 enum Sort {
   // Sort order was not specified; server defaults apply.
   SORT_UNSPECIFIED = 0;
 
-  // Return newest lifecycle activity first.
+  // Return newest rows first for the selected ordering timestamp.
   SORT_NEWEST = 1;
 
-  // Return oldest lifecycle activity first.
+  // Return oldest rows first for the selected ordering timestamp.
   SORT_OLDEST = 2;
+}
+
+// ListOrderBy selects which timestamp ListFlows uses for ordering and cursors.
+enum ListOrderBy {
+  // Ordering timestamp was not specified; server defaults to last activity.
+  ORDER_BY_UNSPECIFIED = 0;
+
+  // Order by the latest lifecycle activity timestamp.
+  ORDER_BY_LAST_ACTIVITY = 1;
+
+  // Order by the first observed business timestamp. Rows without a start time
+  // use their terminal timestamp when available.
+  ORDER_BY_STARTED_AT = 2;
 }
 
 // ListFlowsRequest filters and paginates lifecycle flow summaries.
@@ -104,7 +117,7 @@ message ListFlowsRequest {
   // 500.
   uint32 limit = 1 [(buf.validate.field).uint32.lte = 500];
 
-  // Sort direction for lifecycle activity time.
+  // Sort direction for the selected ordering timestamp.
   Sort sort = 2 [(buf.validate.field).enum.defined_only = true];
 
   // Optional product flow kind filter. Unspecified includes all kinds.
@@ -165,15 +178,18 @@ message ListFlowsRequest {
   }];
 
   // Opaque keyset cursor returned by a previous response. The cursor is
-  // exclusive and bound to the caller, filters, account selector, and sort
-  // direction.
+  // exclusive and bound to the caller, filters, account selector, sort
+  // direction, and ordering timestamp.
   string page_token = 12 [(buf.validate.field).string.max_len = 512];
+
+  // Timestamp used for ordering and pagination. Defaults to last activity.
+  ListOrderBy order_by = 13 [(buf.validate.field).enum.defined_only = true];
 }
 
 // ListFlowsResponse returns one page of flow summaries.
 message ListFlowsResponse {
-  // Flow summaries ordered by last activity time, then public flow id. Sort
-  // order is controlled by the request `sort` field.
+  // Flow summaries ordered by the selected timestamp, then public flow id. Sort
+  // direction is controlled by the request `sort` field.
   repeated FlowSummaryView flows = 1;
 
   // Opaque cursor for the next page. Empty when no more results exist.
@@ -220,7 +236,7 @@ message FlowTxMatchView {
   // Polyester Chain id associated with this flow.
   uint32 polyester_chain_id = 13;
 
-  // Principal or visible amount for this flow in 18-decimal asset units.
+  // Gross principal amount for this flow in 18-decimal asset units.
   polyester.type.v1.U128 amount_e18 = 14;
 
   // Source address to show for this flow.
@@ -314,10 +330,9 @@ message FlowSummaryView {
   // Polyester Chain id associated with this flow when known.
   uint32 polyester_chain_id = 8;
 
-  // Principal or settled amount for the flow in 18-decimal asset units. For
-  // withdrawals this is the gross amount debited from ledger; bridge fulfillment
-  // steps may show the net external amount after request_fee. For deposits this
-  // may be the net amount credited to ledger after chain fees.
+  // Gross principal amount for the flow in 18-decimal asset units. Request fees
+  // are exposed separately in request_fee. Specific fulfillment steps may carry
+  // a net movement amount when the step represents external delivery.
   polyester.type.v1.U128 amount_e18 = 9;
 
   // Request-scoped fee details when a fee applies and should be visible for the
@@ -437,7 +452,8 @@ message FlowStepView {
   // Polyester Chain id associated with this step when known.
   uint32 polyester_chain_id = 8;
 
-  // Amount represented by this step in 18-decimal asset units.
+  // Amount represented by this step in 18-decimal asset units. Steps may carry
+  // the actual net movement amount when fees have already been taken.
   polyester.type.v1.U128 amount_e18 = 9;
 
   // Request-scoped fee details when a fee applies to this step.
@@ -541,6 +557,7 @@ message FlowStepActivityView {
   uint32 required_rejections = 13;
 
   // Amount posted by the underlying movement represented by this activity.
+  // This may be a net movement amount for fee-bearing fulfillment activity.
   polyester.type.v1.U128 amount_e18 = 14;
 
   // Ledger transfer identifier for ledger-sourced settlement activities.
