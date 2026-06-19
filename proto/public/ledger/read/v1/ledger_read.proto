@@ -24,7 +24,8 @@ option (gnostic.openapi.v3.document) = {
 //
 // Canonical amounts are represented as integer quantities:
 // - IDs: fixed64/uint32
-// - Amounts: U128 (hi/lo) base units or scaled integer vectors (e.g. *_q)
+// - Ledger amounts: U128 (hi/lo) at fixed 18-decimal scale
+// - Chart series: scaled integer vectors (e.g. *_q) with field-specific scales
 //
 // REST JSON responses render
 // human-friendly decimal strings without duplicating REST message types here.
@@ -40,14 +41,16 @@ message GetBalancesRequest {
 // Fixed-size representation for balances (for Protobuf/WS clients).
 // Uses common U128 messages for amounts to keep schema tidy and consistent.
 message AssetBalance {
-  uint32 asset_id = 1; // public asset id (client resolves name/scale)
-  // Trading/trading balance for this asset (u128 base units).
+  // Public unified asset id. Resolve symbol from SpotConfig; U128 amounts in
+  // this message always use fixed 18-decimal ledger scale.
+  uint32 asset_id = 1;
+  // Trading balance at fixed 18-decimal ledger scale.
   polyester.type.v1.U128 trading = 2;
-  // Funding balance for this asset (u128 base units).
+  // Funding balance at fixed 18-decimal ledger scale.
   polyester.type.v1.U128 funding = 3;
-  // Reserved amount in the trading bucket (u128 base units).
+  // Reserved amount in the trading bucket at fixed 18-decimal ledger scale.
   polyester.type.v1.U128 reserved = 4;
-  // Available amount in the trading bucket (u128 base units).
+  // Available amount in the trading bucket at fixed 18-decimal ledger scale.
   // This is computed as max(trading - reserved, 0).
   polyester.type.v1.U128 available = 5;
 }
@@ -58,7 +61,7 @@ message GetBalancesResponse {
 
 // Supported history windows for balance charts.
 enum BalanceRange {
-  BALANCE_RANGE_UNSPECIFIED = 0;
+  RANGE_UNSPECIFIED = 0;
   DAY_1 = 1; // 1 day
   DAY_7 = 2; // 7 days
   DAY_30 = 3; // 30 days
@@ -85,9 +88,11 @@ message GetBalanceHistoryRequest {
 // Columnar balance series payload (scaled integers).
 // REST renders decimal strings from these values.
 message BalanceSeries {
-  uint32 asset_id = 1; // public asset id
+  uint32 asset_id = 1; // public unified asset id
   ledger.v1.AccountCode account_code = 2; // account bucket
-  // balance in asset units scaled by 1e7 (7 decimals). Aligned 1:1 with implicit timestamps.
+  // Chart balance in asset units scaled by 1e7 (7 decimals).
+  // Values are downscaled from 18-decimal ledger balances for compact charting
+  // and align 1:1 with implicit timestamps.
   repeated uint64 balance_q = 3;
 }
 
@@ -144,7 +149,8 @@ message EquitySeries {
     AccountGrouping account = 1; // set when group_by = ACCOUNT
     AssetGrouping asset = 3; // set when group_by = ASSET
   }
-  // Equity in quote currency scaled by 1e4 (4 decimals). Aligned 1:1 with timestamps.
+  // Equity in quote currency (USDT) scaled by 1e4 (4 decimals).
+  // Values align 1:1 with timestamps.
   repeated sint64 equity_q = 2;
 }
 
@@ -157,7 +163,7 @@ message GetEquityHistorySeriesResponse {
   string quote_asset = 6;
   uint32 points = 7;
   repeated EquitySeries series = 8;
-  // BTC price in USDT at each timestamp, scaled by 1e6 (price ticks).
+  // BTC-USDT close price at each timestamp, scaled by 1e6 (same as price_ticks).
   // Enables client-side conversion to BTC denomination without refetch.
   repeated int64 btc_prices_q = 10;
 }
@@ -166,8 +172,8 @@ message ListTransfersRequest {
   // Guardrails: timestamp range must be ordered when both are set.
   option (buf.validate.message).cel = {
     id: "list_transfers.timestamp_range_valid"
-    message: "timestamp_max must be >= timestamp_min when both are set"
-    expression: "this.timestamp_min == 0u || this.timestamp_max == 0u || this.timestamp_max >= this.timestamp_min"
+    message: "ts_max_us must be >= ts_min_us when both are set"
+    expression: "this.ts_min_us == 0u || this.ts_max_us == 0u || this.ts_max_us >= this.ts_min_us"
   };
   // Optional sub-account to scope transfers to. If omitted, transfers are
   // listed for the authenticated root account derived from the JWT or API key.
@@ -180,10 +186,10 @@ message ListTransfersRequest {
   bool reversed = 3;
   // Optional lower transfer timestamp bound in microseconds since epoch (UTC),
   // inclusive.
-  uint64 timestamp_min = 4;
+  uint64 ts_min_us = 4;
   // Optional upper transfer timestamp bound in microseconds since epoch (UTC),
   // inclusive.
-  uint64 timestamp_max = 5;
+  uint64 ts_max_us = 5;
   // Optional filter by transfer reason.
   ledger.v1.TransferCode transfer_code = 6;
   // Optional filter by asset ledger.
@@ -229,12 +235,16 @@ message TransferSide {
 
 // Transfer row with compact integers and client-side resolution.
 message TransferRow {
-  uint32 asset_id = 1; // public asset id; client resolves symbol/scale
-  polyester.type.v1.U128 amount = 2; // base units (u128)
+  // Public unified asset id. Resolve symbol from SpotConfig; U128 amounts in
+  // this row always use fixed 18-decimal ledger scale.
+  uint32 asset_id = 1;
+  // Transfer amount at fixed 18-decimal ledger scale.
+  polyester.type.v1.U128 amount_e18 = 2;
   ledger.v1.TransferCode transfer_code = 3; // product reason for this transfer
   ledger.v1.AccountCode account_code = 4; // account bucket affected by this transfer
-  uint64 timestamp = 5; // transfer timestamp in microseconds since epoch (UTC)
-  polyester.type.v1.U128 balance_after = 9; // post-transfer balance (u128)
+  uint64 ts_us = 5; // transfer timestamp in microseconds since epoch (UTC)
+  // Post-transfer balance at fixed 18-decimal ledger scale.
+  polyester.type.v1.U128 balance_after_e18 = 9;
   bool is_debit = 10; // true for debit legs, false for credit legs
   // Correlation id derived from ME matchId for grouping related legs (0 when N/A).
   uint64 link_id = 11;
@@ -272,8 +282,10 @@ message ListHoldsRequest {
 // Hold row with compact integers and client-side resolution.
 message HoldRow {
   fixed64 hold_id = 1; // pending transfer id (numeric)
-  polyester.type.v1.U128 amount_reserved = 2; // base units (u128)
-  uint32 asset_id = 3; // public asset id
+  // Reserved amount at fixed 18-decimal ledger scale.
+  polyester.type.v1.U128 amount_reserved_e18 = 2;
+  // Public unified asset id.
+  uint32 asset_id = 3;
   uint64 expires_at_ns = 4;
 }
 

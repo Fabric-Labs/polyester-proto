@@ -45,33 +45,33 @@ enum TriggerType {
 // TriggerStatus represents the lifecycle state of a trigger.
 enum TriggerStatus {
   // Trigger status was not provided.
-  TRIGGER_STATUS_UNSPECIFIED = 0;
+  STATUS_UNSPECIFIED = 0;
   // Trigger was created and is pending activation.
-  CREATED = 1;
+  STATUS_CREATED = 1;
   // Trigger admitted and actively evaluating conditions.
-  ARMED = 2;
+  STATUS_ARMED = 2;
   // Trigger is actively executing (for example, TWAP slices in progress).
-  RUNNING = 3;
+  STATUS_RUNNING = 3;
   // Trigger completed successfully (all child orders placed/filled).
-  COMPLETED = 4;
+  STATUS_COMPLETED = 4;
   // Trigger was canceled by user.
-  CANCELLED = 5;
+  STATUS_CANCELED = 5;
   // Trigger failed (for example, reservation failure, child order rejection).
-  FAILED = 6;
+  STATUS_FAILED = 6;
   // Trigger is paused (user-initiated, can be resumed).
-  PAUSED = 7;
+  STATUS_PAUSED = 7;
 }
 
 // TriggerEventType defines append-only trigger lifecycle events for history.
 enum TriggerEventType {
   // Trigger event type was not provided.
-  TRIGGER_EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_UNSPECIFIED = 0;
   // Trigger fired and may have created a child order.
-  FIRED = 1;
+  EVENT_FIRED = 1;
   // Trigger was canceled.
-  CANCELED = 2;
+  EVENT_CANCELED = 2;
   // Trigger configuration or lifecycle state was updated.
-  UPDATED = 3;
+  EVENT_UPDATED = 3;
 }
 
 // LadderDistribution defines how quantity is distributed across ladder levels.
@@ -142,7 +142,8 @@ message CreateTriggerRequest {
 
   // --- Trigger Condition (for STOP_LOSS, TAKE_PROFIT, TRAILING_STOP) ---
 
-  // Trigger price in ticks. Required for STOP_LOSS/TAKE_PROFIT.
+  // Trigger price in quote units scaled by 1e6. Required for
+  // STOP_LOSS/TAKE_PROFIT.
   int64 trigger_price_ticks = 10;
   // Price source for trigger evaluation. Defaults to LAST_PRICE.
   orders.v1.TriggerPriceSource trigger_price_source = 11 [(buf.validate.field).enum.defined_only = true];
@@ -161,10 +162,11 @@ message CreateTriggerRequest {
   orders.v1.OrderType order_type = 21 [(buf.validate.field).enum.defined_only = true];
   // Time-in-force for the child order. Defaults to GTC for LIMIT, IOC for
   // MARKET.
-  orders.v1.TIF tif = 22 [(buf.validate.field).enum.defined_only = true];
-  // Quantity in base asset scale units. Required.
+  orders.v1.TimeInForce time_in_force = 22 [(buf.validate.field).enum.defined_only = true];
+  // Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
+  // Required.
   int64 qty_scaled = 23 [(buf.validate.field).int64.gt = 0];
-  // Limit price in ticks for LIMIT child orders.
+  // Limit price in quote units scaled by 1e6 for LIMIT child orders.
   int64 limit_price_ticks = 24;
   // Fee source selection for BUY child orders. SELL child orders always pay in
   // QUOTE.
@@ -174,7 +176,7 @@ message CreateTriggerRequest {
   // Self-trade prevention mode for child orders.
   //
   // When omitted (UNSPECIFIED), defaults to EXPIRE_MAKER.
-  orders.v1.STPMode stp_mode = 26 [(buf.validate.field).enum.defined_only = true];
+  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 26 [(buf.validate.field).enum.defined_only = true];
   // If true, child LIMIT orders are post-only (rejected if they would cross).
   bool post_only = 27;
 
@@ -182,7 +184,7 @@ message CreateTriggerRequest {
 
   // Trailing distance. Exactly one of these should be set for TRAILING_STOP.
   oneof trailing_distance {
-    // Trailing distance in absolute ticks.
+    // Trailing distance as a price delta in 1e-6 quote-unit ticks.
     int64 trailing_distance_ticks = 30 [(buf.validate.field).int64.gt = 0];
     // Trailing distance in basis points (1 bp = 0.01%).
     int32 trailing_distance_bps = 31 [(buf.validate.field).int32 = {
@@ -191,7 +193,7 @@ message CreateTriggerRequest {
     }];
   }
   // Optional activation price: trailing only starts after this price is
-  // reached.
+  // reached. Expressed in quote units scaled by 1e6.
   int64 activation_price_ticks = 32;
   // Optional price protection. If set, when the trailing stop triggers we place
   // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
@@ -199,7 +201,7 @@ message CreateTriggerRequest {
   //
   // Exactly one of these should be set (or neither for unprotected behavior).
   oneof max_slippage {
-    // Maximum allowed slippage in absolute ticks.
+    // Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.
     int32 max_slippage_ticks = 33 [(buf.validate.field).int32.gt = 0];
     // Maximum allowed slippage in basis points (1 bp = 0.01%).
     int32 max_slippage_bps = 34 [(buf.validate.field).int32 = {
@@ -217,9 +219,9 @@ message CreateTriggerRequest {
 
   // --- Ladder/Scaled Specific ---
 
-  // Minimum price in ticks for the ladder range.
+  // Minimum price in quote units scaled by 1e6 for the ladder range.
   int64 ladder_price_min_ticks = 50;
-  // Maximum price in ticks for the ladder range.
+  // Maximum price in quote units scaled by 1e6 for the ladder range.
   int64 ladder_price_max_ticks = 51;
   // Number of price levels in the ladder.
   // Required for LADDER; valid range is 2..100.
@@ -345,8 +347,9 @@ message TriggerEvent {
   int32 child_seq = 11;
   // Child order ID created by this event, if any.
   fixed64 child_order_id = 12;
-  // Price that caused the trigger to fire, in ticks. Zero when not applicable.
-  int64 fire_px_ticks = 13;
+  // Price that caused the trigger to fire, in quote units scaled by 1e6. Zero
+  // when not applicable.
+  int64 fire_price_ticks = 13;
 
   // Optional cancel reason.
   string reason = 20;
@@ -377,7 +380,7 @@ message CancelTriggerRequest {
 message CancelTriggerResponse {
   // Trigger ID that was canceled.
   fixed64 trigger_id = 1;
-  // Final status (should be CANCELLED).
+  // Final status (should be STATUS_CANCELED).
   TriggerStatus status = 2;
   // Server timestamp.
   google.protobuf.Timestamp ts = 3;
@@ -398,23 +401,23 @@ message ModifyTriggerRequest {
 
   // Patch fields for safe price, trailing-distance, and slippage edits.
   // For stop/take-profit:
-  // Updated trigger price in ticks.
+  // Updated trigger price in quote units scaled by 1e6.
   optional int64 trigger_price_ticks = 10;
-  // Updated limit price in ticks for LIMIT child orders.
+  // Updated limit price in quote units scaled by 1e6 for LIMIT child orders.
   optional int64 limit_price_ticks = 11;
 
   // For trailing stop:
   oneof trailing_distance {
-    // Updated trailing distance in absolute ticks.
+    // Updated trailing distance as a price delta in 1e-6 quote-unit ticks.
     int64 trailing_distance_ticks = 12;
     // Updated trailing distance in basis points (1 bp = 0.01%).
     int32 trailing_distance_bps = 13;
   }
-  // Updated activation price in ticks.
+  // Updated activation price in quote units scaled by 1e6.
   optional int64 activation_price_ticks = 14;
   // Optional price protection.
   oneof max_slippage {
-    // Updated maximum allowed slippage in absolute ticks.
+    // Updated maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.
     int32 max_slippage_ticks = 15;
     // Updated maximum allowed slippage in basis points (1 bp = 0.01%).
     int32 max_slippage_bps = 16;
@@ -479,7 +482,7 @@ message ResumeTriggerResponse {
 
 // StopDetails contains configuration for STOP_LOSS and TAKE_PROFIT triggers.
 message StopDetails {
-  // Trigger threshold price in ticks (6 decimals).
+  // Trigger threshold price in quote units scaled by 1e6.
   int64 trigger_price_ticks = 1;
   // Price source used for trigger evaluation.
   orders.v1.TriggerPriceSource trigger_price_source = 2;
@@ -490,18 +493,18 @@ message StopDetails {
 // TrailingDetails contains configuration and runtime state for TRAILING_STOP
 // triggers.
 message TrailingDetails {
-  // Trailing distance in absolute ticks (6 decimals).
+  // Trailing distance as a price delta in 1e-6 quote-unit ticks.
   int64 trailing_distance_ticks = 1;
   // Optional activation price: trailing only starts after this price is
-  // reached.
+  // reached. Expressed in quote units scaled by 1e6.
   int64 activation_price_ticks = 2;
-  // Current peak price in ticks for sell trailing stops.
+  // Current peak price in quote units scaled by 1e6 for sell trailing stops.
   int64 peak_price_ticks = 3;
-  // Current trough price in ticks for buy trailing stops.
+  // Current trough price in quote units scaled by 1e6 for buy trailing stops.
   int64 trough_price_ticks = 4;
   // Trailing distance in basis points (1 bp = 0.01%).
   int32 trailing_distance_bps = 5;
-  // Optional maximum allowed slippage in absolute ticks.
+  // Optional maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.
   int32 max_slippage_ticks = 6;
   // Optional maximum allowed slippage in basis points (1 bp = 0.01%).
   int32 max_slippage_bps = 7;
@@ -520,15 +523,16 @@ message TwapDetails {
   int32 slice_idx = 4;
   // Total number of planned slices.
   int32 slice_count = 5;
-  // Cumulative executed quantity in scaled base units.
+  // Cumulative executed quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig.
   int64 executed_qty_scaled = 6;
 }
 
 // LadderDetails contains configuration for LADDER triggers.
 message LadderDetails {
-  // Minimum price in ticks for the ladder range (6 decimals).
+  // Minimum price in quote units scaled by 1e6 for the ladder range.
   int64 ladder_price_min_ticks = 1;
-  // Maximum price in ticks for the ladder range (6 decimals).
+  // Maximum price in quote units scaled by 1e6 for the ladder range.
   int64 ladder_price_max_ticks = 2;
   // Number of price levels in the ladder.
   int32 ladder_levels = 3;
@@ -558,15 +562,17 @@ message Trigger {
   // Child order type.
   orders.v1.OrderType order_type = 21;
   // Child order time-in-force policy.
-  orders.v1.TIF tif = 22;
-  // Child order quantity in scaled base units.
+  orders.v1.TimeInForce time_in_force = 22;
+  // Child order quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig.
   int64 qty_scaled = 23;
-  // Child LIMIT order price in ticks. Zero for MARKET child orders.
+  // Child LIMIT order price in quote units scaled by 1e6. Zero for MARKET
+  // child orders.
   int64 limit_price_ticks = 24;
   // Fee source for BUY child orders.
   orders.v1.FeeSource fee_source = 25;
   // Self-trade prevention mode for child orders.
-  orders.v1.STPMode stp_mode = 26;
+  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 26;
   // True if child LIMIT orders are post-only.
   bool post_only = 27;
 

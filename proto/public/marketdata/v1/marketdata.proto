@@ -41,7 +41,7 @@ enum Timeframe {
 
 // ---------------------------------------------------------------------------
 // GetTrades: Binary (protobuf) request/response with scaled integers.
-// Any REST surface should expose decimal strings via generated DTO conversion.
+// REST surfaces expose decimal strings via DTO conversion.
 // ---------------------------------------------------------------------------
 
 // GetTradesRequest selects recent public trades for one spot market.
@@ -121,7 +121,7 @@ message GetTradesResponse {
 
 // ---------------------------------------------------------------------------
 // GetCandles: Binary (protobuf) request/response with scaled integers.
-// Any REST surface should expose decimal string responses via generated DTO conversion.
+// REST surfaces expose decimal string responses via DTO conversion.
 // ---------------------------------------------------------------------------
 
 // GetCandlesRequest selects a spot market candle series.
@@ -269,7 +269,7 @@ message GetCandlesResponse {
 //
 // Ordering: values are returned oldest-first (ascending ts_sec).
 message GetCandlesColumnsResponse {
-  // Engine symbol id.
+  // Numeric spot market identifier.
   uint32 symbol_id = 1;
 
   // Timeframe of this series.
@@ -278,20 +278,31 @@ message GetCandlesColumnsResponse {
   // Candle bucket start timestamps (seconds since epoch, UTC).
   repeated uint64 ts_sec = 3;
 
-  // OHLCV values in engine tick/scale units.
+  // Opening prices in quote units scaled by 1e6.
   repeated int64 open = 4;
+  // Highest traded prices in quote units scaled by 1e6.
   repeated int64 high = 5;
+  // Lowest traded prices in quote units scaled by 1e6.
   repeated int64 low = 6;
+  // Closing prices in quote units scaled by 1e6.
   repeated int64 close = 7;
+  // Traded base-asset quantities scaled by the pair's base_quantity_scale from
+  // GetSpotConfig.
   repeated int64 volume = 8;
 
   // Reference candle series in columnar form (same ordering as ts_sec: oldest-first).
   // Only populated when request.include_reference=true.
   repeated uint64 reference_ts_sec = 9;
+  // Reference opening prices in quote units scaled by 1e6.
   repeated int64 reference_open = 10;
+  // Reference high prices in quote units scaled by 1e6.
   repeated int64 reference_high = 11;
+  // Reference low prices in quote units scaled by 1e6.
   repeated int64 reference_low = 12;
+  // Reference closing prices in quote units scaled by 1e6.
   repeated int64 reference_close = 13;
+  // Reference traded base-asset quantities scaled by the pair's
+  // base_quantity_scale from GetSpotConfig.
   repeated int64 reference_volume = 14;
   // Opaque cursor for the next page. Empty when no more results exist.
   string next_page_token = 15 [(buf.validate.field).string.max_len = 512];
@@ -302,16 +313,16 @@ message GetCandlesColumnsResponse {
 // ---------------------------------------------------------------------------
 
 // Candle represents a single OHLCV bucket for a symbol and timeframe.
-// Values are expressed in the same tick/scale units as the matching engine.
 message Candle {
-  uint32 symbol_id = 1; // engine symbol id
+  uint32 symbol_id = 1; // numeric spot market identifier
   Timeframe timeframe = 2; // timeframe of this candle
   uint64 ts_sec = 3; // bucket start timestamp (seconds since epoch, UTC)
-  int64 open = 4; // open
-  int64 high = 5; // high
-  int64 low = 6; // low
-  int64 close = 7; // close
-  // volume in base units, scaled by the base asset quantity_scale (see GetSpotConfig).
+  int64 open = 4; // opening price in quote units scaled by 1e6
+  int64 high = 5; // highest traded price in quote units scaled by 1e6
+  int64 low = 6; // lowest traded price in quote units scaled by 1e6
+  int64 close = 7; // closing price in quote units scaled by 1e6
+  // Traded base-asset quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig.
   int64 volume = 8;
 }
 
@@ -448,7 +459,8 @@ service MarketDataService {
   }
 
   // GetCandlesColumns returns OHLCV candles in a columnar representation optimized for charting.
-  // This method is intended for ConnectRPC clients (binary protobuf) and returns raw tick/scale ints.
+  // This method is intended for ConnectRPC clients and returns scaled integers:
+  // OHLC prices use 1e6 quote-unit scale, and volumes use base_quantity_scale.
   rpc GetCandlesColumns(GetCandlesColumnsRequest) returns (GetCandlesColumnsResponse) {
     option (polyester.api.public) = true;
     option (polyester.api.hidden) = true;

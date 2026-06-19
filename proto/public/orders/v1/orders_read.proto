@@ -5,13 +5,14 @@ package orders.v1;
 import "buf/validate/validate.proto";
 import "ledger/v1/catalog.proto";
 import "orders/v1/orders.proto";
+import "polyester/type/v1/u128.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
 
 // Read-only Orders API (open orders and historical orders).
 // Separate from write surface to allow independent evolution/versioning.
-// Shared enums (Side, OrderType, TIF, STPMode, FeeSource) are imported from
-// orders.proto.
+// Shared enums (Side, OrderType, TimeInForce, SelfTradePreventionMode,
+// FeeSource) are imported from orders.proto.
 
 // OrderStatus is specific to the read API (write API uses simple "accepted" status string).
 enum OrderStatus {
@@ -177,22 +178,26 @@ message Order {
   // Order type.
   OrderType order_type = 7;
   // Time-in-force policy.
-  TIF tif = 8;
+  TimeInForce time_in_force = 8;
   // Self-trade prevention mode.
-  STPMode stp_mode = 9;
-  // Fee source used for buy fills.
+  SelfTradePreventionMode self_trade_prevention_mode = 9;
+  // Fee source selected for BUY fills. This also determines the decode scale
+  // for fee_scaled and referral_share_scaled on user trade rows.
   FeeSource fee_source = 10;
   // True if the order was submitted as post-only (maker-only).
   bool post_only = 11;
-  // Original order quantity (scaled base units).
-  int64 orig_qty = 12;
-  // Cumulative filled quantity (scaled base units).
-  int64 cum_qty = 13;
-  // Remaining working quantity (scaled base units). Zero for terminal orders.
-  int64 leaves_qty = 20;
-  // Average fill price in ticks (0 if no fills).
-  int64 avg_px_ticks = 14;
-  // Limit price in ticks (0 for MARKET).
+  // Original order quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig for symbol_id.
+  int64 orig_qty_scaled = 12;
+  // Cumulative filled quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig for symbol_id.
+  int64 cum_qty_scaled = 13;
+  // Remaining working quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig for symbol_id. Zero for terminal orders.
+  int64 leaves_qty_scaled = 20;
+  // Average fill price in quote units scaled by 1e6. Zero if no fills.
+  int64 avg_price_ticks = 14;
+  // Limit price in quote units scaled by 1e6. Zero for MARKET orders.
   int64 price_ticks = 15;
   // Creation timestamp in nanoseconds since epoch (UTC).
   uint64 created_ts_ns = 16;
@@ -209,9 +214,10 @@ message Order {
   AttachedRisk attached_risk = 21;
   // Runtime lineage metadata (why the order exists and what generated it).
   OrderOrigin origin = 22;
-  // Optional client-side reference price used for MARKET slippage protection.
+  // Optional client-side reference price used for MARKET slippage protection,
+  // in quote units scaled by 1e6.
   int64 market_client_ref_price_ticks = 23;
-  // Optional MARKET max slippage in absolute ticks.
+  // Optional MARKET max slippage as a price delta in 1e-6 quote-unit ticks.
   int32 market_max_slippage_ticks = 24;
   // Optional MARKET max slippage in basis points (1 bp = 0.01%).
   int32 market_max_slippage_bps = 25;
@@ -229,15 +235,20 @@ message UserTrade {
   Side side = 5 [(buf.validate.field).enum.defined_only = true];
   // True if this fill was maker-side.
   bool is_maker = 6;
-  // Execution price in ticks.
+  // Execution price in quote units scaled by 1e6.
   int64 price_ticks = 7;
-  // Executed quantity in scaled base units.
+  // Executed quantity scaled by the pair's base_quantity_scale from
+  // GetSpotConfig for symbol_id.
   int64 qty_scaled = 8;
-  // Fee amount in scaled units.
+  // Fee amount in the charged asset's scale. Use quote_quantity_scale when
+  // fee_source is QUOTE or UNSPECIFIED; use base_quantity_scale when fee_source
+  // is RECEIVED.
   int64 fee_scaled = 9;
-  // Fee source charged for this fill.
+  // Fee source charged for this fill. This determines how to decode fee_scaled
+  // and referral_share_scaled.
   FeeSource fee_source = 10;
-  // Referral share amount in scaled units.
+  // Referral share amount in the same denomination and scale as fee_scaled for
+  // this fill.
   int64 referral_share_scaled = 12;
   // Execution timestamp in nanoseconds since epoch.
   uint64 ts_ns = 13;
@@ -249,10 +260,8 @@ message OrderTransfer {
   uint64 match_id = 1;
   // Asset identifier for the transferred asset.
   uint32 asset_id = 2;
-  // Transfer amount, high 64 bits of an unsigned 128-bit integer.
-  uint64 amount_hi = 3;
-  // Transfer amount, low 64 bits of an unsigned 128-bit integer.
-  uint64 amount_lo = 4;
+  // Transfer amount at fixed 18-decimal ledger scale.
+  polyester.type.v1.U128 amount_e18 = 3;
   // True when the transfer debits the account; false when it credits the account.
   bool is_debit = 5;
   // Product reason for this transfer leg.
@@ -260,7 +269,7 @@ message OrderTransfer {
   // Account bucket affected by this transfer leg.
   ledger.v1.AccountCode account_code = 7;
   // Transfer timestamp in nanoseconds since epoch (UTC).
-  uint64 timestamp = 8;
+  uint64 ts_ns = 8;
   // Transfer transaction identifier.
   string tx_id = 9;
 }
