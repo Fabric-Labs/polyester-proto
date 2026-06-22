@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package tradews.v1;
+
+import "orders/v1/orders.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/tradews/v1;tradewsv1";
+
+// ClientFrame is the protobuf write-websocket envelope. The payloads reuse the
+// public Orders API DTOs so protobuf clients do not learn a second order model.
+message ClientFrame {
+  // Monotonic per-connection client sequence number, starting at 1.
+  uint64 seq = 1;
+  // Client correlation token echoed in every server response.
+  string correlation_id = 2;
+
+  oneof payload {
+    // Liveness request that does not submit an order command.
+    PingRequest ping = 10;
+    // Create-order command using the public Orders API DTO.
+    orders.v1.CreateOrderRequest create_order = 11;
+    // Cancel-order command using the public Orders API DTO.
+    orders.v1.CancelOrderRequest cancel_order = 12;
+    // Modify-order command using the public Orders API DTO.
+    orders.v1.ModifyOrderRequest modify_order = 13;
+    // Cancel-all command using the public Orders API DTO.
+    orders.v1.CancelAllOrdersRequest cancel_all_orders = 14;
+  }
+}
+
+// PingRequest carries an opaque payload that is echoed by PongResponse.
+message PingRequest {
+  // Opaque client payload echoed by the server.
+  bytes payload = 1;
+}
+
+// ServerFrame is the protobuf write-websocket response envelope.
+message ServerFrame {
+  // Client sequence number copied from the accepted or rejected frame.
+  uint64 seq = 1;
+  // Client correlation token copied from the accepted or rejected frame.
+  string correlation_id = 2;
+
+  oneof payload {
+    // Liveness response for PingRequest.
+    PongResponse pong = 10;
+    // Successful command acknowledgement.
+    AckResponse ack = 11;
+    // Command-level reject with a stable machine-readable code.
+    CommandReject reject = 12;
+    // Server overload response when the session cannot admit more work.
+    OverloadResponse overload = 13;
+    // Terminal session-level response after which the server closes the stream.
+    TerminalSessionEvent terminal = 14;
+  }
+}
+
+// PongResponse echoes a PingRequest payload.
+message PongResponse {
+  // Opaque payload copied from PingRequest.
+  bytes payload = 1;
+}
+
+// AckResponse carries the command-specific public Orders API acknowledgement.
+message AckResponse {
+  oneof result {
+    // Accepted create-order response.
+    orders.v1.CreateOrderResponse create_order = 1;
+    // Accepted cancel-order response.
+    orders.v1.CancelOrderResponse cancel_order = 2;
+    // Accepted modify-order response.
+    orders.v1.ModifyOrderResponse modify_order = 3;
+    // Accepted cancel-all response.
+    orders.v1.CancelAllOrdersResponse cancel_all_orders = 4;
+  }
+}
+
+// CommandReject reports a command-level failure without closing the session.
+message CommandReject {
+  // Stable machine-readable reject code.
+  string code = 1;
+  // Client-safe diagnostic detail.
+  string detail = 2;
+}
+
+// OverloadResponse reports that the session exceeded server admission limits.
+message OverloadResponse {
+  // Stable machine-readable overload code.
+  string code = 1;
+  // Client-safe diagnostic detail.
+  string detail = 2;
+}
+
+// TerminalSessionEvent reports a terminal session condition.
+message TerminalSessionEvent {
+  // Stable machine-readable terminal code.
+  string code = 1;
+  // Client-safe diagnostic detail.
+  string detail = 2;
+}
