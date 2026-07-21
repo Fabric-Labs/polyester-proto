@@ -8,6 +8,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "ledger/read/v1/ledger_read.proto";
 
@@ -78,6 +79,8 @@ message Subaccount {
   // earlier is stale. Equal timestamps with different configuration indicate
   // an invariant failure.
   google.protobuf.Timestamp updated_at = 14;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 15;
 }
 
 // Request to list sub-accounts owned by or shared with the caller.
@@ -157,15 +160,10 @@ message CreateSubaccountResponse {
   uint32 smart_account_salt_nonce = 3;
 }
 
-// Request to update mutable display and status fields for a sub-account.
-message UpdateSubaccountRequest {
-  // Sub-account to update (opaque ID).
-  fixed64 subaccount_id = 1 [
-    (buf.validate.field).fixed64.gt = 0,
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // New label for the sub-account. If empty, the label is left unchanged.
-  string label = 2 [
+// SubaccountUpdateSpec contains mutable display and status configuration.
+message SubaccountUpdateSpec {
+  // Label for the sub-account. Empty clears the label when selected.
+  string label = 1 [
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).cel = {
       id: "label.no_angle_brackets"
@@ -174,16 +172,44 @@ message UpdateSubaccountRequest {
     },
     (buf.validate.field).string.example = "Treasury"
   ];
-  // New user-chosen icon/emoji for UI display. If empty, left unchanged.
-  string icon = 4 [(buf.validate.field).string.max_len = 32];
-  // New user-chosen color token for UI display. If empty, left unchanged. Tokens use lowercase letters, numbers, underscores, or hyphens.
-  string color = 5 [(buf.validate.field).string.max_len = 32];
-  // New status for the sub-account, such as "active" or "disabled". If empty, the status is left unchanged.
-  string status = 3 [(buf.validate.field).string.max_len = 32];
+  // User-chosen icon/emoji for UI display. Empty clears the icon when selected.
+  string icon = 2 [(buf.validate.field).string.max_len = 32];
+  // User-chosen color token for UI display. Empty clears the color when selected.
+  string color = 3 [(buf.validate.field).string.max_len = 32];
+  // Status for the sub-account, such as "active" or "disabled".
+  string status = 4 [(buf.validate.field).string.max_len = 32];
 }
 
-// Empty response returned after updating a sub-account.
-message UpdateSubaccountResponse {}
+// Request to change selected mutable fields for a sub-account.
+message UpdateSubaccountRequest {
+  // Sub-account to update (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Candidate values for fields selected by update_mask.
+  SubaccountUpdateSpec subaccount = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Mutable fields to apply. Paths are relative to subaccount. The mask is
+  // required, must be non-empty, and cannot contain "*".
+  google.protobuf.FieldMask update_mask = 3 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Revision returned by the latest successful read.
+  uint64 expected_revision = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Response returned after updating a sub-account.
+message UpdateSubaccountResponse {
+  // Sub-account after applying the update.
+  Subaccount subaccount = 1;
+}
 
 // Request to update the delegated-member MFA requirement for a sub-account.
 message SetSubaccountMemberMFARequirementRequest {

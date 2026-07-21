@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
@@ -207,6 +208,8 @@ message SubaccountPolicyView {
   google.protobuf.Timestamp created_at = 20;
   // Last update time in UTC.
   google.protobuf.Timestamp updated_at = 21;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 30;
 }
 
 // ListSubaccountPoliciesRequest lists the finite set of sub-account policies
@@ -240,9 +243,8 @@ message GetSubaccountPolicyResponse {
   SubaccountPolicyView policy = 1;
 }
 
-// CreateSubaccountPolicyRequest defines a new sub-account policy template, with
-// an optional attach step for one target sub-account.
-message CreateSubaccountPolicyRequest {
+// SubaccountPolicySpec contains the mutable configuration of a sub-account policy.
+message SubaccountPolicySpec {
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
@@ -264,19 +266,13 @@ message CreateSubaccountPolicyRequest {
     expression: "this.perp_markets.map(m, m.symbol).unique()"
   };
 
-  // Human-readable policy name. Required; 1 to 64 characters.
+  // Human-readable policy name. Create requires a non-empty value; update
+  // validates it after merging fields selected by update_mask.
   string name = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 64,
-    (google.api.field_behavior) = REQUIRED
+    (buf.validate.field).string.max_len = 64
   ];
   // Optional policy description for dashboards and audits. Maximum 256 characters.
   string description = 2 [(buf.validate.field).string.max_len = 256];
-
-  // Optional: if set, the created policy will be immediately attached to this
-  // sub-account (opaque ID) in the same request. Useful for "create
-  // policy for this sub-account" flows. Omit to create reusable templates.
-  optional fixed64 subaccount_id = 9;
 
   // Allowed spot markets for this policy.
   repeated SpotMarketRule spot_markets = 3;
@@ -354,122 +350,49 @@ message CreateSubaccountPolicyRequest {
   google.protobuf.Timestamp expires_at = 27;
 }
 
+// CreateSubaccountPolicyRequest defines a new sub-account policy template, with
+// an optional attach step for one target sub-account.
+message CreateSubaccountPolicyRequest {
+  // Complete mutable policy configuration.
+  SubaccountPolicySpec policy = 1 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Optional target sub-account to attach atomically after creation.
+  optional fixed64 subaccount_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
 // CreateSubaccountPolicyResponse returns the created sub-account policy.
 message CreateSubaccountPolicyResponse {
   // Created sub-account policy.
   SubaccountPolicyView policy = 1;
 }
 
-// UpdateSubaccountPolicyRequest fully replaces an existing sub-account policy
-// template.
+// UpdateSubaccountPolicyRequest changes selected mutable fields on an existing
+// sub-account policy.
 message UpdateSubaccountPolicyRequest {
-  option (buf.validate.message).cel = {
-    id: "spot_allowlist_requires_markets"
-    message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
-    expression: "this.spot_market_scope != 2 ? true : size(this.spot_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_allowlist_requires_markets"
-    message: "perp_markets must be non-empty when perp_market_scope is ALLOWLIST"
-    expression: "this.perp_market_scope != 2 ? true : size(this.perp_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
-    id: "spot_markets_unique"
-    message: "spot_markets must not contain duplicate symbols"
-    expression: "this.spot_markets.map(m, m.symbol).unique()"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_markets_unique"
-    message: "perp_markets must not contain duplicate symbols"
-    expression: "this.perp_markets.map(m, m.symbol).unique()"
-  };
-
   // Policy identifier (opaque ID).
-  fixed64 policy_id = 1 [(buf.validate.field).fixed64.gt = 0];
-
-  // Human-readable policy name. Required; 1 to 64 characters.
-  string name = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 64,
+  fixed64 policy_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Optional policy description for dashboards and audits. Maximum 256 characters.
-  string description = 3 [(buf.validate.field).string.max_len = 256];
-
-  // Allowed spot markets for this policy.
-  repeated SpotMarketRule spot_markets = 4;
-  // Allowed perp markets and optional per-contract leverage caps.
-  repeated PerpMarketRule perp_markets = 5;
-
-  // Market-level scope for spot markets. When unspecified, defaults to ALL.
-  MarketScope.Value spot_market_scope = 6 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When unspecified, defaults to ALL.
-  MarketScope.Value perp_market_scope = 7 [(buf.validate.field).enum = {defined_only: true}];
-
-  // High-level actions enabled for the sub-account policy. Up to 64 unique
-  // explicit actions are allowed.
-  repeated PolicyAction actions = 8 [
-    (buf.validate.field).repeated = {
-      unique: true
-      max_items: 64
-    },
-    (buf.validate.field).repeated.items.enum = {
-      defined_only: true
-      not_in: [0]
-    }
+  // Candidate values for fields selected by update_mask.
+  SubaccountPolicySpec policy = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
   ];
-
-  // Maximum total notional exposure across all positions for this sub-account,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no explicit cap.
-  uint64 global_notional_cap = 12;
-  // Maximum notional size for any single order on this sub-account, expressed
-  // in the canonical quote unit (for example, micro-USDT). A value of 0 means
-  // no explicit cap.
-  uint64 max_order_notional = 13;
-  // Maximum number of resting orders allowed on this sub-account at any time.
-  // A value of 0 means no explicit cap.
-  uint32 max_open_orders = 14;
-  // Maximum number of open perp positions allowed on this sub-account. A value
-  // of 0 means no explicit cap.
-  uint32 max_open_positions = 15;
-  // Optional global leverage cap across all perp contracts. Supported non-zero
-  // values are 1, 3, 5, 10, 20, 50, and 100. A value of 0 means no explicit cap.
-  uint32 global_perp_leverage_x = 16;
-
-  // Maximum total notional this sub-account can transfer out internally per
-  // rolling day, expressed in the canonical quote unit (for example,
-  // micro-USDT). A value of 0 means no explicit cap.
-  uint64 daily_internal_transfer_out_limit = 17;
-  // Maximum total notional this sub-account can withdraw per rolling day,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no explicit cap.
-  uint64 daily_withdraw_limit = 18;
-  // When true, internal transfers from this sub-account may only target other
-  // sub-accounts owned by the same root account.
-  bool internal_transfers_own_only = 19;
-  // When true, external withdrawals from this sub-account must target an
-  // approved withdrawal destination.
-  bool enforce_withdraw_whitelist = 20;
-
-  // When true, new orders for this sub-account are rejected regardless of other
-  // policy settings.
-  bool trading_halted = 21;
-  // When true, this sub-account may only reduce or close existing exposure.
-  bool liquidation_only = 22;
-  // Maximum realized loss over a rolling day before safety controls may halt
-  // activity, expressed in the canonical quote unit (for example, micro-USDT).
-  // A value of 0 means no explicit limit.
-  uint64 daily_loss_limit = 23;
-  // Maximum drawdown from peak equity in basis points. One basis point is
-  // 1/100 of one percent. A value of 0 means no explicit limit.
-  uint32 intraday_drawdown_limit_bps = 24 [(buf.validate.field).uint32.lte = 10000];
-  // When true, the policy is write-protected and requires an elevated mutation path.
-  bool locked = 25;
-  // Optional review time in UTC. This does not automatically disable the policy.
-  google.protobuf.Timestamp review_at = 26;
-  // Optional expiry time in UTC. This does not automatically disable the policy.
-  google.protobuf.Timestamp expires_at = 27;
+  // Mutable fields to apply. Paths are relative to policy. The mask is required,
+  // must be non-empty, and cannot contain "*".
+  google.protobuf.FieldMask update_mask = 3 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Revision returned by the latest successful read. Stale revisions fail with
+  // a conflict before no-op detection.
+  uint64 expected_revision = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 // UpdateSubaccountPolicyResponse returns the updated sub-account policy.
@@ -571,6 +494,8 @@ message ApiPolicyView {
   google.protobuf.Timestamp created_at = 21;
   // Last update time in UTC.
   google.protobuf.Timestamp updated_at = 22;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 23;
 }
 
 // ListApiPoliciesRequest lists the finite set of API key policies visible in
@@ -608,8 +533,8 @@ message GetApiPolicyResponse {
   ApiPolicyView policy = 1;
 }
 
-// CreateApiPolicyRequest defines a new API key policy template.
-message CreateApiPolicyRequest {
+// ApiPolicySpec contains the mutable configuration of an API key policy.
+message ApiPolicySpec {
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
@@ -631,11 +556,10 @@ message CreateApiPolicyRequest {
     expression: "this.perp_markets.map(m, m.symbol).unique()"
   };
 
-  // Human-readable policy name. Required; 1 to 64 characters.
+  // Human-readable policy name. Create requires a non-empty value; update
+  // validates it after merging fields selected by update_mask.
   string name = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 64,
-    (google.api.field_behavior) = REQUIRED
+    (buf.validate.field).string.max_len = 64
   ];
   // Optional policy description for dashboards and audits. Maximum 256 characters.
   string description = 2 [(buf.validate.field).string.max_len = 256];
@@ -680,10 +604,19 @@ message CreateApiPolicyRequest {
   // Whether this policy should be treated as a reusable template.
   bool is_template = 19;
 
+}
+
+// CreateApiPolicyRequest defines a new API key policy template.
+message CreateApiPolicyRequest {
+  // Complete mutable policy configuration.
+  ApiPolicySpec policy = 1 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
   // Optional API key identifier to bind this newly-created policy to
   // atomically. When set, the caller must be allowed to manage the key and the
   // create+assign operation consumes a single fresh step-up proof.
-  string assign_to_key_id = 20 [(buf.validate.field).string.pattern = "^$|^ak_[a-f0-9]{32}$"];
+  string assign_to_key_id = 2 [(buf.validate.field).string.pattern = "^$|^ak_[a-f0-9]{32}$"];
 }
 
 // CreateApiPolicyResponse returns the created API key policy.
@@ -692,80 +625,31 @@ message CreateApiPolicyResponse {
   ApiPolicyView policy = 1;
 }
 
-// UpdateApiPolicyRequest replaces an existing API key policy template.
+// UpdateApiPolicyRequest changes selected mutable fields on an existing API
+// key policy.
 message UpdateApiPolicyRequest {
-  option (buf.validate.message).cel = {
-    id: "spot_allowlist_requires_markets"
-    message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
-    expression: "this.spot_market_scope != 2 ? true : size(this.spot_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_allowlist_requires_markets"
-    message: "perp_markets must be non-empty when perp_market_scope is ALLOWLIST"
-    expression: "this.perp_market_scope != 2 ? true : size(this.perp_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
-    id: "spot_markets_unique"
-    message: "spot_markets must not contain duplicate symbols"
-    expression: "this.spot_markets.map(m, m.symbol).unique()"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_markets_unique"
-    message: "perp_markets must not contain duplicate symbols"
-    expression: "this.perp_markets.map(m, m.symbol).unique()"
-  };
-
   // Policy identifier (opaque ID).
-  fixed64 policy_id = 1 [(buf.validate.field).fixed64.gt = 0];
-
-  // Human-readable policy name. Required; 1 to 64 characters.
-  string name = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 64,
+  fixed64 policy_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Optional policy description for dashboards and audits. Maximum 256 characters.
-  string description = 3 [(buf.validate.field).string.max_len = 256];
-
-  // Allowed spot markets for this API key policy.
-  repeated SpotMarketRule spot_markets = 4;
-  // Allowed perp markets and optional per-contract leverage caps.
-  repeated PerpMarketRule perp_markets = 5;
-
-  // Market-level scope for spot markets. When unspecified, defaults to ALL.
-  MarketScope.Value spot_market_scope = 6 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When unspecified, defaults to ALL.
-  MarketScope.Value perp_market_scope = 7 [(buf.validate.field).enum = {defined_only: true}];
-
-  // High-level actions enabled for the API key policy. Up to 64 unique explicit
-  // actions are allowed.
-  repeated PolicyAction actions = 8 [
-    (buf.validate.field).repeated = {
-      unique: true
-      max_items: 64
-    },
-    (buf.validate.field).repeated.items.enum = {
-      defined_only: true
-      not_in: [0]
-    }
+  // Candidate values for fields selected by update_mask.
+  ApiPolicySpec policy = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
   ];
-
-  // Maximum notional size for any single order submitted with this API key,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no additional cap beyond the sub-account policy.
-  uint64 max_order_notional = 13;
-
-  // Maximum total notional this API key can transfer out internally per rolling
-  // day, expressed in the canonical quote unit (for example, micro-USDT). A
-  // value of 0 means no additional cap beyond the sub-account policy.
-  uint64 daily_internal_transfer_out_limit = 17;
-  // Maximum total notional this API key can withdraw per rolling day, expressed
-  // in the canonical quote unit (for example, micro-USDT). A value of 0 means
-  // no additional cap beyond the sub-account policy.
-  uint64 daily_withdraw_limit = 18;
-
-  // Whether this policy should be treated as a reusable template.
-  bool is_template = 19;
+  // Mutable fields to apply. Paths are relative to policy. The mask is required,
+  // must be non-empty, and cannot contain "*".
+  google.protobuf.FieldMask update_mask = 3 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Revision returned by the latest successful read. Stale revisions fail with
+  // a conflict before no-op detection.
+  uint64 expected_revision = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 // UpdateApiPolicyResponse returns the updated API key policy.
@@ -837,7 +721,7 @@ service PolicyService {
     };
   }
 
-  // Replace an existing sub-account policy template.
+  // Change selected fields on an existing sub-account policy template.
   rpc UpdateSubaccountPolicy(UpdateSubaccountPolicyRequest) returns (UpdateSubaccountPolicyResponse) {
     option (google.api.http) = {
       patch: "/v1/auth/policies/subaccounts/{policy_id}"
@@ -845,7 +729,7 @@ service PolicyService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Update Subaccount Policy"
-      description: "Replace an existing sub-account policy template."
+      description: "Change selected fields on an existing sub-account policy template."
       tags: "Auth Service"
     };
   }
@@ -908,7 +792,7 @@ service PolicyService {
     };
   }
 
-  // Replace an existing API key policy template.
+  // Change selected fields on an existing API key policy template.
   rpc UpdateApiPolicy(UpdateApiPolicyRequest) returns (UpdateApiPolicyResponse) {
     option (google.api.http) = {
       patch: "/v1/auth/policies/api-keys/{policy_id}"
@@ -916,7 +800,7 @@ service PolicyService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Update API Key Policy"
-      description: "Replace an existing API key policy template."
+      description: "Change selected fields on an existing API key policy template."
       tags: "Auth Service"
     };
   }

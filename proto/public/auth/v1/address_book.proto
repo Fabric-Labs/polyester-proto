@@ -7,6 +7,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/validation/v1/predefined_string_rules.proto";
 
@@ -194,6 +195,8 @@ message AddressBookEntry {
   }
   // Tags currently attached to this entry.
   repeated AddressBookTag tags = 30;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 31;
 }
 
 message AddressBookEntriesView {
@@ -227,6 +230,8 @@ message ExternalAddressBookEntry {
   google.protobuf.Timestamp created_at = 9;
   // Time this entry was last updated, as a UTC timestamp.
   google.protobuf.Timestamp updated_at = 10;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 11;
 }
 
 message InternalAddressBookEntry {
@@ -267,6 +272,8 @@ message InternalAddressBookEntry {
   google.protobuf.Timestamp created_at = 13;
   // Time this entry was last updated, as a UTC timestamp.
   google.protobuf.Timestamp updated_at = 14;
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 15;
 }
 
 message TransferCounterparty {
@@ -524,20 +531,38 @@ message CreateAddressBookEntryResponse {
   AddressBookEntry entry = 1;
 }
 
+// AddressBookEntryUpdateSpec contains mutable saved-destination metadata.
+message AddressBookEntryUpdateSpec {
+  // Display label. Empty clears the label when selected.
+  string label = 1 [(buf.validate.field).string.max_len = 128];
+  // User-defined note. Empty clears the note when selected.
+  string note = 2 [(buf.validate.field).string.max_len = 512];
+  // Complete replacement set of tag ids when selected.
+  repeated fixed64 tag_ids = 3 [(buf.validate.field).repeated.max_items = 10];
+}
+
 message UpdateAddressBookEntryRequest {
   // Address-book entry id to update.
   fixed64 address_book_entry_id = 1 [
     (buf.validate.field).fixed64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Replacement display label.
-  string label = 2 [(buf.validate.field).string.max_len = 128];
-  // Replacement note.
-  string note = 3 [(buf.validate.field).string.max_len = 512];
-  // Complete replacement set of tag ids to attach to the entry.
-  repeated fixed64 tag_ids = 4 [(buf.validate.field).repeated.max_items = 10];
-  // New tags to create and attach with this entry update.
-  repeated AddressBookTagInput new_tags = 5 [(buf.validate.field).repeated.max_items = 10];
+  // Candidate values for fields selected by update_mask.
+  AddressBookEntryUpdateSpec entry = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Mutable fields to apply. Paths are relative to entry. The mask is required,
+  // must be non-empty, and cannot contain "*".
+  google.protobuf.FieldMask update_mask = 3 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Revision returned by the latest successful read.
+  uint64 expected_revision = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 message UpdateAddressBookEntryResponse {
@@ -609,13 +634,13 @@ message UpdateAddressBookTagRequest {
     (buf.validate.field).fixed64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Replacement tag name.
-  string name = 2 [(buf.validate.field).string = {
+  // Replacement tag name. Omit to preserve the current name.
+  optional string name = 2 [(buf.validate.field).string = {
     min_len: 1
     max_len: 48
   }];
-  // Replacement UI color token.
-  string color = 3 [(buf.validate.field).string.max_len = 32];
+  // Replacement UI color token. Omit to preserve; an empty value clears it.
+  optional string color = 3 [(buf.validate.field).string.max_len = 32];
 }
 
 message UpdateAddressBookTagResponse {

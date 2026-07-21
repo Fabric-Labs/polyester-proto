@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
@@ -68,18 +69,8 @@ message ApiKey {
   // Equal timestamps with different configuration indicate an invariant failure.
   // This is independent of last_used_at, which tracks authentication activity.
   google.protobuf.Timestamp updated_at = 25;
-}
-
-// IpWhitelist replaces or clears an API key IP whitelist during updates.
-message IpWhitelist {
-  // CIDR strings, e.g. "1.2.3.4/32". Maximum 32 unique entries.
-  repeated string cidrs = 1 [
-    (buf.validate.field).repeated = {
-      unique: true
-      max_items: 32
-    },
-    (buf.validate.field).repeated.items.string.ip_with_prefixlen = true
-  ];
+  // Monotonic resource revision used for conditional updates.
+  uint64 revision = 26;
 }
 
 // CreateApiKeyRequest creates a new API key. Clients generate the Ed25519 key
@@ -165,52 +156,65 @@ message GetApiKeyResponse {
   ApiKey api_key = 1;
 }
 
-// UpdateApiKeyRequest updates mutable metadata for an existing API key.
-message UpdateApiKeyRequest {
+// ApiKeyUpdateSpec contains mutable API key configuration.
+message ApiKeyUpdateSpec {
   option (buf.validate.message).cel = {
     id: "expires_at_future_or_zero"
     message: "expires_at must be in the future or zero"
     expression: "!has(this.expires_at) ? true : this.expires_at == timestamp('1970-01-01T00:00:00Z') ? true : this.expires_at > now"
   };
 
+  // Human-friendly label for the key. Empty clears the label when selected.
+  string label = 1 [(buf.validate.field).string.max_len = 64];
+  // User-chosen icon/emoji for UI display. Empty clears the icon when selected.
+  string icon = 2 [(buf.validate.field).string.max_len = 32];
+  // User-chosen color token for UI display. Empty clears the color when selected.
+  string color = 3 [(buf.validate.field).string.max_len = 32];
+  // New status. ACTIVE and DISABLED are allowed; revocation uses DeleteApiKey.
+  ApiKeyStatus status = 4 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [
+        2
+      ]
+    }
+  ];
+  // Complete replacement IP whitelist. Empty clears the restriction when selected.
+  repeated string ip_whitelist = 5 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 32
+    },
+    (buf.validate.field).repeated.items.string.ip_with_prefixlen = true
+  ];
+  // Expiry time in UTC. When selected, omission or the epoch clears expiry.
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+// UpdateApiKeyRequest changes selected mutable fields on an existing API key.
+message UpdateApiKeyRequest {
   // Opaque API key identifier to update.
   string key_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.pattern = "^ak_[a-f0-9]{32}$",
     (google.api.field_behavior) = REQUIRED
   ];
-
-  // New human-friendly label for the key. If empty, label is left unchanged.
-  // Maximum length is 64 characters.
-  string label = 2 [(buf.validate.field).string.max_len = 64];
-
-  // New user-chosen icon/emoji for UI display. If empty, left unchanged.
-  string icon = 6 [(buf.validate.field).string.max_len = 32];
-  // New user-chosen color token for UI display. If empty, left unchanged.
-  string color = 7 [(buf.validate.field).string.max_len = 32];
-
-  // Optional new status. ACTIVE and DISABLED are allowed; REVOKED must be done
-  // via DeleteApiKey and is terminal.
-  ApiKeyStatus status = 3 [
-    // Allow UNSPECIFIED to mean "no change", but reject unknown values and
-    // forbid REVOKED (revocation must go through DeleteApiKey).
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [2]
-    }
+  // Candidate values for fields selected by update_mask.
+  ApiKeyUpdateSpec api_key = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
   ];
-
-  // Optional new IP whitelist. If this field is omitted, the whitelist is left
-  // unchanged. If it is present:
-  // - cidrs non-empty replaces the existing whitelist.
-  // - cidrs empty clears the whitelist (no IP restriction).
-  IpWhitelist ip_whitelist = 4;
-
-  // Optional new expiry time in UTC. If this field is present:
-  // - Non-zero timestamp sets/updates the expiry.
-  // - Zero/epoch timestamp clears the expiry (no automatic expiry).
-  // If this field is omitted, the expiry is left unchanged.
-  google.protobuf.Timestamp expires_at = 5;
+  // Mutable fields to apply. Paths are relative to api_key. The mask is required,
+  // must be non-empty, and cannot contain "*".
+  google.protobuf.FieldMask update_mask = 3 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Revision returned by the latest successful read.
+  uint64 expected_revision = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 // UpdateApiKeyResponse returns the API key after applying the update.
