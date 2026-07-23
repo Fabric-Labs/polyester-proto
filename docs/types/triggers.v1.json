@@ -76,122 +76,90 @@
       }
     },
     {
-      "name": "triggers.v1.CreateTriggerRequest",
+      "name": "triggers.v1.ConditionalChildExecution",
       "kind": "message",
-      "doc": "CreateTriggerRequest creates a standalone trigger (stop order, TWAP, ladder,\n etc.). Standalone triggers have independent lifecycle and arm immediately\n after creation.",
+      "doc": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. BUY market children are not supported in spot.",
       "message": {
-        "cel": [
-          {
-            "id": "create_trigger.stop.trigger_price_required",
-            "message": "trigger_price_ticks must be \u003e 0 for STOP_LOSS and TAKE_PROFIT",
-            "expression": "(this.trigger_type != 1 \u0026\u0026 this.trigger_type != 2) || this.trigger_price_ticks \u003e 0"
-          },
-          {
-            "id": "create_trigger.limit.limit_price_required",
-            "message": "limit_price_ticks required for LIMIT child orders",
-            "expression": "this.order_type != 1 || this.limit_price_ticks \u003e 0 || this.trigger_type == 5"
-          },
-          {
-            "id": "create_trigger.trailing.trailing_distance_required",
-            "message": "trailing_distance required for TRAILING_STOP",
-            "expression": "this.trigger_type != 3 || (has(this.trailing_distance_ticks) || has(this.trailing_distance_bps))"
-          },
-          {
-            "id": "create_trigger.twap.window_valid",
-            "message": "twap_duration_ms and twap_slice_interval_ms invalid",
-            "expression": "this.trigger_type != 4 || (this.twap_duration_ms \u003e= 1000 \u0026\u0026 this.twap_slice_interval_ms \u003e= 100 \u0026\u0026 this.twap_slice_interval_ms \u003c= this.twap_duration_ms)"
-          },
-          {
-            "id": "create_trigger.ladder.range_valid",
-            "message": "ladder_price_min_ticks/ladder_price_max_ticks invalid",
-            "expression": "this.trigger_type != 5 || (this.ladder_price_min_ticks \u003e 0 \u0026\u0026 this.ladder_price_max_ticks \u003e 0 \u0026\u0026 this.ladder_price_max_ticks \u003e this.ladder_price_min_ticks)"
-          },
-          {
-            "id": "create_trigger.ladder.levels_valid",
-            "message": "ladder_levels must be [2,100]",
-            "expression": "this.trigger_type != 5 || (this.ladder_levels \u003e= 2 \u0026\u0026 this.ladder_levels \u003c= 100)"
-          }
-        ],
         "oneofs": [
           {
-            "name": "trailing_distance",
+            "name": "execution",
+            "required": true,
             "fields": [
-              "trailing_distance_ticks",
-              "trailing_distance_bps"
-            ]
-          },
-          {
-            "name": "max_slippage",
-            "fields": [
-              "max_slippage_ticks",
-              "max_slippage_bps"
+              "market_ioc",
+              "limit_gtc",
+              "limit_ioc",
+              "limit_fok"
             ]
           }
         ],
         "fields": [
           {
-            "name": "subaccount_id",
-            "jsonName": "subaccountId",
+            "name": "market_ioc",
+            "jsonName": "marketIoc",
             "number": 1,
-            "doc": "Target sub-account. When empty or omitted, uses the caller's root account.",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64"
+            "doc": "Market child with implicit IOC behavior.",
+            "protoRef": "triggers.v1.TriggerMarketIoc",
+            "oneof": "execution"
           },
           {
-            "name": "symbol",
-            "jsonName": "symbol",
+            "name": "limit_gtc",
+            "jsonName": "limitGtc",
             "number": 2,
-            "doc": "Symbol, for example \"BTC-USDT\"; resolved to a numeric symbol ID.",
-            "protoScalar": "string",
-            "jsonType": "string",
-            "validate": {
-              "string": {
-                "minLen": 1
-              }
-            }
+            "doc": "Resting GTC limit child, optionally post-only.",
+            "protoRef": "triggers.v1.TriggerLimitGtc",
+            "oneof": "execution"
           },
           {
-            "name": "trigger_type",
-            "jsonName": "triggerType",
+            "name": "limit_ioc",
+            "jsonName": "limitIoc",
             "number": 3,
-            "doc": "Type of trigger. Required.",
-            "protoRef": "triggers.v1.TriggerType",
-            "validate": {
-              "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
-              }
-            }
+            "doc": "Immediate-or-cancel limit child.",
+            "protoRef": "triggers.v1.TriggerLimitIoc",
+            "oneof": "execution"
           },
+          {
+            "name": "limit_fok",
+            "jsonName": "limitFok",
+            "number": 4,
+            "doc": "Fill-or-kill limit child.",
+            "protoRef": "triggers.v1.TriggerLimitFok",
+            "oneof": "execution"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.ConditionalTrigger",
+      "kind": "message",
+      "doc": "ConditionalTrigger configures a standalone stop-loss or take-profit.",
+      "message": {
+        "cel": [
+          {
+            "id": "conditional_trigger.buy_requires_limit",
+            "message": "BUY stop-loss and take-profit triggers require a limit child",
+            "expression": "this.side != 1 || !has(this.child.market_ioc)"
+          }
+        ],
+        "fields": [
           {
             "name": "trigger_price_ticks",
             "jsonName": "triggerPriceTicks",
-            "number": 10,
-            "doc": "Trigger price in quote units scaled by 1e6. Required for\n STOP_LOSS/TAKE_PROFIT.",
+            "number": 1,
+            "doc": "Trigger threshold in quote units scaled by 1e6.",
             "protoScalar": "int64",
             "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "trigger_price_source",
-            "jsonName": "triggerPriceSource",
-            "number": 11,
-            "doc": "Price source for trigger evaluation. Defaults to LAST_PRICE.",
-            "protoRef": "orders.v1.TriggerPriceSource",
+            "format": "int64",
             "validate": {
-              "enum": {
-                "definedOnly": true
+              "number": {
+                "gt": "0"
               }
             }
           },
           {
             "name": "side",
             "jsonName": "side",
-            "number": 20,
-            "doc": "Side for the child order. Required.",
+            "number": 2,
+            "doc": "Child order side.",
             "protoRef": "orders.v1.Side",
             "validate": {
               "enum": {
@@ -203,223 +171,41 @@
             }
           },
           {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 21,
-            "doc": "Order type for the child order (LIMIT or MARKET). Defaults to MARKET.",
-            "protoRef": "orders.v1.OrderType",
+            "name": "child",
+            "jsonName": "child",
+            "number": 3,
+            "doc": "Child execution.",
+            "protoRef": "triggers.v1.ConditionalChildExecution",
             "validate": {
-              "enum": {
-                "definedOnly": true
-              }
+              "required": true
             }
-          },
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.CreateTriggerRequest",
+      "kind": "message",
+      "doc": "CreateTriggerRequest submits one standalone trigger intent for admission.",
+      "message": {
+        "fields": [
           {
-            "name": "time_in_force",
-            "jsonName": "timeInForce",
-            "number": 22,
-            "doc": "Time-in-force for the child order. Defaults to GTC for LIMIT, IOC for\n MARKET.",
-            "protoRef": "orders.v1.TimeInForce",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "qty_scaled",
-            "jsonName": "qtyScaled",
-            "number": 23,
-            "doc": "Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.\n Required.",
-            "protoScalar": "int64",
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Target sub-account. When omitted, uses the caller's root account.",
+            "protoScalar": "fixed64",
             "jsonType": "string",
-            "format": "int64",
+            "format": "fixed64"
+          },
+          {
+            "name": "trigger",
+            "jsonName": "trigger",
+            "number": 2,
+            "doc": "Trigger to admit.",
+            "protoRef": "triggers.v1.TriggerIntent",
             "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
-          },
-          {
-            "name": "limit_price_ticks",
-            "jsonName": "limitPriceTicks",
-            "number": 24,
-            "doc": "Limit price in quote units scaled by 1e6 for LIMIT child orders.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "fee_source",
-            "jsonName": "feeSource",
-            "number": 25,
-            "doc": "Fee source selection for BUY child orders. SELL child orders always pay in\n QUOTE.\n\n When omitted (UNSPECIFIED), defaults to QUOTE.",
-            "protoRef": "orders.v1.FeeSource",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "self_trade_prevention_mode",
-            "jsonName": "selfTradePreventionMode",
-            "number": 26,
-            "doc": "Self-trade prevention mode for child orders.\n\n When omitted (UNSPECIFIED), defaults to EXPIRE_MAKER.",
-            "protoRef": "orders.v1.SelfTradePreventionMode",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "post_only",
-            "jsonName": "postOnly",
-            "number": 27,
-            "doc": "If true, child LIMIT orders are post-only (rejected if they would cross).",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
-          },
-          {
-            "name": "trailing_distance_ticks",
-            "jsonName": "trailingDistanceTicks",
-            "number": 30,
-            "doc": "Trailing distance as a price delta in 1e-6 quote-unit ticks.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            },
-            "oneof": "trailing_distance"
-          },
-          {
-            "name": "trailing_distance_bps",
-            "jsonName": "trailingDistanceBps",
-            "number": 31,
-            "doc": "Trailing distance in basis points (1 bp = 0.01%).",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0",
-                "lte": "10000"
-              }
-            },
-            "oneof": "trailing_distance"
-          },
-          {
-            "name": "activation_price_ticks",
-            "jsonName": "activationPriceTicks",
-            "number": 32,
-            "doc": "Optional activation price: trailing only starts after this price is\n reached. Expressed in quote units scaled by 1e6.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "max_slippage_ticks",
-            "jsonName": "maxSlippageTicks",
-            "number": 33,
-            "doc": "Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            },
-            "oneof": "max_slippage"
-          },
-          {
-            "name": "max_slippage_bps",
-            "jsonName": "maxSlippageBps",
-            "number": 34,
-            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0",
-                "lte": "10000"
-              }
-            },
-            "oneof": "max_slippage"
-          },
-          {
-            "name": "twap_duration_ms",
-            "jsonName": "twapDurationMs",
-            "number": 40,
-            "doc": "Total duration of TWAP execution in milliseconds. Required for TWAP.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "twap_slice_interval_ms",
-            "jsonName": "twapSliceIntervalMs",
-            "number": 41,
-            "doc": "Interval between TWAP slices in milliseconds. Required for TWAP.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "ladder_price_min_ticks",
-            "jsonName": "ladderPriceMinTicks",
-            "number": 50,
-            "doc": "Minimum price in quote units scaled by 1e6 for the ladder range.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "ladder_price_max_ticks",
-            "jsonName": "ladderPriceMaxTicks",
-            "number": 51,
-            "doc": "Maximum price in quote units scaled by 1e6 for the ladder range.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "ladder_levels",
-            "jsonName": "ladderLevels",
-            "number": 52,
-            "doc": "Number of price levels in the ladder.\n Required for LADDER; valid range is 2..100.",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "ladder_distribution",
-            "jsonName": "ladderDistribution",
-            "number": 53,
-            "doc": "Distribution of quantity across levels.",
-            "protoRef": "triggers.v1.LadderDistribution",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "client_trigger_id",
-            "jsonName": "clientTriggerId",
-            "number": 60,
-            "doc": "Client-provided trigger ID for idempotency. Required.",
-            "protoScalar": "string",
-            "jsonType": "string",
-            "validate": {
-              "string": {
-                "minLen": 1
-              }
+              "required": true
             }
           }
         ]
@@ -428,47 +214,40 @@
     {
       "name": "triggers.v1.CreateTriggerResponse",
       "kind": "message",
-      "doc": "CreateTriggerResponse returns the accepted trigger identifier and status.",
+      "doc": "CreateTriggerResponse acknowledges trigger creation only. Arming and child\n execution happen asynchronously and are visible through trigger reads/events.",
       "message": {
         "fields": [
           {
             "name": "trigger_id",
             "jsonName": "triggerId",
             "number": 1,
-            "doc": "Unique trigger ID assigned by the system.",
+            "doc": "Assigned trigger ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
           },
           {
-            "name": "status",
-            "jsonName": "status",
-            "number": 2,
-            "doc": "Current status of the trigger.",
-            "protoRef": "triggers.v1.TriggerStatus"
-          },
-          {
             "name": "client_trigger_id",
             "jsonName": "clientTriggerId",
-            "number": 3,
-            "doc": "Echoed back if provided in request.",
+            "number": 2,
+            "doc": "Echoed client trigger ID.",
             "protoScalar": "string",
             "jsonType": "string"
           },
           {
-            "name": "ts",
-            "jsonName": "ts",
-            "number": 4,
-            "doc": "Server timestamp.",
+            "name": "accepted_at",
+            "jsonName": "acceptedAt",
+            "number": 3,
+            "doc": "Time creation admission completed.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
           },
           {
-            "name": "ts_ns",
-            "jsonName": "tsNs",
-            "number": 5,
-            "doc": "Server timestamp in nanoseconds since epoch (UTC).",
+            "name": "accepted_at_ts_ns",
+            "jsonName": "acceptedAtTsNs",
+            "number": 4,
+            "doc": "Admission completion time in nanoseconds since epoch (UTC).",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -587,6 +366,88 @@
             "name": "WEIGHTED_FAVORABLE",
             "number": 3,
             "doc": "More quantity at favorable prices."
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.LadderTrigger",
+      "kind": "message",
+      "doc": "LadderTrigger configures the supported LINEAR limit-GTC ladder. All levels\n are admitted immediately and may rest concurrently.",
+      "message": {
+        "cel": [
+          {
+            "id": "ladder_trigger.range",
+            "message": "price_max_ticks must be greater than price_min_ticks",
+            "expression": "this.price_max_ticks \u003e this.price_min_ticks"
+          }
+        ],
+        "fields": [
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 1,
+            "doc": "Child side.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "price_min_ticks",
+            "jsonName": "priceMinTicks",
+            "number": 2,
+            "doc": "Minimum generated level price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "price_max_ticks",
+            "jsonName": "priceMaxTicks",
+            "number": 3,
+            "doc": "Maximum generated level price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "levels",
+            "jsonName": "levels",
+            "number": 4,
+            "doc": "Number of linearly distributed levels.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "2",
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 5,
+            "doc": "Reject each level instead of taking liquidity.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -1218,18 +1079,130 @@
       }
     },
     {
+      "name": "triggers.v1.TrailingStopTrigger",
+      "kind": "message",
+      "doc": "TrailingStopTrigger configures the supported spot trailing-stop strategy.\n It tracks last trade price and submits a SELL market-IOC child when fired.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "trailing_distance",
+            "required": true,
+            "fields": [
+              "trailing_distance_ticks",
+              "trailing_distance_bps"
+            ]
+          },
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "trailing_distance_ticks",
+            "jsonName": "trailingDistanceTicks",
+            "number": 1,
+            "doc": "Distance as a price delta in 1e-6 quote-unit ticks.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "trailing_distance_bps",
+            "jsonName": "trailingDistanceBps",
+            "number": 2,
+            "doc": "Distance in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "trailing_distance"
+          },
+          {
+            "name": "activation_price_ticks",
+            "jsonName": "activationPriceTicks",
+            "number": 3,
+            "doc": "Optional activation price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 4,
+            "doc": "Maximum slippage as a price delta in 1e-6 quote-unit ticks.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 5,
+            "doc": "Maximum slippage in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "max_slippage"
+          }
+        ]
+      }
+    },
+    {
       "name": "triggers.v1.Trigger",
       "kind": "message",
       "doc": "Trigger represents a trigger with its full state.",
       "message": {
         "oneofs": [
           {
-            "name": "details",
+            "name": "configuration",
+            "fields": [
+              "stop_loss",
+              "take_profit",
+              "trailing_stop",
+              "twap",
+              "ladder"
+            ]
+          },
+          {
+            "name": "runtime_details",
             "fields": [
               "stop",
               "trailing",
-              "twap",
-              "ladder"
+              "twap_state",
+              "ladder_state"
             ]
           }
         ],
@@ -1270,63 +1243,26 @@
             "jsonType": "string"
           },
           {
-            "name": "trigger_type",
-            "jsonName": "triggerType",
-            "number": 5,
-            "doc": "Trigger category.",
-            "protoRef": "triggers.v1.TriggerType"
-          },
-          {
             "name": "status",
             "jsonName": "status",
-            "number": 6,
+            "number": 5,
             "doc": "Current trigger lifecycle status.",
             "protoRef": "triggers.v1.TriggerStatus"
           },
           {
             "name": "parent_order_id",
             "jsonName": "parentOrderId",
-            "number": 7,
+            "number": 6,
             "doc": "Parent order ID for attached-risk triggers; empty for standalone triggers.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
           },
           {
-            "name": "side",
-            "jsonName": "side",
-            "number": 20,
-            "doc": "Child order side.",
-            "protoRef": "orders.v1.Side"
-          },
-          {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 21,
-            "doc": "Child order type.",
-            "protoRef": "orders.v1.OrderType"
-          },
-          {
-            "name": "time_in_force",
-            "jsonName": "timeInForce",
-            "number": 22,
-            "doc": "Child order time-in-force policy.",
-            "protoRef": "orders.v1.TimeInForce"
-          },
-          {
             "name": "qty_scaled",
             "jsonName": "qtyScaled",
-            "number": 23,
-            "doc": "Child order quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "limit_price_ticks",
-            "jsonName": "limitPriceTicks",
-            "number": 24,
-            "doc": "Child LIMIT order price in quote units scaled by 1e6. Zero for MARKET\n child orders.",
+            "number": 20,
+            "doc": "Child quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -1334,24 +1270,56 @@
           {
             "name": "fee_source",
             "jsonName": "feeSource",
-            "number": 25,
+            "number": 21,
             "doc": "Fee source for BUY child orders.",
             "protoRef": "orders.v1.FeeSource"
           },
           {
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
-            "number": 26,
+            "number": 22,
             "doc": "Self-trade prevention mode for child orders.",
             "protoRef": "orders.v1.SelfTradePreventionMode"
           },
           {
-            "name": "post_only",
-            "jsonName": "postOnly",
-            "number": 27,
-            "doc": "True if child LIMIT orders are post-only.",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
+            "name": "stop_loss",
+            "jsonName": "stopLoss",
+            "number": 30,
+            "doc": "Stop-loss configuration.",
+            "protoRef": "triggers.v1.ConditionalTrigger",
+            "oneof": "configuration"
+          },
+          {
+            "name": "take_profit",
+            "jsonName": "takeProfit",
+            "number": 31,
+            "doc": "Take-profit configuration.",
+            "protoRef": "triggers.v1.ConditionalTrigger",
+            "oneof": "configuration"
+          },
+          {
+            "name": "trailing_stop",
+            "jsonName": "trailingStop",
+            "number": 32,
+            "doc": "Trailing-stop configuration.",
+            "protoRef": "triggers.v1.TrailingStopTrigger",
+            "oneof": "configuration"
+          },
+          {
+            "name": "twap",
+            "jsonName": "twap",
+            "number": 33,
+            "doc": "TWAP configuration.",
+            "protoRef": "triggers.v1.TwapTrigger",
+            "oneof": "configuration"
+          },
+          {
+            "name": "ladder",
+            "jsonName": "ladder",
+            "number": 34,
+            "doc": "Ladder configuration.",
+            "protoRef": "triggers.v1.LadderTrigger",
+            "oneof": "configuration"
           },
           {
             "name": "stop",
@@ -1359,7 +1327,7 @@
             "number": 100,
             "doc": "Stop-loss or take-profit trigger details.",
             "protoRef": "triggers.v1.StopDetails",
-            "oneof": "details"
+            "oneof": "runtime_details"
           },
           {
             "name": "trailing",
@@ -1367,23 +1335,23 @@
             "number": 101,
             "doc": "Trailing-stop trigger details.",
             "protoRef": "triggers.v1.TrailingDetails",
-            "oneof": "details"
+            "oneof": "runtime_details"
           },
           {
-            "name": "twap",
-            "jsonName": "twap",
+            "name": "twap_state",
+            "jsonName": "twapState",
             "number": 102,
             "doc": "TWAP trigger details.",
             "protoRef": "triggers.v1.TwapDetails",
-            "oneof": "details"
+            "oneof": "runtime_details"
           },
           {
-            "name": "ladder",
-            "jsonName": "ladder",
+            "name": "ladder_state",
+            "jsonName": "ladderState",
             "number": 103,
             "doc": "Ladder trigger details.",
             "protoRef": "triggers.v1.LadderDetails",
-            "oneof": "details"
+            "oneof": "runtime_details"
           },
           {
             "name": "client_trigger_id",
@@ -1561,6 +1529,217 @@
       }
     },
     {
+      "name": "triggers.v1.TriggerIntent",
+      "kind": "message",
+      "doc": "TriggerIntent contains one standalone trigger's immutable configuration.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "strategy",
+            "required": true,
+            "fields": [
+              "stop_loss",
+              "take_profit",
+              "trailing_stop",
+              "twap",
+              "ladder"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 1,
+            "doc": "Symbol, for example \"BTC-USDT\".",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 2,
+            "doc": "Total quantity scaled by the pair's base_quantity_scale.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "fee_source",
+            "jsonName": "feeSource",
+            "number": 3,
+            "doc": "Fee source for BUY children. SELL children must use QUOTE.",
+            "protoRef": "orders.v1.FeeSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "self_trade_prevention_mode",
+            "jsonName": "selfTradePreventionMode",
+            "number": 4,
+            "doc": "Child self-trade prevention mode. Defaults to EXPIRE_MAKER.",
+            "protoRef": "orders.v1.SelfTradePreventionMode",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "client_trigger_id",
+            "jsonName": "clientTriggerId",
+            "number": 5,
+            "doc": "Client-provided trigger ID for idempotency.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          },
+          {
+            "name": "stop_loss",
+            "jsonName": "stopLoss",
+            "number": 10,
+            "doc": "Standalone stop-loss.",
+            "protoRef": "triggers.v1.ConditionalTrigger",
+            "oneof": "strategy"
+          },
+          {
+            "name": "take_profit",
+            "jsonName": "takeProfit",
+            "number": 11,
+            "doc": "Standalone take-profit.",
+            "protoRef": "triggers.v1.ConditionalTrigger",
+            "oneof": "strategy"
+          },
+          {
+            "name": "trailing_stop",
+            "jsonName": "trailingStop",
+            "number": 12,
+            "doc": "SELL market-IOC trailing stop.",
+            "protoRef": "triggers.v1.TrailingStopTrigger",
+            "oneof": "strategy"
+          },
+          {
+            "name": "twap",
+            "jsonName": "twap",
+            "number": 13,
+            "doc": "TWAP strategy.",
+            "protoRef": "triggers.v1.TwapTrigger",
+            "oneof": "strategy"
+          },
+          {
+            "name": "ladder",
+            "jsonName": "ladder",
+            "number": 14,
+            "doc": "LINEAR limit-GTC ladder.",
+            "protoRef": "triggers.v1.LadderTrigger",
+            "oneof": "strategy"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerLimitFok",
+      "kind": "message",
+      "doc": "TriggerLimitFok configures a fill-or-kill limit child.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerLimitGtc",
+      "kind": "message",
+      "doc": "TriggerLimitGtc configures a resting limit child.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 2,
+            "doc": "Reject instead of taking liquidity.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerLimitIoc",
+      "kind": "message",
+      "doc": "TriggerLimitIoc configures an immediate-or-cancel limit child.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerMarketIoc",
+      "kind": "message",
+      "doc": "TriggerMarketIoc configures an immediate market child.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
       "name": "triggers.v1.TriggerStatus",
       "kind": "enum",
       "doc": "TriggerStatus represents the lifecycle state of a trigger.",
@@ -1688,6 +1867,112 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TwapLimitGtc",
+      "kind": "message",
+      "doc": "TwapLimitGtc configures one resting limit slice at a time. A previous open\n slice is canceled before the next interval.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Slice limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TwapMarketIoc",
+      "kind": "message",
+      "doc": "TwapMarketIoc configures server-priced market-IOC slices.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "triggers.v1.TwapTrigger",
+      "kind": "message",
+      "doc": "TwapTrigger configures a proven TWAP execution mode.",
+      "message": {
+        "cel": [
+          {
+            "id": "twap_trigger.window",
+            "message": "slice_interval_ms must be between 100 and duration_ms",
+            "expression": "this.duration_ms \u003e= 1000 \u0026\u0026 this.slice_interval_ms \u003e= 100 \u0026\u0026 this.slice_interval_ms \u003c= this.duration_ms"
+          }
+        ],
+        "oneofs": [
+          {
+            "name": "execution",
+            "required": true,
+            "fields": [
+              "market_ioc",
+              "limit_gtc"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 1,
+            "doc": "Child side.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "duration_ms",
+            "jsonName": "durationMs",
+            "number": 2,
+            "doc": "Total execution duration in milliseconds.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "slice_interval_ms",
+            "jsonName": "sliceIntervalMs",
+            "number": 3,
+            "doc": "Interval between slices in milliseconds.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "market_ioc",
+            "jsonName": "marketIoc",
+            "number": 4,
+            "doc": "Server-priced market IOC slices.",
+            "protoRef": "triggers.v1.TwapMarketIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_gtc",
+            "jsonName": "limitGtc",
+            "number": 5,
+            "doc": "Limit GTC slices with cancel-before-next behavior.",
+            "protoRef": "triggers.v1.TwapLimitGtc",
+            "oneof": "execution"
           }
         ]
       }

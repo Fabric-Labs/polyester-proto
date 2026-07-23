@@ -90,166 +90,224 @@ enum LadderDistribution {
 // Create Trigger Request/Response
 // =============================================================================
 
-// CreateTriggerRequest creates a standalone trigger (stop order, TWAP, ladder,
-// etc.). Standalone triggers have independent lifecycle and arm immediately
-// after creation.
-message CreateTriggerRequest {
-  // Cross-field validation to ensure unused fields can't slip through when a
-  // trigger type requires them.
+// TriggerMarketIoc configures an immediate market child.
+message TriggerMarketIoc {}
+
+// TriggerLimitGtc configures a resting limit child.
+message TriggerLimitGtc {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Reject instead of taking liquidity.
+  bool post_only = 2;
+}
+
+// TriggerLimitIoc configures an immediate-or-cancel limit child.
+message TriggerLimitIoc {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+}
+
+// TriggerLimitFok configures a fill-or-kill limit child.
+message TriggerLimitFok {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+}
+
+// ConditionalChildExecution selects the child submitted by a stop-loss or
+// take-profit trigger. BUY market children are not supported in spot.
+message ConditionalChildExecution {
+  oneof execution {
+    option (buf.validate.oneof).required = true;
+    // Market child with implicit IOC behavior.
+    TriggerMarketIoc market_ioc = 1;
+    // Resting GTC limit child, optionally post-only.
+    TriggerLimitGtc limit_gtc = 2;
+    // Immediate-or-cancel limit child.
+    TriggerLimitIoc limit_ioc = 3;
+    // Fill-or-kill limit child.
+    TriggerLimitFok limit_fok = 4;
+  }
+}
+
+// ConditionalTrigger configures a standalone stop-loss or take-profit.
+message ConditionalTrigger {
   option (buf.validate.message).cel = {
-    id: "create_trigger.stop.trigger_price_required"
-    message: "trigger_price_ticks must be > 0 for STOP_LOSS and TAKE_PROFIT"
-    expression: "(this.trigger_type != 1 && this.trigger_type != 2) || this.trigger_price_ticks > 0"
-  };
-  option (buf.validate.message).cel = {
-    id: "create_trigger.limit.limit_price_required"
-    message: "limit_price_ticks required for LIMIT child orders"
-    expression: "this.order_type != 1 || this.limit_price_ticks > 0 || this.trigger_type == 5"
-  };
-  option (buf.validate.message).cel = {
-    id: "create_trigger.trailing.trailing_distance_required"
-    message: "trailing_distance required for TRAILING_STOP"
-    expression: "this.trigger_type != 3 || (has(this.trailing_distance_ticks) || has(this.trailing_distance_bps))"
-  };
-  option (buf.validate.message).cel = {
-    id: "create_trigger.twap.window_valid"
-    message: "twap_duration_ms and twap_slice_interval_ms invalid"
-    expression: "this.trigger_type != 4 || (this.twap_duration_ms >= 1000 && this.twap_slice_interval_ms >= 100 && this.twap_slice_interval_ms <= this.twap_duration_ms)"
-  };
-  option (buf.validate.message).cel = {
-    id: "create_trigger.ladder.range_valid"
-    message: "ladder_price_min_ticks/ladder_price_max_ticks invalid"
-    expression: "this.trigger_type != 5 || (this.ladder_price_min_ticks > 0 && this.ladder_price_max_ticks > 0 && this.ladder_price_max_ticks > this.ladder_price_min_ticks)"
-  };
-  option (buf.validate.message).cel = {
-    id: "create_trigger.ladder.levels_valid"
-    message: "ladder_levels must be [2,100]"
-    expression: "this.trigger_type != 5 || (this.ladder_levels >= 2 && this.ladder_levels <= 100)"
+    id: "conditional_trigger.buy_requires_limit"
+    message: "BUY stop-loss and take-profit triggers require a limit child"
+    expression: "this.side != 1 || !has(this.child.market_ioc)"
   };
 
-  // Target sub-account. When empty or omitted, uses the caller's root account.
-  optional fixed64 subaccount_id = 1;
-  // Symbol, for example "BTC-USDT"; resolved to a numeric symbol ID.
-  string symbol = 2 [(buf.validate.field).string.min_len = 1];
-  // Type of trigger. Required.
-  TriggerType trigger_type = 3 [
+  // Trigger threshold in quote units scaled by 1e6.
+  int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Child order side.
+  orders.v1.Side side = 2 [
     (buf.validate.field).enum = {
       defined_only: true
       not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
+    }
   ];
+  // Child execution.
+  ConditionalChildExecution child = 3 [(buf.validate.field).required = true];
+}
 
-  // --- Trigger Condition (for STOP_LOSS, TAKE_PROFIT, TRAILING_STOP) ---
-
-  // Trigger price in quote units scaled by 1e6. Required for
-  // STOP_LOSS/TAKE_PROFIT.
-  int64 trigger_price_ticks = 10;
-  // Price source for trigger evaluation. Defaults to LAST_PRICE.
-  orders.v1.TriggerPriceSource trigger_price_source = 11 [(buf.validate.field).enum.defined_only = true];
-
-  // --- Child Order Template ---
-
-  // Side for the child order. Required.
-  orders.v1.Side side = 20 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // Order type for the child order (LIMIT or MARKET). Defaults to MARKET.
-  orders.v1.OrderType order_type = 21 [(buf.validate.field).enum.defined_only = true];
-  // Time-in-force for the child order. Defaults to GTC for LIMIT, IOC for
-  // MARKET.
-  orders.v1.TimeInForce time_in_force = 22 [(buf.validate.field).enum.defined_only = true];
-  // Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
-  // Required.
-  int64 qty_scaled = 23 [(buf.validate.field).int64.gt = 0];
-  // Limit price in quote units scaled by 1e6 for LIMIT child orders.
-  int64 limit_price_ticks = 24;
-  // Fee source selection for BUY child orders. SELL child orders always pay in
-  // QUOTE.
-  //
-  // When omitted (UNSPECIFIED), defaults to QUOTE.
-  orders.v1.FeeSource fee_source = 25 [(buf.validate.field).enum.defined_only = true];
-  // Self-trade prevention mode for child orders.
-  //
-  // When omitted (UNSPECIFIED), defaults to EXPIRE_MAKER.
-  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 26 [(buf.validate.field).enum.defined_only = true];
-  // If true, child LIMIT orders are post-only (rejected if they would cross).
-  bool post_only = 27;
-
-  // --- Trailing Stop Specific ---
-
-  // Trailing distance. Exactly one of these should be set for TRAILING_STOP.
+// TrailingStopTrigger configures the supported spot trailing-stop strategy.
+// It tracks last trade price and submits a SELL market-IOC child when fired.
+message TrailingStopTrigger {
+  // Required trailing distance.
   oneof trailing_distance {
-    // Trailing distance as a price delta in 1e-6 quote-unit ticks.
-    int64 trailing_distance_ticks = 30 [(buf.validate.field).int64.gt = 0];
-    // Trailing distance in basis points (1 bp = 0.01%).
-    int32 trailing_distance_bps = 31 [(buf.validate.field).int32 = {
+    option (buf.validate.oneof).required = true;
+    // Distance as a price delta in 1e-6 quote-unit ticks.
+    int64 trailing_distance_ticks = 1 [(buf.validate.field).int64.gt = 0];
+    // Distance in basis points (1 bp = 0.01%).
+    int32 trailing_distance_bps = 2 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
     }];
   }
-  // Optional activation price: trailing only starts after this price is
-  // reached. Expressed in quote units scaled by 1e6.
-  int64 activation_price_ticks = 32;
-  // Optional price protection. If set, when the trailing stop triggers we place
-  // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
-  // MARKET order).
-  //
-  // Exactly one of these should be set (or neither for unprotected behavior).
+  // Optional activation price in quote units scaled by 1e6.
+  int64 activation_price_ticks = 3 [
+    (buf.validate.field).int64.gt = 0,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Optional protection applied when the market child fires.
   oneof max_slippage {
-    // Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.
-    int32 max_slippage_ticks = 33 [(buf.validate.field).int32.gt = 0];
-    // Maximum allowed slippage in basis points (1 bp = 0.01%).
-    int32 max_slippage_bps = 34 [(buf.validate.field).int32 = {
+    // Maximum slippage as a price delta in 1e-6 quote-unit ticks.
+    int32 max_slippage_ticks = 4 [(buf.validate.field).int32.gt = 0];
+    // Maximum slippage in basis points (1 bp = 0.01%).
+    int32 max_slippage_bps = 5 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
     }];
   }
+}
 
-  // --- TWAP Specific ---
+// TwapMarketIoc configures server-priced market-IOC slices.
+message TwapMarketIoc {}
 
-  // Total duration of TWAP execution in milliseconds. Required for TWAP.
-  int64 twap_duration_ms = 40;
-  // Interval between TWAP slices in milliseconds. Required for TWAP.
-  int64 twap_slice_interval_ms = 41;
+// TwapLimitGtc configures one resting limit slice at a time. A previous open
+// slice is canceled before the next interval.
+message TwapLimitGtc {
+  // Slice limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+}
 
-  // --- Ladder/Scaled Specific ---
+// TwapTrigger configures a proven TWAP execution mode.
+message TwapTrigger {
+  option (buf.validate.message).cel = {
+    id: "twap_trigger.window"
+    message: "slice_interval_ms must be between 100 and duration_ms"
+    expression: "this.duration_ms >= 1000 && this.slice_interval_ms >= 100 && this.slice_interval_ms <= this.duration_ms"
+  };
 
-  // Minimum price in quote units scaled by 1e6 for the ladder range.
-  int64 ladder_price_min_ticks = 50;
-  // Maximum price in quote units scaled by 1e6 for the ladder range.
-  int64 ladder_price_max_ticks = 51;
-  // Number of price levels in the ladder.
-  // Required for LADDER; valid range is 2..100.
-  int32 ladder_levels = 52;
-  // Distribution of quantity across levels.
-  LadderDistribution ladder_distribution = 53 [(buf.validate.field).enum.defined_only = true];
+  // Child side.
+  orders.v1.Side side = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // Total execution duration in milliseconds.
+  int64 duration_ms = 2;
+  // Interval between slices in milliseconds.
+  int64 slice_interval_ms = 3;
+  // Proven slice execution behavior.
+  oneof execution {
+    option (buf.validate.oneof).required = true;
+    // Server-priced market IOC slices.
+    TwapMarketIoc market_ioc = 4;
+    // Limit GTC slices with cancel-before-next behavior.
+    TwapLimitGtc limit_gtc = 5;
+  }
+}
 
-  // --- Client Idempotency ---
+// LadderTrigger configures the supported LINEAR limit-GTC ladder. All levels
+// are admitted immediately and may rest concurrently.
+message LadderTrigger {
+  option (buf.validate.message).cel = {
+    id: "ladder_trigger.range"
+    message: "price_max_ticks must be greater than price_min_ticks"
+    expression: "this.price_max_ticks > this.price_min_ticks"
+  };
 
-  // Client-provided trigger ID for idempotency. Required.
-  string client_trigger_id = 60 [
+  // Child side.
+  orders.v1.Side side = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // Minimum generated level price in quote units scaled by 1e6.
+  int64 price_min_ticks = 2 [(buf.validate.field).int64.gt = 0];
+  // Maximum generated level price in quote units scaled by 1e6.
+  int64 price_max_ticks = 3 [(buf.validate.field).int64.gt = 0];
+  // Number of linearly distributed levels.
+  int32 levels = 4 [(buf.validate.field).int32 = {
+    gte: 2
+    lte: 100
+  }];
+  // Reject each level instead of taking liquidity.
+  bool post_only = 5;
+}
+
+// TriggerIntent contains one standalone trigger's immutable configuration.
+message TriggerIntent {
+  // Symbol, for example "BTC-USDT".
+  string symbol = 1 [
     (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Total quantity scaled by the pair's base_quantity_scale.
+  int64 qty_scaled = 2 [
+    (buf.validate.field).int64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Fee source for BUY children. SELL children must use QUOTE.
+  orders.v1.FeeSource fee_source = 3 [(buf.validate.field).enum.defined_only = true];
+  // Child self-trade prevention mode. Defaults to EXPIRE_MAKER.
+  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 4 [(buf.validate.field).enum.defined_only = true];
+  // Client-provided trigger ID for idempotency.
+  string client_trigger_id = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Required trigger strategy.
+  oneof strategy {
+    option (buf.validate.oneof).required = true;
+    // Standalone stop-loss.
+    ConditionalTrigger stop_loss = 10;
+    // Standalone take-profit.
+    ConditionalTrigger take_profit = 11;
+    // SELL market-IOC trailing stop.
+    TrailingStopTrigger trailing_stop = 12;
+    // TWAP strategy.
+    TwapTrigger twap = 13;
+    // LINEAR limit-GTC ladder.
+    LadderTrigger ladder = 14;
+  }
+}
+
+// CreateTriggerRequest submits one standalone trigger intent for admission.
+message CreateTriggerRequest {
+  // Target sub-account. When omitted, uses the caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Trigger to admit.
+  TriggerIntent trigger = 2 [
+    (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
   ];
 }
 
-// CreateTriggerResponse returns the accepted trigger identifier and status.
+// CreateTriggerResponse acknowledges trigger creation only. Arming and child
+// execution happen asynchronously and are visible through trigger reads/events.
 message CreateTriggerResponse {
-  // Unique trigger ID assigned by the system.
+  // Assigned trigger ID.
   fixed64 trigger_id = 1;
-  // Current status of the trigger.
-  TriggerStatus status = 2;
-  // Echoed back if provided in request.
-  string client_trigger_id = 3;
-  // Server timestamp.
-  google.protobuf.Timestamp ts = 4;
-  // Server timestamp in nanoseconds since epoch (UTC).
-  uint64 ts_ns = 5;
+  // Echoed client trigger ID.
+  string client_trigger_id = 2;
+  // Time creation admission completed.
+  google.protobuf.Timestamp accepted_at = 3;
+  // Admission completion time in nanoseconds since epoch (UTC).
+  uint64 accepted_at_ts_ns = 4;
 }
 
 // =============================================================================
@@ -550,42 +608,43 @@ message Trigger {
   uint32 symbol_id = 3;
   // Trading symbol, for example "BTC-USDT".
   string symbol = 4;
-  // Trigger category.
-  TriggerType trigger_type = 5;
   // Current trigger lifecycle status.
-  TriggerStatus status = 6;
+  TriggerStatus status = 5;
   // Parent order ID for attached-risk triggers; empty for standalone triggers.
-  optional fixed64 parent_order_id = 7;
+  optional fixed64 parent_order_id = 6;
 
-  // Child order side.
-  orders.v1.Side side = 20;
-  // Child order type.
-  orders.v1.OrderType order_type = 21;
-  // Child order time-in-force policy.
-  orders.v1.TimeInForce time_in_force = 22;
-  // Child order quantity scaled by the pair's base_quantity_scale from
-  // GetSpotConfig.
-  int64 qty_scaled = 23;
-  // Child LIMIT order price in quote units scaled by 1e6. Zero for MARKET
-  // child orders.
-  int64 limit_price_ticks = 24;
+  // Child quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
+  int64 qty_scaled = 20;
   // Fee source for BUY child orders.
-  orders.v1.FeeSource fee_source = 25;
+  orders.v1.FeeSource fee_source = 21;
   // Self-trade prevention mode for child orders.
-  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 26;
-  // True if child LIMIT orders are post-only.
-  bool post_only = 27;
+  orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 22;
 
-  // Type-specific fields.
-  oneof details {
+  // Immutable strategy configuration. The selected variant is the trigger
+  // category and uses the same shape accepted by CreateTrigger.
+  oneof configuration {
+    // Stop-loss configuration.
+    ConditionalTrigger stop_loss = 30;
+    // Take-profit configuration.
+    ConditionalTrigger take_profit = 31;
+    // Trailing-stop configuration.
+    TrailingStopTrigger trailing_stop = 32;
+    // TWAP configuration.
+    TwapTrigger twap = 33;
+    // Ladder configuration.
+    LadderTrigger ladder = 34;
+  }
+
+  // Type-specific runtime state.
+  oneof runtime_details {
     // Stop-loss or take-profit trigger details.
     StopDetails stop = 100;
     // Trailing-stop trigger details.
     TrailingDetails trailing = 101;
     // TWAP trigger details.
-    TwapDetails twap = 102;
+    TwapDetails twap_state = 102;
     // Ladder trigger details.
-    LadderDetails ladder = 103;
+    LadderDetails ladder_state = 103;
   }
 
   // Client-provided trigger ID for idempotency and correlation.

@@ -75,88 +75,119 @@ enum SelfTradePreventionMode {
 // Connect/Proto-facing Messages (scaled ints, fixed64 IDs)
 // =============================================================================
 
-// CreateOrderRequest is the binary (protobuf) request for placing orders.
-// Uses scaled integers for quantity and price, plus fixed64 IDs.
-// Preferred by latency-sensitive clients.
-message CreateOrderRequest {
-  option (buf.validate.message).cel = {
-    id: "create_order.market_slippage_market_only"
-    message: "market_max_slippage/client reference are only valid for MARKET orders"
-    expression: "(this.order_type == 2) || (!(has(this.market_max_slippage_ticks) || has(this.market_max_slippage_bps) || this.market_client_ref_price_ticks > 0))"
-  };
-
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
-  optional fixed64 subaccount_id = 1;
-  // Trading pair symbol, e.g., "BTC-USDT"; resolved to pair_id by gateway.
-  string symbol = 2 [(buf.validate.field).string.min_len = 1];
-  // Order side: BUY or SELL.
-  Side side = 3 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // Order type: LIMIT or MARKET.
-  OrderType order_type = 4 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // Time-in-force: GTC, IOC, or FOK. Defaults to GTC if unspecified.
-  TimeInForce time_in_force = 5 [(buf.validate.field).enum.defined_only = true];
-  // Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
-  int64 qty_scaled = 6 [(buf.validate.field).int64.gt = 0];
-  // Price in quote units scaled by 1e6. Optional for MARKET orders.
-  int64 price_ticks = 7;
-  // Optional max slippage override for MARKET orders.
-  // If omitted, server-side per-pair default slippage is used.
-  oneof market_max_slippage {
+// MarketIoc configures a market order. Market orders always execute as
+// immediate-or-cancel and therefore cannot rest or be post-only.
+message MarketIoc {
+  // Optional max slippage override. If omitted, the pair default is used.
+  oneof max_slippage {
     // Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.
-    int32 market_max_slippage_ticks = 12 [(buf.validate.field).int32.gt = 0];
+    int32 max_slippage_ticks = 1 [(buf.validate.field).int32.gt = 0];
     // Maximum allowed slippage in basis points (1 bp = 0.01%).
-    int32 market_max_slippage_bps = 13 [(buf.validate.field).int32 = {
+    int32 max_slippage_bps = 2 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
     }];
   }
-  // Optional client-side reference price in quote units scaled by 1e6 for
-  // MARKET slippage anchoring.
-  // When absent, admission uses server-side reference pricing.
-  int64 market_client_ref_price_ticks = 14 [
+  // Optional client reference price in quote units scaled by 1e6. When
+  // omitted, admission uses server-side reference pricing.
+  int64 client_ref_price_ticks = 3 [
     (buf.validate.field).int64.gt = 0,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
-  // If true, the order is rejected instead of crossing the book (maker-only).
-  bool post_only = 8;
+}
+
+// LimitGtc configures a good-til-canceled limit order.
+message LimitGtc {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Reject the order instead of taking liquidity. Post-only is available only
+  // on this resting limit-order variant.
+  bool post_only = 2;
+}
+
+// LimitIoc configures an immediate-or-cancel limit order.
+message LimitIoc {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+}
+
+// LimitFok configures a fill-or-kill limit order.
+message LimitFok {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+}
+
+// OrderIntent contains one order's complete, transport-independent placement
+// intent. Single and batch create use this same message.
+message OrderIntent {
+  // Trading pair symbol, for example "BTC-USDT".
+  string symbol = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Order side.
+  Side side = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
+  int64 qty_scaled = 3 [
+    (buf.validate.field).int64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Required execution behavior. The selected variant exposes only fields that
+  // can be honored together.
+  oneof execution {
+    option (buf.validate.oneof).required = true;
+    // Market order with implicit IOC behavior.
+    MarketIoc market_ioc = 10;
+    // Resting GTC limit order, optionally post-only.
+    LimitGtc limit_gtc = 11;
+    // Immediate-or-cancel limit order.
+    LimitIoc limit_ioc = 12;
+    // Fill-or-kill limit order.
+    LimitFok limit_fok = 13;
+  }
   // Optional client order identifier for idempotency.
-  string client_order_id = 9 [
+  string client_order_id = 20 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
   ];
-  // Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders always
-  // pay fees in quote asset.
-  FeeSource fee_source = 10 [(buf.validate.field).enum.defined_only = true];
+  // Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders must
+  // use QUOTE.
+  FeeSource fee_source = 21 [(buf.validate.field).enum.defined_only = true];
   // Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.
-  SelfTradePreventionMode self_trade_prevention_mode = 11 [(buf.validate.field).enum.defined_only = true];
-  // Optional attached risk controls (TP/SL/TrailingStop) for this order.
-  RiskPolicy attached_risk = 20;
+  SelfTradePreventionMode self_trade_prevention_mode = 22 [(buf.validate.field).enum.defined_only = true];
+  // Optional attached risk controls that arm after the parent order fills.
+  RiskPolicy attached_risk = 30;
 }
 
-// CreateOrderResponse is the binary (protobuf) response after placing an order.
+// CreateOrderRequest submits one order intent for admission.
+message CreateOrderRequest {
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Order to admit.
+  OrderIntent order = 2 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// CreateOrderResponse acknowledges admission only. It does not report whether
+// the order is working, filled, canceled, or rejected after admission; use
+// order reads or realtime streams for execution state.
 message CreateOrderResponse {
-  // Status indicator, e.g., "accepted".
-  string status = 1;
-  // Order ID as fixed64.
-  fixed64 order_id = 2;
-  // Echoed client order ID (when provided in request).
-  string client_order_id = 3;
-  // Server timestamp.
-  google.protobuf.Timestamp ts = 4;
-  // Server timestamp as epoch nanoseconds (for bots).
-  uint64 ts_ns = 5;
+  // Assigned order ID.
+  fixed64 order_id = 1;
+  // Echoed client order ID when one was supplied.
+  string client_order_id = 2;
+  // Time admission completed.
+  google.protobuf.Timestamp accepted_at = 3;
+  // Admission completion time as epoch nanoseconds (UTC).
+  uint64 accepted_at_ts_ns = 4;
   // Trigger ID for attached take-profit.
   optional uint64 take_profit_trigger_id = 20;
   // Trigger ID for attached stop-loss.
@@ -337,6 +368,18 @@ enum ErrorCode {
   ERROR_CODE_MAX_SLIPPAGE_INVALID = 48;
   // Client reference price is stale compared to server-side BBO/drift policy.
   ERROR_CODE_STALE_QUOTE = 65;
+  // Request failed structural or cross-field validation.
+  ERROR_CODE_VALIDATION_ERROR = 66;
+}
+
+// FieldViolation describes one actionable request validation failure.
+message FieldViolation {
+  // Protobuf field path relative to the request, using canonical field names.
+  string field_path = 1;
+  // Stable validation rule identifier suitable for programmatic matching.
+  string rule_id = 2;
+  // Human-readable explanation of the violation.
+  string message = 3;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.
@@ -344,6 +387,8 @@ enum ErrorCode {
 message ErrorDetail {
   // Stable error code matching the REST problem+json "code" field.
   ErrorCode code = 1;
+  // Field-level validation failures. Empty for non-validation domain errors.
+  repeated FieldViolation violations = 2;
 }
 
 // =============================================================================
@@ -377,32 +422,45 @@ enum TriggerDirection {
   BELOW = 2;
 }
 
-// TakeProfitPolicy defines a take-profit attached to an order.
-// Arms after the parent order fills; fires when price crosses the threshold.
-message TakeProfitPolicy {
-  // Trigger price in quote units scaled by 1e6. Required.
-  int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
-  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
-  TriggerPriceSource trigger_price_source = 2 [(buf.validate.field).enum.defined_only = true];
-  // Order type for the child order when triggered. Defaults to MARKET.
-  OrderType order_type = 3 [(buf.validate.field).enum.defined_only = true];
-  // Limit price in quote units scaled by 1e6 for LIMIT child orders. Required
-  // if order_type is LIMIT.
-  int64 limit_price_ticks = 4;
+// RiskMarketIoc configures an attached risk leg that submits a market child
+// with implicit immediate-or-cancel behavior.
+message RiskMarketIoc {}
+
+// RiskLimitGtc configures an attached risk leg that submits a resting limit
+// child. Attached risk legs do not support post-only.
+message RiskLimitGtc {
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
 }
 
-// StopLossPolicy defines a stop-loss attached to an order.
-// Arms after the parent order fills; fires when price crosses the threshold.
-message StopLossPolicy {
-  // Trigger price in quote units scaled by 1e6. Required.
+// RiskExecution selects the child execution supported by attached take-profit
+// and stop-loss policies.
+message RiskExecution {
+  oneof execution {
+    option (buf.validate.oneof).required = true;
+    // Market child with implicit IOC behavior.
+    RiskMarketIoc market_ioc = 1;
+    // Resting GTC limit child.
+    RiskLimitGtc limit_gtc = 2;
+  }
+}
+
+// TakeProfitPolicy defines a take-profit attached to an order. It evaluates
+// last trade price, arms after the parent fills, and submits the selected child.
+message TakeProfitPolicy {
+  // Trigger price in quote units scaled by 1e6.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
-  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
-  TriggerPriceSource trigger_price_source = 2 [(buf.validate.field).enum.defined_only = true];
-  // Order type for the child order when triggered. Defaults to MARKET.
-  OrderType order_type = 3 [(buf.validate.field).enum.defined_only = true];
-  // Limit price in quote units scaled by 1e6 for LIMIT child orders. Required
-  // if order_type is LIMIT.
-  int64 limit_price_ticks = 4;
+  // Child execution when the threshold is crossed.
+  RiskExecution child = 2 [(buf.validate.field).required = true];
+}
+
+// StopLossPolicy defines a stop-loss attached to an order. It evaluates last
+// trade price, arms after the parent fills, and submits the selected child.
+message StopLossPolicy {
+  // Trigger price in quote units scaled by 1e6.
+  int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Child execution when the threshold is crossed.
+  RiskExecution child = 2 [(buf.validate.field).required = true];
 }
 
 // TrailingStopPolicy defines a trailing stop attached to an order.
@@ -437,10 +495,6 @@ message TrailingStopPolicy {
   // reached. If omitted, trailing starts immediately after the parent order
   // fills. Expressed in quote units scaled by 1e6.
   int64 activation_price_ticks = 3;
-  // Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.
-  TriggerPriceSource trigger_price_source = 4 [(buf.validate.field).enum.defined_only = true];
-  // Order type for the child order when triggered. Defaults to MARKET.
-  OrderType order_type = 5 [(buf.validate.field).enum.defined_only = true];
 }
 
 // RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an
@@ -588,22 +642,36 @@ message CancelAllAfterResponse {
 // BatchCreateOrders: best-effort batch order placement
 // =============================================================================
 
-// BatchCreateResultItem contains the per-item result of a batch create.
-message BatchCreateResultItem {
-  // "accepted" or "rejected".
-  string status = 1;
-  // Resolved order ID (populated on accept).
-  fixed64 order_id = 2;
-  // Echoed client order ID.
-  string client_order_id = 3;
-  // Error code if rejected.
-  string code = 4;
+// BatchCreateAccepted contains the assigned identifiers for an admitted item.
+message BatchCreateAccepted {
+  // Assigned order ID.
+  fixed64 order_id = 1;
   // Trigger ID for attached take-profit (when accepted and configured).
-  optional uint64 take_profit_trigger_id = 5;
+  optional uint64 take_profit_trigger_id = 2;
   // Trigger ID for attached stop-loss (when accepted and configured).
-  optional uint64 stop_loss_trigger_id = 6;
+  optional uint64 stop_loss_trigger_id = 3;
   // Trigger ID for attached trailing stop (when accepted and configured).
-  optional uint64 trailing_stop_trigger_id = 7;
+  optional uint64 trailing_stop_trigger_id = 4;
+}
+
+// BatchCreateRejected contains the typed reason an item was not admitted.
+message BatchCreateRejected {
+  // Structured rejection detail.
+  ErrorDetail error = 1 [(buf.validate.field).required = true];
+}
+
+// BatchCreateResultItem contains exactly one per-item batch outcome.
+message BatchCreateResultItem {
+  // Echoed client order ID.
+  string client_order_id = 1;
+  // Accepted or rejected outcome.
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    // Item was admitted.
+    BatchCreateAccepted accepted = 2;
+    // Item was rejected before admission.
+    BatchCreateRejected rejected = 3;
+  }
 }
 
 // BatchCreateOrdersRequest places multiple orders in one request.
@@ -616,13 +684,12 @@ message BatchCreateOrdersRequest {
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
-  // Orders to create (max 20). Reuses CreateOrderRequest payload, including attached risk.
-  repeated CreateOrderRequest items = 3 [(buf.validate.field).repeated = {
+  // Orders to create (max 20). Every item uses the same OrderIntent contract as
+  // single create.
+  repeated OrderIntent items = 3 [(buf.validate.field).repeated = {
     min_items: 1
     max_items: 20
   }];
-  // Optional partial-success flag. Current implementation is always best-effort.
-  bool allow_partial = 4;
 }
 
 // BatchCreateOrdersResponse returns per-item results for a batch create.

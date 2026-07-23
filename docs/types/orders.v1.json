@@ -354,6 +354,51 @@
       }
     },
     {
+      "name": "orders.v1.BatchCreateAccepted",
+      "kind": "message",
+      "doc": "BatchCreateAccepted contains the assigned identifiers for an admitted item.",
+      "message": {
+        "fields": [
+          {
+            "name": "order_id",
+            "jsonName": "orderId",
+            "number": 1,
+            "doc": "Assigned order ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "take_profit_trigger_id",
+            "jsonName": "takeProfitTriggerId",
+            "number": 2,
+            "doc": "Trigger ID for attached take-profit (when accepted and configured).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "stop_loss_trigger_id",
+            "jsonName": "stopLossTriggerId",
+            "number": 3,
+            "doc": "Trigger ID for attached stop-loss (when accepted and configured).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "trailing_stop_trigger_id",
+            "jsonName": "trailingStopTriggerId",
+            "number": 4,
+            "doc": "Trigger ID for attached trailing stop (when accepted and configured).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.BatchCreateOrdersRequest",
       "kind": "message",
       "doc": "BatchCreateOrdersRequest places multiple orders in one request.",
@@ -387,23 +432,15 @@
             "name": "items",
             "jsonName": "items",
             "number": 3,
-            "doc": "Orders to create (max 20). Reuses CreateOrderRequest payload, including attached risk.",
+            "doc": "Orders to create (max 20). Every item uses the same OrderIntent contract as\n single create.",
             "repeated": true,
-            "protoRef": "orders.v1.CreateOrderRequest",
+            "protoRef": "orders.v1.OrderIntent",
             "validate": {
               "repeated": {
                 "minItems": 1,
                 "maxItems": 20
               }
             }
-          },
-          {
-            "name": "allow_partial",
-            "jsonName": "allowPartial",
-            "number": 4,
-            "doc": "Optional partial-success flag. Current implementation is always best-effort.",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
           }
         ]
       }
@@ -461,70 +498,63 @@
       }
     },
     {
-      "name": "orders.v1.BatchCreateResultItem",
+      "name": "orders.v1.BatchCreateRejected",
       "kind": "message",
-      "doc": "BatchCreateResultItem contains the per-item result of a batch create.",
+      "doc": "BatchCreateRejected contains the typed reason an item was not admitted.",
       "message": {
         "fields": [
           {
-            "name": "status",
-            "jsonName": "status",
+            "name": "error",
+            "jsonName": "error",
             "number": 1,
-            "doc": "\"accepted\" or \"rejected\".",
-            "protoScalar": "string",
-            "jsonType": "string"
-          },
+            "doc": "Structured rejection detail.",
+            "protoRef": "orders.v1.ErrorDetail",
+            "validate": {
+              "required": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.BatchCreateResultItem",
+      "kind": "message",
+      "doc": "BatchCreateResultItem contains exactly one per-item batch outcome.",
+      "message": {
+        "oneofs": [
           {
-            "name": "order_id",
-            "jsonName": "orderId",
-            "number": 2,
-            "doc": "Resolved order ID (populated on accept).",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64"
-          },
+            "name": "outcome",
+            "required": true,
+            "fields": [
+              "accepted",
+              "rejected"
+            ]
+          }
+        ],
+        "fields": [
           {
             "name": "client_order_id",
             "jsonName": "clientOrderId",
-            "number": 3,
+            "number": 1,
             "doc": "Echoed client order ID.",
             "protoScalar": "string",
             "jsonType": "string"
           },
           {
-            "name": "code",
-            "jsonName": "code",
-            "number": 4,
-            "doc": "Error code if rejected.",
-            "protoScalar": "string",
-            "jsonType": "string"
+            "name": "accepted",
+            "jsonName": "accepted",
+            "number": 2,
+            "doc": "Item was admitted.",
+            "protoRef": "orders.v1.BatchCreateAccepted",
+            "oneof": "outcome"
           },
           {
-            "name": "take_profit_trigger_id",
-            "jsonName": "takeProfitTriggerId",
-            "number": 5,
-            "doc": "Trigger ID for attached take-profit (when accepted and configured).",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "stop_loss_trigger_id",
-            "jsonName": "stopLossTriggerId",
-            "number": 6,
-            "doc": "Trigger ID for attached stop-loss (when accepted and configured).",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "trailing_stop_trigger_id",
-            "jsonName": "trailingStopTriggerId",
-            "number": 7,
-            "doc": "Trigger ID for attached trailing stop (when accepted and configured).",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
+            "name": "rejected",
+            "jsonName": "rejected",
+            "number": 3,
+            "doc": "Item was rejected before admission.",
+            "protoRef": "orders.v1.BatchCreateRejected",
+            "oneof": "outcome"
           }
         ]
       }
@@ -1244,24 +1274,8 @@
     {
       "name": "orders.v1.CreateOrderRequest",
       "kind": "message",
-      "doc": "CreateOrderRequest is the binary (protobuf) request for placing orders.\n Uses scaled integers for quantity and price, plus fixed64 IDs.\n Preferred by latency-sensitive clients.",
+      "doc": "CreateOrderRequest submits one order intent for admission.",
       "message": {
-        "cel": [
-          {
-            "id": "create_order.market_slippage_market_only",
-            "message": "market_max_slippage/client reference are only valid for MARKET orders",
-            "expression": "(this.order_type == 2) || (!(has(this.market_max_slippage_ticks) || has(this.market_max_slippage_bps) || this.market_client_ref_price_ticks \u003e 0))"
-          }
-        ],
-        "oneofs": [
-          {
-            "name": "market_max_slippage",
-            "fields": [
-              "market_max_slippage_ticks",
-              "market_max_slippage_bps"
-            ]
-          }
-        ],
         "fields": [
           {
             "name": "subaccount_id",
@@ -1273,180 +1287,14 @@
             "format": "fixed64"
           },
           {
-            "name": "symbol",
-            "jsonName": "symbol",
+            "name": "order",
+            "jsonName": "order",
             "number": 2,
-            "doc": "Trading pair symbol, e.g., \"BTC-USDT\"; resolved to pair_id by gateway.",
-            "protoScalar": "string",
-            "jsonType": "string",
+            "doc": "Order to admit.",
+            "protoRef": "orders.v1.OrderIntent",
             "validate": {
-              "string": {
-                "minLen": 1
-              }
+              "required": true
             }
-          },
-          {
-            "name": "side",
-            "jsonName": "side",
-            "number": 3,
-            "doc": "Order side: BUY or SELL.",
-            "protoRef": "orders.v1.Side",
-            "validate": {
-              "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
-              }
-            }
-          },
-          {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 4,
-            "doc": "Order type: LIMIT or MARKET.",
-            "protoRef": "orders.v1.OrderType",
-            "validate": {
-              "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
-              }
-            }
-          },
-          {
-            "name": "time_in_force",
-            "jsonName": "timeInForce",
-            "number": 5,
-            "doc": "Time-in-force: GTC, IOC, or FOK. Defaults to GTC if unspecified.",
-            "protoRef": "orders.v1.TimeInForce",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "qty_scaled",
-            "jsonName": "qtyScaled",
-            "number": 6,
-            "doc": "Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
-          },
-          {
-            "name": "price_ticks",
-            "jsonName": "priceTicks",
-            "number": 7,
-            "doc": "Price in quote units scaled by 1e6. Optional for MARKET orders.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
-          },
-          {
-            "name": "market_max_slippage_ticks",
-            "jsonName": "marketMaxSlippageTicks",
-            "number": 12,
-            "doc": "Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            },
-            "oneof": "market_max_slippage"
-          },
-          {
-            "name": "market_max_slippage_bps",
-            "jsonName": "marketMaxSlippageBps",
-            "number": 13,
-            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
-            "protoScalar": "int32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0",
-                "lte": "10000"
-              }
-            },
-            "oneof": "market_max_slippage"
-          },
-          {
-            "name": "market_client_ref_price_ticks",
-            "jsonName": "marketClientRefPriceTicks",
-            "number": 14,
-            "doc": "Optional client-side reference price in quote units scaled by 1e6 for\n MARKET slippage anchoring.\n When absent, admission uses server-side reference pricing.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
-          },
-          {
-            "name": "post_only",
-            "jsonName": "postOnly",
-            "number": 8,
-            "doc": "If true, the order is rejected instead of crossing the book (maker-only).",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
-          },
-          {
-            "name": "client_order_id",
-            "jsonName": "clientOrderId",
-            "number": 9,
-            "doc": "Optional client order identifier for idempotency.",
-            "protoScalar": "string",
-            "jsonType": "string",
-            "validate": {
-              "string": {
-                "maxLen": 36,
-                "pattern": "^[A-Za-z0-9._:/-]*$"
-              }
-            }
-          },
-          {
-            "name": "fee_source",
-            "jsonName": "feeSource",
-            "number": 10,
-            "doc": "Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders always\n pay fees in quote asset.",
-            "protoRef": "orders.v1.FeeSource",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "self_trade_prevention_mode",
-            "jsonName": "selfTradePreventionMode",
-            "number": 11,
-            "doc": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
-            "protoRef": "orders.v1.SelfTradePreventionMode",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "attached_risk",
-            "jsonName": "attachedRisk",
-            "number": 20,
-            "doc": "Optional attached risk controls (TP/SL/TrailingStop) for this order.",
-            "protoRef": "orders.v1.RiskPolicy"
           }
         ]
       }
@@ -1454,22 +1302,14 @@
     {
       "name": "orders.v1.CreateOrderResponse",
       "kind": "message",
-      "doc": "CreateOrderResponse is the binary (protobuf) response after placing an order.",
+      "doc": "CreateOrderResponse acknowledges admission only. It does not report whether\n the order is working, filled, canceled, or rejected after admission; use\n order reads or realtime streams for execution state.",
       "message": {
         "fields": [
           {
-            "name": "status",
-            "jsonName": "status",
-            "number": 1,
-            "doc": "Status indicator, e.g., \"accepted\".",
-            "protoScalar": "string",
-            "jsonType": "string"
-          },
-          {
             "name": "order_id",
             "jsonName": "orderId",
-            "number": 2,
-            "doc": "Order ID as fixed64.",
+            "number": 1,
+            "doc": "Assigned order ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1477,25 +1317,25 @@
           {
             "name": "client_order_id",
             "jsonName": "clientOrderId",
-            "number": 3,
-            "doc": "Echoed client order ID (when provided in request).",
+            "number": 2,
+            "doc": "Echoed client order ID when one was supplied.",
             "protoScalar": "string",
             "jsonType": "string"
           },
           {
-            "name": "ts",
-            "jsonName": "ts",
-            "number": 4,
-            "doc": "Server timestamp.",
+            "name": "accepted_at",
+            "jsonName": "acceptedAt",
+            "number": 3,
+            "doc": "Time admission completed.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
           },
           {
-            "name": "ts_ns",
-            "jsonName": "tsNs",
-            "number": 5,
-            "doc": "Server timestamp as epoch nanoseconds (for bots).",
+            "name": "accepted_at_ts_ns",
+            "jsonName": "acceptedAtTsNs",
+            "number": 4,
+            "doc": "Admission completion time as epoch nanoseconds (UTC).",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1838,6 +1678,11 @@
             "name": "ERROR_CODE_STALE_QUOTE",
             "number": 65,
             "doc": "Client reference price is stale compared to server-side BBO/drift policy."
+          },
+          {
+            "name": "ERROR_CODE_VALIDATION_ERROR",
+            "number": 66,
+            "doc": "Request failed structural or cross-field validation."
           }
         ]
       }
@@ -1854,6 +1699,14 @@
             "number": 1,
             "doc": "Stable error code matching the REST problem+json \"code\" field.",
             "protoRef": "orders.v1.ErrorCode"
+          },
+          {
+            "name": "violations",
+            "jsonName": "violations",
+            "number": 2,
+            "doc": "Field-level validation failures. Empty for non-validation domain errors.",
+            "repeated": true,
+            "protoRef": "orders.v1.FieldViolation"
           }
         ]
       }
@@ -1872,6 +1725,39 @@
             "name": "RECEIVED",
             "number": 2,
             "doc": "BUY-only option: fees are paid from the received base asset."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.FieldViolation",
+      "kind": "message",
+      "doc": "FieldViolation describes one actionable request validation failure.",
+      "message": {
+        "fields": [
+          {
+            "name": "field_path",
+            "jsonName": "fieldPath",
+            "number": 1,
+            "doc": "Protobuf field path relative to the request, using canonical field names.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "rule_id",
+            "jsonName": "ruleId",
+            "number": 2,
+            "doc": "Stable validation rule identifier suitable for programmatic matching.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "message",
+            "jsonName": "message",
+            "number": 3,
+            "doc": "Human-readable explanation of the violation.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -2408,6 +2294,146 @@
       }
     },
     {
+      "name": "orders.v1.LimitFok",
+      "kind": "message",
+      "doc": "LimitFok configures a fill-or-kill limit order.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.LimitGtc",
+      "kind": "message",
+      "doc": "LimitGtc configures a good-til-canceled limit order.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 2,
+            "doc": "Reject the order instead of taking liquidity. Post-only is available only\n on this resting limit-order variant.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.LimitIoc",
+      "kind": "message",
+      "doc": "LimitIoc configures an immediate-or-cancel limit order.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.MarketIoc",
+      "kind": "message",
+      "doc": "MarketIoc configures a market order. Market orders always execute as\n immediate-or-cancel and therefore cannot rest or be post-only.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 1,
+            "doc": "Maximum allowed slippage as a price delta in 1e-6 quote-unit ticks.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 2,
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "client_ref_price_ticks",
+            "jsonName": "clientRefPriceTicks",
+            "number": 3,
+            "doc": "Optional client reference price in quote units scaled by 1e6. When\n omitted, admission uses server-side reference pricing.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.ModifyActionTaken",
       "kind": "enum",
       "doc": "ModifyActionTaken describes what action was applied for a modify request.",
@@ -2910,6 +2936,146 @@
       }
     },
     {
+      "name": "orders.v1.OrderIntent",
+      "kind": "message",
+      "doc": "OrderIntent contains one order's complete, transport-independent placement\n intent. Single and batch create use this same message.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "execution",
+            "required": true,
+            "fields": [
+              "market_ioc",
+              "limit_gtc",
+              "limit_ioc",
+              "limit_fok"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 1,
+            "doc": "Trading pair symbol, for example \"BTC-USDT\".",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 2,
+            "doc": "Order side.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 3,
+            "doc": "Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "market_ioc",
+            "jsonName": "marketIoc",
+            "number": 10,
+            "doc": "Market order with implicit IOC behavior.",
+            "protoRef": "orders.v1.MarketIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_gtc",
+            "jsonName": "limitGtc",
+            "number": 11,
+            "doc": "Resting GTC limit order, optionally post-only.",
+            "protoRef": "orders.v1.LimitGtc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_ioc",
+            "jsonName": "limitIoc",
+            "number": 12,
+            "doc": "Immediate-or-cancel limit order.",
+            "protoRef": "orders.v1.LimitIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_fok",
+            "jsonName": "limitFok",
+            "number": 13,
+            "doc": "Fill-or-kill limit order.",
+            "protoRef": "orders.v1.LimitFok",
+            "oneof": "execution"
+          },
+          {
+            "name": "client_order_id",
+            "jsonName": "clientOrderId",
+            "number": 20,
+            "doc": "Optional client order identifier for idempotency.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 36,
+                "pattern": "^[A-Za-z0-9._:/-]*$"
+              }
+            }
+          },
+          {
+            "name": "fee_source",
+            "jsonName": "feeSource",
+            "number": 21,
+            "doc": "Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders must\n use QUOTE.",
+            "protoRef": "orders.v1.FeeSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "self_trade_prevention_mode",
+            "jsonName": "selfTradePreventionMode",
+            "number": 22,
+            "doc": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
+            "protoRef": "orders.v1.SelfTradePreventionMode",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "attached_risk",
+            "jsonName": "attachedRisk",
+            "number": 30,
+            "doc": "Optional attached risk controls that arm after the parent order fills.",
+            "protoRef": "orders.v1.RiskPolicy"
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.OrderOrigin",
       "kind": "message",
       "doc": "OrderOrigin explains why an order exists and where it came from.\n\n Population rules:\n - direct/manual orders: scope=DIRECT; trigger fields unset/unspecified.\n - attached children: scope=ATTACHED_RISK; parent_order_id is set.\n - standalone trigger children: scope=STANDALONE_TRIGGER.\n - child_seq is set for multi-child strategies (for example TWAP/LADDER).",
@@ -3163,6 +3329,72 @@
       }
     },
     {
+      "name": "orders.v1.RiskExecution",
+      "kind": "message",
+      "doc": "RiskExecution selects the child execution supported by attached take-profit\n and stop-loss policies.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "execution",
+            "required": true,
+            "fields": [
+              "market_ioc",
+              "limit_gtc"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "market_ioc",
+            "jsonName": "marketIoc",
+            "number": 1,
+            "doc": "Market child with implicit IOC behavior.",
+            "protoRef": "orders.v1.RiskMarketIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_gtc",
+            "jsonName": "limitGtc",
+            "number": 2,
+            "doc": "Resting GTC limit child.",
+            "protoRef": "orders.v1.RiskLimitGtc",
+            "oneof": "execution"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.RiskLimitGtc",
+      "kind": "message",
+      "doc": "RiskLimitGtc configures an attached risk leg that submits a resting limit\n child. Attached risk legs do not support post-only.",
+      "message": {
+        "fields": [
+          {
+            "name": "price_ticks",
+            "jsonName": "priceTicks",
+            "number": 1,
+            "doc": "Limit price in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.RiskMarketIoc",
+      "kind": "message",
+      "doc": "RiskMarketIoc configures an attached risk leg that submits a market child\n with implicit immediate-or-cancel behavior.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
       "doc": "RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an\n order. These arm after the parent order fills and fire when conditions are\n met. If the parent order is canceled before any fill, attached risk controls\n are discarded.",
@@ -3262,14 +3494,14 @@
     {
       "name": "orders.v1.StopLossPolicy",
       "kind": "message",
-      "doc": "StopLossPolicy defines a stop-loss attached to an order.\n Arms after the parent order fills; fires when price crosses the threshold.",
+      "doc": "StopLossPolicy defines a stop-loss attached to an order. It evaluates last\n trade price, arms after the parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
             "name": "trigger_price_ticks",
             "jsonName": "triggerPriceTicks",
             "number": 1,
-            "doc": "Trigger price in quote units scaled by 1e6. Required.",
+            "doc": "Trigger price in quote units scaled by 1e6.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -3280,37 +3512,14 @@
             }
           },
           {
-            "name": "trigger_price_source",
-            "jsonName": "triggerPriceSource",
+            "name": "child",
+            "jsonName": "child",
             "number": 2,
-            "doc": "Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.",
-            "protoRef": "orders.v1.TriggerPriceSource",
+            "doc": "Child execution when the threshold is crossed.",
+            "protoRef": "orders.v1.RiskExecution",
             "validate": {
-              "enum": {
-                "definedOnly": true
-              }
+              "required": true
             }
-          },
-          {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 3,
-            "doc": "Order type for the child order when triggered. Defaults to MARKET.",
-            "protoRef": "orders.v1.OrderType",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "limit_price_ticks",
-            "jsonName": "limitPriceTicks",
-            "number": 4,
-            "doc": "Limit price in quote units scaled by 1e6 for LIMIT child orders. Required\n if order_type is LIMIT.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
           }
         ]
       }
@@ -3318,14 +3527,14 @@
     {
       "name": "orders.v1.TakeProfitPolicy",
       "kind": "message",
-      "doc": "TakeProfitPolicy defines a take-profit attached to an order.\n Arms after the parent order fills; fires when price crosses the threshold.",
+      "doc": "TakeProfitPolicy defines a take-profit attached to an order. It evaluates\n last trade price, arms after the parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
             "name": "trigger_price_ticks",
             "jsonName": "triggerPriceTicks",
             "number": 1,
-            "doc": "Trigger price in quote units scaled by 1e6. Required.",
+            "doc": "Trigger price in quote units scaled by 1e6.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -3336,37 +3545,14 @@
             }
           },
           {
-            "name": "trigger_price_source",
-            "jsonName": "triggerPriceSource",
+            "name": "child",
+            "jsonName": "child",
             "number": 2,
-            "doc": "Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.",
-            "protoRef": "orders.v1.TriggerPriceSource",
+            "doc": "Child execution when the threshold is crossed.",
+            "protoRef": "orders.v1.RiskExecution",
             "validate": {
-              "enum": {
-                "definedOnly": true
-              }
+              "required": true
             }
-          },
-          {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 3,
-            "doc": "Order type for the child order when triggered. Defaults to MARKET.",
-            "protoRef": "orders.v1.OrderType",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "limit_price_ticks",
-            "jsonName": "limitPriceTicks",
-            "number": 4,
-            "doc": "Limit price in quote units scaled by 1e6 for LIMIT child orders. Required\n if order_type is LIMIT.",
-            "protoScalar": "int64",
-            "jsonType": "string",
-            "format": "int64"
           }
         ]
       }
@@ -3486,30 +3672,6 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
-          },
-          {
-            "name": "trigger_price_source",
-            "jsonName": "triggerPriceSource",
-            "number": 4,
-            "doc": "Price source for trigger evaluation. Defaults to LAST_PRICE if unspecified.",
-            "protoRef": "orders.v1.TriggerPriceSource",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "order_type",
-            "jsonName": "orderType",
-            "number": 5,
-            "doc": "Order type for the child order when triggered. Defaults to MARKET.",
-            "protoRef": "orders.v1.OrderType",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
           }
         ]
       }
