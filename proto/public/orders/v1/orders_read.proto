@@ -33,6 +33,20 @@ enum OrderStatus {
   REJECTED = 6;
 }
 
+// BatchReplacePhase is the recoverable execution phase for one replacement.
+enum BatchReplacePhase {
+  // Phase is unavailable.
+  BATCH_REPLACE_PHASE_UNSPECIFIED = 0;
+  // The replacement was admitted and handed to execution.
+  BATCH_REPLACE_PHASE_ADMITTED = 1;
+  // The successor order is active.
+  BATCH_REPLACE_PHASE_WORKING = 2;
+  // The replacement was rejected.
+  BATCH_REPLACE_PHASE_REJECTED = 3;
+  // The successor reached a terminal order state.
+  BATCH_REPLACE_PHASE_TERMINAL = 4;
+}
+
 // OrderOriginScope captures broad origin classes for an order.
 enum OrderOriginScope {
   // Order origin scope was not provided.
@@ -227,6 +241,8 @@ message Order {
     gte: 1
     lte: 2147483647
   }];
+  // Batch-replace identity that admitted this order. Zero for other origins.
+  fixed64 batch_request_id = 27;
 }
 
 // UserTrade is the Connect-facing per-user trade fill view.
@@ -440,6 +456,50 @@ message GetOrderResponse {
   repeated OrderTransfer transfers = 3;
 }
 
+// GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.
+message GetBatchReplaceStatusRequest {
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Server-issued batch identity from BatchReplaceOrders.
+  fixed64 batch_request_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// BatchReplaceStatusItem is the index-stable execution status for one replacement.
+message BatchReplaceStatusItem {
+  // Zero-based item index from the write request.
+  uint32 item_index = 1;
+  // Current recoverable phase.
+  BatchReplacePhase phase = 2;
+  // Original order targeted by the replacement.
+  fixed64 old_order_id = 3;
+  // Assigned successor order ID. Zero when rejected before assignment.
+  fixed64 replacement_order_id = 4;
+  // Current successor order status when available.
+  OrderStatus order_status = 5;
+  // Stable rejection or terminal error code. Empty when none.
+  string code = 6;
+  // Latest status timestamp in nanoseconds since epoch.
+  uint64 updated_ts_ns = 7;
+}
+
+// GetBatchReplaceStatusResponse returns durable batch and per-item finality.
+message GetBatchReplaceStatusResponse {
+  // Server-issued batch identity.
+  fixed64 batch_request_id = 1;
+  // Aggregate admission status returned by the write receipt.
+  BatchReplaceAdmissionStatus admission_status = 2;
+  // Per-item statuses in request order.
+  repeated BatchReplaceStatusItem items = 3;
+  // Number of admitted items.
+  uint32 accepted_count = 4;
+  // Number of rejected items.
+  uint32 rejected_count = 5;
+  // Server acceptance timestamp in nanoseconds since epoch.
+  uint64 accepted_ts_ns = 6;
+  // Latest batch status timestamp in nanoseconds since epoch.
+  uint64 updated_ts_ns = 7;
+}
+
 // =============================================================================
 // Service Definition
 // =============================================================================
@@ -459,4 +519,7 @@ service OrdersReadService {
 
   // Retrieve a single order by order ID or client order ID, including related user trades and ledger transfers.
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {}
+
+  // Retrieve durable execution status for one admitted batch replacement.
+  rpc GetBatchReplaceStatus(GetBatchReplaceStatusRequest) returns (GetBatchReplaceStatusResponse) {}
 }

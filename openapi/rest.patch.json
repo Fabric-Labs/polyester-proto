@@ -76,9 +76,9 @@
       "requestSchema": "polyester.rest.OrdersService_BatchCreateOrders.Request",
       "responseSchema": "polyester.rest.OrdersService_BatchCreateOrders.Response"
     },
-    "OrdersService_BatchModifyOrders": {
-      "requestSchema": "polyester.rest.OrdersService_BatchModifyOrders.Request",
-      "responseSchema": "polyester.rest.OrdersService_BatchModifyOrders.Response"
+    "OrdersService_BatchReplaceOrders": {
+      "requestSchema": "polyester.rest.OrdersService_BatchReplaceOrders.Request",
+      "responseSchema": "polyester.rest.OrdersService_BatchReplaceOrders.Response"
     },
     "OrdersService_CancelAllAfter": {
       "requestSchema": "polyester.rest.OrdersService_CancelAllAfter.Request",
@@ -1635,6 +1635,11 @@
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
+              "batchRequestId": {
+                "description": "Batch-replace identity that admitted this order. Zero for other origins.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
               "clientOrderId": {
                 "description": "Client-provided id for idempotency/correlation (may be empty).",
                 "type": "string"
@@ -1802,6 +1807,7 @@
             },
             "required": [
               "avgPx",
+              "batchRequestId",
               "clientOrderId",
               "createdAt",
               "cumQty",
@@ -2150,6 +2156,11 @@
               "pattern": "^[0-9]+(\\.[0-9]+)?$",
               "type": "string"
             },
+            "batchRequestId": {
+              "description": "Batch-replace identity that admitted this order. Zero for other origins.",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "type": "string"
+            },
             "clientOrderId": {
               "description": "Client-provided id for idempotency/correlation (may be empty).",
               "type": "string"
@@ -2331,6 +2342,7 @@
           },
           "required": [
             "avgPx",
+            "batchRequestId",
             "clientOrderId",
             "createdAt",
             "cumQty",
@@ -2817,6 +2829,11 @@
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
+              "batchRequestId": {
+                "description": "Batch-replace identity that admitted this order. Zero for other origins.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
               "clientOrderId": {
                 "description": "Client-provided id for idempotency/correlation (may be empty).",
                 "type": "string"
@@ -2998,6 +3015,7 @@
             },
             "required": [
               "avgPx",
+              "batchRequestId",
               "clientOrderId",
               "createdAt",
               "cumQty",
@@ -3653,36 +3671,14 @@
       ],
       "type": "object"
     },
-    "polyester.rest.OrdersService_BatchModifyOrders.Request": {
+    "polyester.rest.OrdersService_BatchReplaceOrders.Request": {
       "additionalProperties": false,
       "properties": {
-        "allowPartial": {
-          "description": "Optional partial-success flag. Current behavior is best-effort per item.",
-          "type": "boolean"
-        },
-        "behaviorDefault": {
-          "description": "Default behavior for items with unspecified behavior. MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE.",
-          "enum": [
-            "AMEND_OR_REPLACE",
-            "AMEND_ONLY",
-            "REPLACE_ONLY"
-          ],
-          "type": "string"
-        },
         "items": {
-          "description": "Modify items.",
+          "description": "Replacement items.",
           "items": {
             "additionalProperties": false,
             "properties": {
-              "behavior": {
-                "description": "Optional per-item behavior override. MODIFY_BEHAVIOR_UNSPECIFIED means \"use behavior_default\".",
-                "enum": [
-                  "AMEND_OR_REPLACE",
-                  "AMEND_ONLY",
-                  "REPLACE_ONLY"
-                ],
-                "type": "string"
-              },
               "clientOrderId": {
                 "description": "Client order ID. Exactly one of order_id or client_order_id.",
                 "type": "string"
@@ -3845,7 +3841,6 @@
               }
             },
             "required": [
-              "behavior",
               "clientOrderId",
               "newClientOrderId",
               "newPriceTicks",
@@ -3857,13 +3852,18 @@
           "type": "array"
         },
         "requestId": {
-          "description": "Idempotency key (required).",
+          "description": "Client idempotency key (required).",
           "type": "string"
         },
         "subaccountId": {
           "description": "Target sub-account numeric ID. When omitted, uses caller's root account.",
           "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
           "type": "string"
+        },
+        "symbolId": {
+          "description": "Trading symbol shared by every replacement.",
+          "format": "int32",
+          "type": "integer"
         }
       },
       "required": [
@@ -3871,103 +3871,97 @@
       ],
       "type": "object"
     },
-    "polyester.rest.OrdersService_BatchModifyOrders.Response": {
+    "polyester.rest.OrdersService_BatchReplaceOrders.Response": {
       "additionalProperties": false,
       "properties": {
-        "amendedCount": {
-          "description": "Number of items amended in place.",
+        "acceptedCount": {
+          "description": "Number of items admitted and handed to execution.",
           "format": "int32",
           "type": "integer"
+        },
+        "acceptedTs": {
+          "description": "Server acceptance timestamp.",
+          "type": "string"
+        },
+        "acceptedTsNs": {
+          "description": "Server acceptance timestamp as epoch nanoseconds.",
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "batchRequestId": {
+          "description": "Server-issued opaque identity used for status and private realtime correlation.",
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+          "type": "string"
         },
         "rejectedCount": {
-          "description": "Number of items rejected.",
-          "format": "int32",
-          "type": "integer"
-        },
-        "replacedCount": {
-          "description": "Number of items replaced with a new order.",
+          "description": "Number of items rejected before execution handoff.",
           "format": "int32",
           "type": "integer"
         },
         "results": {
-          "description": "Per-item results in the same order as the request items.",
+          "description": "Per-item admission results in request order.",
           "items": {
             "additionalProperties": false,
             "properties": {
-              "actionTaken": {
-                "description": "AMENDED or REPLACED when modified.",
-                "enum": [
-                  "AMENDED",
-                  "REPLACED"
-                ],
-                "type": "string"
-              },
               "clientOrderId": {
-                "description": "Client order ID associated with the final order when available.",
+                "description": "Client order ID assigned to the successor when available.",
                 "type": "string"
               },
               "code": {
-                "description": "Error code if rejected.",
+                "description": "Stable rejection code. Empty for admitted items.",
                 "type": "string"
               },
-              "finalOrderId": {
-                "description": "Final active order ID; same as old_order_id for amendments.",
+              "itemIndex": {
+                "description": "Zero-based index in the request.",
+                "format": "int32",
+                "type": "integer"
+              },
+              "oldOrderId": {
+                "description": "Original order targeted by the replacement.",
                 "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                 "type": "string"
               },
-              "oldOrderId": {
-                "description": "Original order ID that was amended or replaced.",
+              "replacementOrderId": {
+                "description": "Assigned successor order ID. Zero when rejected before assignment.",
                 "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                 "type": "string"
               },
               "status": {
-                "description": "\"modified\" or \"rejected\".",
-                "type": "string"
-              },
-              "stopLossTriggerId": {
-                "description": "Trigger ID for attached stop-loss after modification.",
-                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
-                "type": "string"
-              },
-              "takeProfitTriggerId": {
-                "description": "Trigger ID for attached take-profit after modification.",
-                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
-                "type": "string"
-              },
-              "trailingStopTriggerId": {
-                "description": "Trigger ID for attached trailing stop after modification.",
-                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "description": "Admission result for this item.",
+                "enum": [
+                  "BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED",
+                  "BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED"
+                ],
                 "type": "string"
               }
             },
             "required": [
-              "actionTaken",
               "clientOrderId",
               "code",
-              "finalOrderId",
+              "itemIndex",
               "oldOrderId",
-              "status",
-              "stopLossTriggerId",
-              "takeProfitTriggerId",
-              "trailingStopTriggerId"
+              "replacementOrderId",
+              "status"
             ],
             "type": "object"
           },
           "type": "array"
         },
-        "ts": {
-          "description": "Server timestamp.",
-          "type": "string"
-        },
-        "tsNs": {
-          "description": "Server timestamp as epoch nanoseconds (for bots).",
-          "pattern": "^[0-9]+$",
+        "status": {
+          "description": "Aggregate admission status.",
+          "enum": [
+            "BATCH_REPLACE_ADMISSION_STATUS_ADMITTED",
+            "BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED",
+            "BATCH_REPLACE_ADMISSION_STATUS_REJECTED"
+          ],
           "type": "string"
         }
       },
       "required": [
+        "acceptedTsNs",
+        "batchRequestId",
         "results",
-        "tsNs"
+        "status"
       ],
       "type": "object"
     },

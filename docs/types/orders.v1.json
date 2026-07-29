@@ -562,13 +562,115 @@
       }
     },
     {
-      "name": "orders.v1.BatchModifyItem",
+      "name": "orders.v1.BatchReplaceAdmissionItem",
       "kind": "message",
-      "doc": "BatchModifyItem identifies one modify operation inside a batch request.",
+      "doc": "BatchReplaceAdmissionItem contains the index-stable admission result for one item.",
+      "message": {
+        "fields": [
+          {
+            "name": "item_index",
+            "jsonName": "itemIndex",
+            "number": 1,
+            "doc": "Zero-based index in the request.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Admission result for this item.",
+            "protoRef": "orders.v1.BatchReplaceItemAdmissionStatus"
+          },
+          {
+            "name": "old_order_id",
+            "jsonName": "oldOrderId",
+            "number": 3,
+            "doc": "Original order targeted by the replacement.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "replacement_order_id",
+            "jsonName": "replacementOrderId",
+            "number": 4,
+            "doc": "Assigned successor order ID. Zero when rejected before assignment.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "client_order_id",
+            "jsonName": "clientOrderId",
+            "number": 5,
+            "doc": "Client order ID assigned to the successor when available.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "code",
+            "jsonName": "code",
+            "number": 6,
+            "doc": "Stable rejection code. Empty for admitted items.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.BatchReplaceAdmissionStatus",
+      "kind": "enum",
+      "doc": "BatchReplaceAdmissionStatus summarizes admission of one quote-refresh batch.",
+      "enum": {
+        "values": [
+          {
+            "name": "BATCH_REPLACE_ADMISSION_STATUS_ADMITTED",
+            "number": 1,
+            "doc": "Every requested replacement was admitted."
+          },
+          {
+            "name": "BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED",
+            "number": 2,
+            "doc": "Some requested replacements were admitted and others were rejected."
+          },
+          {
+            "name": "BATCH_REPLACE_ADMISSION_STATUS_REJECTED",
+            "number": 3,
+            "doc": "No requested replacement was admitted."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.BatchReplaceItemAdmissionStatus",
+      "kind": "enum",
+      "doc": "BatchReplaceItemAdmissionStatus describes admission of one replacement.",
+      "enum": {
+        "values": [
+          {
+            "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED",
+            "number": 1,
+            "doc": "The replacement was admitted and handed to execution."
+          },
+          {
+            "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED",
+            "number": 2,
+            "doc": "The replacement was rejected before execution handoff."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.BatchReplaceOrderItem",
+      "kind": "message",
+      "doc": "BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.",
       "message": {
         "cel": [
           {
-            "id": "batch_modify_item.patch_required",
+            "id": "batch_replace_item.patch_required",
             "message": "at least one patch field must be set",
             "expression": "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
           }
@@ -651,21 +753,9 @@
             "protoRef": "orders.v1.RiskPolicy"
           },
           {
-            "name": "behavior",
-            "jsonName": "behavior",
-            "number": 6,
-            "doc": "Optional per-item behavior override.\n MODIFY_BEHAVIOR_UNSPECIFIED means \"use behavior_default\".",
-            "protoRef": "orders.v1.ModifyBehavior",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
             "name": "new_client_order_id",
             "jsonName": "newClientOrderId",
-            "number": 7,
+            "number": 6,
             "doc": "Optional new client order id when replace path is taken.",
             "protoScalar": "string",
             "jsonType": "string",
@@ -680,13 +770,13 @@
       }
     },
     {
-      "name": "orders.v1.BatchModifyOrdersRequest",
+      "name": "orders.v1.BatchReplaceOrdersRequest",
       "kind": "message",
-      "doc": "BatchModifyOrdersRequest updates multiple orders in one request.",
+      "doc": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.",
       "message": {
         "cel": [
           {
-            "id": "batch_modify_orders.unique_targets",
+            "id": "batch_replace_orders.unique_targets",
             "message": "each item target must be unique within a batch",
             "expression": "this.items.map(i, i.order_id \u003e 0u ? \"o:\" + string(i.order_id) : \"c:\" + i.client_order_id).unique()"
           }
@@ -702,10 +792,24 @@
             "format": "fixed64"
           },
           {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 2,
+            "doc": "Trading symbol shared by every replacement.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
             "name": "request_id",
             "jsonName": "requestId",
-            "number": 2,
-            "doc": "Idempotency key (required).",
+            "number": 3,
+            "doc": "Client idempotency key (required).",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -719,68 +823,55 @@
           {
             "name": "items",
             "jsonName": "items",
-            "number": 3,
-            "doc": "Modify items.",
+            "number": 4,
+            "doc": "Replacement items.",
             "repeated": true,
-            "protoRef": "orders.v1.BatchModifyItem",
+            "protoRef": "orders.v1.BatchReplaceOrderItem",
             "validate": {
               "repeated": {
                 "minItems": 1,
                 "maxItems": 50
               }
             }
-          },
-          {
-            "name": "behavior_default",
-            "jsonName": "behaviorDefault",
-            "number": 4,
-            "doc": "Default behavior for items with unspecified behavior.\n MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE.",
-            "protoRef": "orders.v1.ModifyBehavior",
-            "validate": {
-              "enum": {
-                "definedOnly": true
-              }
-            }
-          },
-          {
-            "name": "allow_partial",
-            "jsonName": "allowPartial",
-            "number": 5,
-            "doc": "Optional partial-success flag. Current behavior is best-effort per item.",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
           }
         ]
       }
     },
     {
-      "name": "orders.v1.BatchModifyOrdersResponse",
+      "name": "orders.v1.BatchReplaceOrdersResponse",
       "kind": "message",
-      "doc": "BatchModifyOrdersResponse returns per-item modify outcomes.",
+      "doc": "BatchReplaceOrdersResponse is the durable admission receipt for a batch.",
       "message": {
         "fields": [
           {
+            "name": "batch_request_id",
+            "jsonName": "batchRequestId",
+            "number": 1,
+            "doc": "Server-issued opaque identity used for status and private realtime correlation.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Aggregate admission status.",
+            "protoRef": "orders.v1.BatchReplaceAdmissionStatus"
+          },
+          {
             "name": "results",
             "jsonName": "results",
-            "number": 1,
-            "doc": "Per-item results in the same order as the request items.",
-            "repeated": true,
-            "protoRef": "orders.v1.BatchModifyResultItem"
-          },
-          {
-            "name": "amended_count",
-            "jsonName": "amendedCount",
-            "number": 2,
-            "doc": "Number of items amended in place.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "replaced_count",
-            "jsonName": "replacedCount",
             "number": 3,
-            "doc": "Number of items replaced with a new order.",
+            "doc": "Per-item admission results in request order.",
+            "repeated": true,
+            "protoRef": "orders.v1.BatchReplaceAdmissionItem"
+          },
+          {
+            "name": "accepted_count",
+            "jsonName": "acceptedCount",
+            "number": 4,
+            "doc": "Number of items admitted and handed to execution.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -788,26 +879,26 @@
           {
             "name": "rejected_count",
             "jsonName": "rejectedCount",
-            "number": 4,
-            "doc": "Number of items rejected.",
+            "number": 5,
+            "doc": "Number of items rejected before execution handoff.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
           },
           {
-            "name": "ts",
-            "jsonName": "ts",
-            "number": 5,
-            "doc": "Server timestamp.",
+            "name": "accepted_ts",
+            "jsonName": "acceptedTs",
+            "number": 6,
+            "doc": "Server acceptance timestamp.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
           },
           {
-            "name": "ts_ns",
-            "jsonName": "tsNs",
-            "number": 6,
-            "doc": "Server timestamp as epoch nanoseconds (for bots).",
+            "name": "accepted_ts_ns",
+            "jsonName": "acceptedTsNs",
+            "number": 7,
+            "doc": "Server acceptance timestamp as epoch nanoseconds.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -816,83 +907,94 @@
       }
     },
     {
-      "name": "orders.v1.BatchModifyResultItem",
+      "name": "orders.v1.BatchReplacePhase",
+      "kind": "enum",
+      "doc": "BatchReplacePhase is the recoverable execution phase for one replacement.",
+      "enum": {
+        "values": [
+          {
+            "name": "BATCH_REPLACE_PHASE_ADMITTED",
+            "number": 1,
+            "doc": "The replacement was admitted and handed to execution."
+          },
+          {
+            "name": "BATCH_REPLACE_PHASE_WORKING",
+            "number": 2,
+            "doc": "The successor order is active."
+          },
+          {
+            "name": "BATCH_REPLACE_PHASE_REJECTED",
+            "number": 3,
+            "doc": "The replacement was rejected."
+          },
+          {
+            "name": "BATCH_REPLACE_PHASE_TERMINAL",
+            "number": 4,
+            "doc": "The successor reached a terminal order state."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.BatchReplaceStatusItem",
       "kind": "message",
-      "doc": "BatchModifyResultItem contains one result in a batch modify response.",
+      "doc": "BatchReplaceStatusItem is the index-stable execution status for one replacement.",
       "message": {
         "fields": [
           {
-            "name": "status",
-            "jsonName": "status",
+            "name": "item_index",
+            "jsonName": "itemIndex",
             "number": 1,
-            "doc": "\"modified\" or \"rejected\".",
-            "protoScalar": "string",
-            "jsonType": "string"
+            "doc": "Zero-based item index from the write request.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           },
           {
-            "name": "action_taken",
-            "jsonName": "actionTaken",
+            "name": "phase",
+            "jsonName": "phase",
             "number": 2,
-            "doc": "AMENDED or REPLACED when modified.",
-            "protoRef": "orders.v1.ModifyActionTaken"
+            "doc": "Current recoverable phase.",
+            "protoRef": "orders.v1.BatchReplacePhase"
           },
           {
             "name": "old_order_id",
             "jsonName": "oldOrderId",
             "number": 3,
-            "doc": "Original order ID that was amended or replaced.",
+            "doc": "Original order targeted by the replacement.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
           },
           {
-            "name": "final_order_id",
-            "jsonName": "finalOrderId",
+            "name": "replacement_order_id",
+            "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Final active order ID; same as old_order_id for amendments.",
+            "doc": "Assigned successor order ID. Zero when rejected before assignment.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
           },
           {
-            "name": "client_order_id",
-            "jsonName": "clientOrderId",
+            "name": "order_status",
+            "jsonName": "orderStatus",
             "number": 5,
-            "doc": "Client order ID associated with the final order when available.",
-            "protoScalar": "string",
-            "jsonType": "string"
+            "doc": "Current successor order status when available.",
+            "protoRef": "orders.v1.OrderStatus"
           },
           {
             "name": "code",
             "jsonName": "code",
             "number": 6,
-            "doc": "Error code if rejected.",
+            "doc": "Stable rejection or terminal error code. Empty when none.",
             "protoScalar": "string",
             "jsonType": "string"
           },
           {
-            "name": "take_profit_trigger_id",
-            "jsonName": "takeProfitTriggerId",
+            "name": "updated_ts_ns",
+            "jsonName": "updatedTsNs",
             "number": 7,
-            "doc": "Trigger ID for attached take-profit after modification.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "stop_loss_trigger_id",
-            "jsonName": "stopLossTriggerId",
-            "number": 8,
-            "doc": "Trigger ID for attached stop-loss after modification.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "trailing_stop_trigger_id",
-            "jsonName": "trailingStopTriggerId",
-            "number": 9,
-            "doc": "Trigger ID for attached trailing stop after modification.",
+            "doc": "Latest status timestamp in nanoseconds since epoch.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1685,6 +1787,11 @@
             "name": "ERROR_CODE_VALIDATION_ERROR",
             "number": 66,
             "doc": "Request failed structural or cross-field validation."
+          },
+          {
+            "name": "ERROR_CODE_OVERLOADED",
+            "number": 67,
+            "doc": "This edge is at its bounded concurrent BatchReplace admission capacity."
           }
         ]
       }
@@ -1760,6 +1867,112 @@
             "doc": "Human-readable explanation of the violation.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.GetBatchReplaceStatusRequest",
+      "kind": "message",
+      "doc": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "batch_request_id",
+            "jsonName": "batchRequestId",
+            "number": 2,
+            "doc": "Server-issued batch identity from BatchReplaceOrders.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.GetBatchReplaceStatusResponse",
+      "kind": "message",
+      "doc": "GetBatchReplaceStatusResponse returns durable batch and per-item finality.",
+      "message": {
+        "fields": [
+          {
+            "name": "batch_request_id",
+            "jsonName": "batchRequestId",
+            "number": 1,
+            "doc": "Server-issued batch identity.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "admission_status",
+            "jsonName": "admissionStatus",
+            "number": 2,
+            "doc": "Aggregate admission status returned by the write receipt.",
+            "protoRef": "orders.v1.BatchReplaceAdmissionStatus"
+          },
+          {
+            "name": "items",
+            "jsonName": "items",
+            "number": 3,
+            "doc": "Per-item statuses in request order.",
+            "repeated": true,
+            "protoRef": "orders.v1.BatchReplaceStatusItem"
+          },
+          {
+            "name": "accepted_count",
+            "jsonName": "acceptedCount",
+            "number": 4,
+            "doc": "Number of admitted items.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "rejected_count",
+            "jsonName": "rejectedCount",
+            "number": 5,
+            "doc": "Number of rejected items.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "accepted_ts_ns",
+            "jsonName": "acceptedTsNs",
+            "number": 6,
+            "doc": "Server acceptance timestamp in nanoseconds since epoch.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "updated_ts_ns",
+            "jsonName": "updatedTsNs",
+            "number": 7,
+            "doc": "Latest batch status timestamp in nanoseconds since epoch.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -2935,6 +3148,15 @@
                 "lte": "2147483647"
               }
             }
+          },
+          {
+            "name": "batch_request_id",
+            "jsonName": "batchRequestId",
+            "number": 27,
+            "doc": "Batch-replace identity that admitted this order. Zero for other origins.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }

@@ -370,6 +370,8 @@ enum ErrorCode {
   ERROR_CODE_STALE_QUOTE = 65;
   // Request failed structural or cross-field validation.
   ERROR_CODE_VALIDATION_ERROR = 66;
+  // This edge is at its bounded concurrent BatchReplace admission capacity.
+  ERROR_CODE_OVERLOADED = 67;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -546,6 +548,28 @@ enum ModifyActionTaken {
   AMENDED = 1;
   // Existing order was canceled and replaced with a new order.
   REPLACED = 2;
+}
+
+// BatchReplaceAdmissionStatus summarizes admission of one quote-refresh batch.
+enum BatchReplaceAdmissionStatus {
+  // Admission status is unavailable.
+  BATCH_REPLACE_ADMISSION_STATUS_UNSPECIFIED = 0;
+  // Every requested replacement was admitted.
+  BATCH_REPLACE_ADMISSION_STATUS_ADMITTED = 1;
+  // Some requested replacements were admitted and others were rejected.
+  BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED = 2;
+  // No requested replacement was admitted.
+  BATCH_REPLACE_ADMISSION_STATUS_REJECTED = 3;
+}
+
+// BatchReplaceItemAdmissionStatus describes admission of one replacement.
+enum BatchReplaceItemAdmissionStatus {
+  // Item admission status is unavailable.
+  BATCH_REPLACE_ITEM_ADMISSION_STATUS_UNSPECIFIED = 0;
+  // The replacement was admitted and handed to execution.
+  BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED = 1;
+  // The replacement was rejected before execution handoff.
+  BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED = 2;
 }
 
 // =============================================================================
@@ -782,11 +806,11 @@ message ModifyOrderResponse {
   uint64 ts_ns = 9;
 }
 
-// BatchModifyItem identifies one modify operation inside a batch request.
-message BatchModifyItem {
+// BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.
+message BatchReplaceOrderItem {
   // At least one patch field must be provided.
   option (buf.validate.message).cel = {
-    id: "batch_modify_item.patch_required"
+    id: "batch_replace_item.patch_required"
     message: "at least one patch field must be set"
     expression: "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
   };
@@ -811,81 +835,71 @@ message BatchModifyItem {
   // Replacement attached-risk policy for the order.
   RiskPolicy new_attached_risk = 5;
 
-  // Optional per-item behavior override.
-  // MODIFY_BEHAVIOR_UNSPECIFIED means "use behavior_default".
-  ModifyBehavior behavior = 6 [(buf.validate.field).enum.defined_only = true];
   // Optional new client order id when replace path is taken.
-  string new_client_order_id = 7 [
+  string new_client_order_id = 6 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$",
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
 }
 
-// BatchModifyResultItem contains one result in a batch modify response.
-message BatchModifyResultItem {
-  // "modified" or "rejected".
-  string status = 1;
-  // AMENDED or REPLACED when modified.
-  ModifyActionTaken action_taken = 2;
-  // Original order ID that was amended or replaced.
+// BatchReplaceAdmissionItem contains the index-stable admission result for one item.
+message BatchReplaceAdmissionItem {
+  // Zero-based index in the request.
+  uint32 item_index = 1;
+  // Admission result for this item.
+  BatchReplaceItemAdmissionStatus status = 2;
+  // Original order targeted by the replacement.
   fixed64 old_order_id = 3;
-  // Final active order ID; same as old_order_id for amendments.
-  fixed64 final_order_id = 4;
-  // Client order ID associated with the final order when available.
+  // Assigned successor order ID. Zero when rejected before assignment.
+  fixed64 replacement_order_id = 4;
+  // Client order ID assigned to the successor when available.
   string client_order_id = 5;
-  // Error code if rejected.
+  // Stable rejection code. Empty for admitted items.
   string code = 6;
-  // Trigger ID for attached take-profit after modification.
-  optional uint64 take_profit_trigger_id = 7;
-  // Trigger ID for attached stop-loss after modification.
-  optional uint64 stop_loss_trigger_id = 8;
-  // Trigger ID for attached trailing stop after modification.
-  optional uint64 trailing_stop_trigger_id = 9;
 }
 
-// BatchModifyOrdersRequest updates multiple orders in one request.
-message BatchModifyOrdersRequest {
+// BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.
+message BatchReplaceOrdersRequest {
   // Prevent duplicate order targets in the same batch.
   option (buf.validate.message).cel = {
-    id: "batch_modify_orders.unique_targets"
+    id: "batch_replace_orders.unique_targets"
     message: "each item target must be unique within a batch"
     expression: "this.items.map(i, i.order_id > 0u ? \"o:\" + string(i.order_id) : \"c:\" + i.client_order_id).unique()"
   };
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
-  // Idempotency key (required).
-  string request_id = 2 [
+  // Trading symbol shared by every replacement.
+  uint32 symbol_id = 2 [(buf.validate.field).uint32.gt = 0];
+  // Client idempotency key (required).
+  string request_id = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
-  // Modify items.
-  repeated BatchModifyItem items = 3 [(buf.validate.field).repeated = {
+  // Replacement items.
+  repeated BatchReplaceOrderItem items = 4 [(buf.validate.field).repeated = {
     min_items: 1
     max_items: 50
   }];
-  // Default behavior for items with unspecified behavior.
-  // MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE.
-  ModifyBehavior behavior_default = 4 [(buf.validate.field).enum.defined_only = true];
-  // Optional partial-success flag. Current behavior is best-effort per item.
-  bool allow_partial = 5;
 }
 
-// BatchModifyOrdersResponse returns per-item modify outcomes.
-message BatchModifyOrdersResponse {
-  // Per-item results in the same order as the request items.
-  repeated BatchModifyResultItem results = 1;
-  // Number of items amended in place.
-  uint32 amended_count = 2;
-  // Number of items replaced with a new order.
-  uint32 replaced_count = 3;
-  // Number of items rejected.
-  uint32 rejected_count = 4;
-  // Server timestamp.
-  google.protobuf.Timestamp ts = 5;
-  // Server timestamp as epoch nanoseconds (for bots).
-  uint64 ts_ns = 6;
+// BatchReplaceOrdersResponse is the durable admission receipt for a batch.
+message BatchReplaceOrdersResponse {
+  // Server-issued opaque identity used for status and private realtime correlation.
+  fixed64 batch_request_id = 1;
+  // Aggregate admission status.
+  BatchReplaceAdmissionStatus status = 2;
+  // Per-item admission results in request order.
+  repeated BatchReplaceAdmissionItem results = 3;
+  // Number of items admitted and handed to execution.
+  uint32 accepted_count = 4;
+  // Number of items rejected before execution handoff.
+  uint32 rejected_count = 5;
+  // Server acceptance timestamp.
+  google.protobuf.Timestamp accepted_ts = 6;
+  // Server acceptance timestamp as epoch nanoseconds.
+  uint64 accepted_ts_ns = 7;
 }
 
 // BatchCancelItem identifies a single order to cancel within a batch.
@@ -1026,13 +1040,13 @@ service OrdersService {
     };
   }
 
-  // Modifies multiple existing orders in one request.
-  rpc BatchModifyOrders(BatchModifyOrdersRequest) returns (BatchModifyOrdersResponse) {
+  // Replaces same-symbol orders and returns after authoritative admission.
+  rpc BatchReplaceOrders(BatchReplaceOrdersRequest) returns (BatchReplaceOrdersResponse) {
     option (gnostic.openapi.v3.operation) = {
-      summary: "Batch Modify Orders"
+      summary: "Batch Replace Orders"
       description:
-        "Modify up to 50 open orders in one request with per-item outcomes. "
-        "Supports default and per-item behavior policies plus aggregated result counters."
+        "Replace up to 50 orders for one symbol as a quote refresh. "
+        "Returns an admission receipt for status and private realtime reconciliation."
       tags: "Orders Service"
     };
   }
