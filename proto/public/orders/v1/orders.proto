@@ -220,64 +220,23 @@ message CreateOrderResponse {
   optional uint64 trailing_stop_trigger_id = 22;
 }
 
-// PreviewOrderRequest asks for an advisory resolution of one order intent.
-// A preview does not reserve funds, submit an order, or guarantee later
-// admission or execution.
+// PreviewOrderRequest asks whether one complete order intent is currently
+// admissible. It uses the same order contract as CreateOrderRequest. Previewing
+// creates no order, hold, reservation, or client-order-ID claim.
 message PreviewOrderRequest {
-  option (buf.validate.message).cel = {
-    id: "preview_order.max_quote_debit_eligibility"
-    message: "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders"
-    expression: "!has(this.max_quote_debit_scaled) || (this.side == 1 && (has(this.market_ioc) || has(this.limit_ioc)))"
-  };
-  option (buf.validate.message).cel = {
-    id: "preview_order.sell_fee_asset"
-    message: "SELL orders must use the QUOTE fee asset"
-    expression: "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
-  };
-
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
-  // Trading pair symbol, for example "BTC-USDT".
-  string symbol = 2 [
-    (buf.validate.field).string.min_len = 1,
+  // Order intent to evaluate without submitting it.
+  OrderIntent order = 2 [
+    (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Order side.
-  Side side = 3 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // Required advisory sizing input.
-  oneof sizing {
-    option (buf.validate.oneof).required = true;
-    // Exact gross base quantity scaled by the pair's base_quantity_scale from
-    // GetSpotConfig.
-    int64 base_qty_scaled = 4 [(buf.validate.field).int64.gt = 0];
-    // Hard all-in quote debit limit scaled by the pair's quote_quantity_scale
-    // from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.
-    int64 max_quote_debit_scaled = 5 [(buf.validate.field).int64.gt = 0];
-  }
-  // Required execution behavior used to establish the preview price bound.
-  oneof execution {
-    option (buf.validate.oneof).required = true;
-    // Market order with implicit IOC behavior.
-    MarketIoc market_ioc = 10;
-    // Resting GTC limit order, optionally post-only.
-    LimitGtc limit_gtc = 11;
-    // Immediate-or-cancel limit order.
-    LimitIoc limit_ioc = 12;
-    // Fill-or-kill limit order.
-    LimitFok limit_fok = 13;
-  }
-  // Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY.
-  FeeAsset fee_asset = 20 [(buf.validate.field).enum.defined_only = true];
 }
 
-// PreviewOrderResponse returns an advisory sizing and fee estimate. Values may
-// change before submission as prices, liquidity, and fees change.
+// PreviewOrderResponse reports whether an order is currently admissible and
+// returns its resolved financial values. The result is advisory: account,
+// market, and fee inputs may change, and CreateOrder always evaluates the
+// intent again.
 message PreviewOrderResponse {
   // Gross base quantity resolved for execution, scaled by the pair's
   // base_quantity_scale from GetSpotConfig.
@@ -298,6 +257,12 @@ message PreviewOrderResponse {
   google.protobuf.Timestamp fresh_at = 7;
   // Freshness time as epoch nanoseconds (UTC).
   uint64 fresh_at_ts_ns = 8;
+  // Whether the order passed the current validation, policy, risk, and
+  // available-balance checks.
+  optional bool admissible = 9;
+  // Typed reason the order is not currently admissible. Omitted when
+  // admissible is true.
+  ErrorDetail rejection = 10;
 }
 
 // CancelOrderRequest is the binary (protobuf) request for canceling orders.
@@ -1079,14 +1044,14 @@ message BatchCancelOrdersResponse {
 }
 
 service OrdersService {
-  // Preview advisory order sizing and fees without reserving funds or
-  // submitting an order.
+  // Check whether an order is currently admissible without creating an order,
+  // claiming its client order ID, or reserving funds.
   rpc PreviewOrder(PreviewOrderRequest) returns (PreviewOrderResponse) {
     option (gnostic.openapi.v3.operation) = {
       summary: "Preview Order"
       description:
-        "Preview resolved gross base quantity, price protection, quote debit, "
-        "fees, and net base using current market inputs. The result is advisory."
+        "Check current order eligibility and available balance, and preview resolved "
+        "quantity, price protection, quote debit, and fees. The result is advisory."
       tags: "Orders Service"
     };
   }
