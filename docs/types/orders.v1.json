@@ -395,6 +395,24 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "resolved_base_qty_scaled",
+            "jsonName": "resolvedBaseQtyScaled",
+            "number": 5,
+            "doc": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "submitted_max_quote_debit_scaled",
+            "jsonName": "submittedMaxQuoteDebitScaled",
+            "number": 6,
+            "doc": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }
@@ -1445,6 +1463,24 @@
             "format": "uint64"
           },
           {
+            "name": "resolved_base_qty_scaled",
+            "jsonName": "resolvedBaseQtyScaled",
+            "number": 5,
+            "doc": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "submitted_max_quote_debit_scaled",
+            "jsonName": "submittedMaxQuoteDebitScaled",
+            "number": 6,
+            "doc": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
             "name": "take_profit_trigger_id",
             "jsonName": "takeProfitTriggerId",
             "number": 20,
@@ -1551,9 +1587,9 @@
             "doc": "Upstream dependency returned an error."
           },
           {
-            "name": "ERROR_CODE_FEE_SOURCE_NOT_ALLOWED",
+            "name": "ERROR_CODE_FEE_ASSET_NOT_ALLOWED",
             "number": 15,
-            "doc": "Requested fee source is not allowed for this order."
+            "doc": "Requested fee asset is not allowed for this order."
           },
           {
             "name": "ERROR_CODE_PAIR_DISABLED",
@@ -1792,6 +1828,11 @@
             "name": "ERROR_CODE_OVERLOADED",
             "number": 67,
             "doc": "This edge is at its bounded concurrent BatchReplace admission capacity."
+          },
+          {
+            "name": "ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL",
+            "number": 68,
+            "doc": "The all-in quote budget cannot resolve one valid step-aligned base quantity."
           }
         ]
       }
@@ -1821,19 +1862,20 @@
       }
     },
     {
-      "name": "orders.v1.FeeSource",
+      "name": "orders.v1.FeeAsset",
       "kind": "enum",
+      "doc": "FeeAsset identifies the asset in which an order fee is charged.",
       "enum": {
         "values": [
           {
             "name": "QUOTE",
             "number": 1,
-            "doc": "Fees are paid from the quote asset. SELL fees always use quote asset."
+            "doc": "Fees are charged in the quote asset. SELL fees always use quote asset."
           },
           {
-            "name": "RECEIVED",
+            "name": "BASE",
             "number": 2,
-            "doc": "BUY-only option: fees are paid from the received base asset."
+            "doc": "BUY-only option: fees are deducted from the received base asset."
           }
         ]
       }
@@ -2999,11 +3041,11 @@
             "protoRef": "orders.v1.SelfTradePreventionMode"
           },
           {
-            "name": "fee_source",
-            "jsonName": "feeSource",
+            "name": "fee_asset",
+            "jsonName": "feeAsset",
             "number": 10,
-            "doc": "Fee source selected for BUY fills. This also determines the decode scale\n for fee_scaled and referral_share_scaled on user trade rows.",
-            "protoRef": "orders.v1.FeeSource"
+            "doc": "Fee asset selected for fills. This also determines the decode scale\n for fee_scaled and referral_share_scaled on user trade rows.",
+            "protoRef": "orders.v1.FeeAsset"
           },
           {
             "name": "post_only",
@@ -3157,6 +3199,15 @@
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
+          },
+          {
+            "name": "submitted_max_quote_debit_scaled",
+            "jsonName": "submittedMaxQuoteDebitScaled",
+            "number": 28,
+            "doc": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }
@@ -3166,7 +3217,27 @@
       "kind": "message",
       "doc": "OrderIntent contains one order's complete, transport-independent placement\n intent. Single and batch create use this same message.",
       "message": {
+        "cel": [
+          {
+            "id": "order_intent.max_quote_debit_eligibility",
+            "message": "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders",
+            "expression": "!has(this.max_quote_debit_scaled) || (this.side == 1 \u0026\u0026 (has(this.market_ioc) || has(this.limit_ioc)))"
+          },
+          {
+            "id": "order_intent.sell_fee_asset",
+            "message": "SELL orders must use the QUOTE fee asset",
+            "expression": "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
+          }
+        ],
         "oneofs": [
+          {
+            "name": "sizing",
+            "required": true,
+            "fields": [
+              "base_qty_scaled",
+              "max_quote_debit_scaled"
+            ]
+          },
           {
             "name": "execution",
             "required": true,
@@ -3208,10 +3279,10 @@
             }
           },
           {
-            "name": "qty_scaled",
-            "jsonName": "qtyScaled",
+            "name": "base_qty_scaled",
+            "jsonName": "baseQtyScaled",
             "number": 3,
-            "doc": "Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
+            "doc": "Exact gross base quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -3219,7 +3290,23 @@
               "number": {
                 "gt": "0"
               }
-            }
+            },
+            "oneof": "sizing"
+          },
+          {
+            "name": "max_quote_debit_scaled",
+            "jsonName": "maxQuoteDebitScaled",
+            "number": 4,
+            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "sizing"
           },
           {
             "name": "market_ioc",
@@ -3268,11 +3355,11 @@
             }
           },
           {
-            "name": "fee_source",
-            "jsonName": "feeSource",
+            "name": "fee_asset",
+            "jsonName": "feeAsset",
             "number": 21,
-            "doc": "Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders must\n use QUOTE.",
-            "protoRef": "orders.v1.FeeSource",
+            "doc": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY\n orders; SELL orders must use QUOTE.",
+            "protoRef": "orders.v1.FeeAsset",
             "validate": {
               "enum": {
                 "definedOnly": true
@@ -3385,7 +3472,7 @@
           {
             "name": "SYSTEM",
             "number": 4,
-            "doc": "Internal/system automation (for example liquidation/ops actions)."
+            "doc": "System-managed automation, such as liquidation or account-protection actions."
           }
         ]
       }
@@ -3399,7 +3486,7 @@
           {
             "name": "PENDING",
             "number": 1,
-            "doc": "Accepted by the admission layer and submitted for execution, but not yet\n confirmed as working."
+            "doc": "Accepted and submitted for execution, but not yet confirmed as working."
           },
           {
             "name": "PENDING_CANCEL",
@@ -3550,6 +3637,237 @@
             "name": "MARKET",
             "number": 2,
             "doc": "Market order executed against available liquidity."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.PreviewOrderRequest",
+      "kind": "message",
+      "doc": "PreviewOrderRequest asks for an advisory resolution of one order intent.\n A preview does not reserve funds, submit an order, or guarantee later\n admission or execution.",
+      "message": {
+        "cel": [
+          {
+            "id": "preview_order.max_quote_debit_eligibility",
+            "message": "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders",
+            "expression": "!has(this.max_quote_debit_scaled) || (this.side == 1 \u0026\u0026 (has(this.market_ioc) || has(this.limit_ioc)))"
+          },
+          {
+            "id": "preview_order.sell_fee_asset",
+            "message": "SELL orders must use the QUOTE fee asset",
+            "expression": "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
+          }
+        ],
+        "oneofs": [
+          {
+            "name": "sizing",
+            "required": true,
+            "fields": [
+              "base_qty_scaled",
+              "max_quote_debit_scaled"
+            ]
+          },
+          {
+            "name": "execution",
+            "required": true,
+            "fields": [
+              "market_ioc",
+              "limit_gtc",
+              "limit_ioc",
+              "limit_fok"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol",
+            "jsonName": "symbol",
+            "number": 2,
+            "doc": "Trading pair symbol, for example \"BTC-USDT\".",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1
+              }
+            }
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 3,
+            "doc": "Order side.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "base_qty_scaled",
+            "jsonName": "baseQtyScaled",
+            "number": 4,
+            "doc": "Exact gross base quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "sizing"
+          },
+          {
+            "name": "max_quote_debit_scaled",
+            "jsonName": "maxQuoteDebitScaled",
+            "number": 5,
+            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "sizing"
+          },
+          {
+            "name": "market_ioc",
+            "jsonName": "marketIoc",
+            "number": 10,
+            "doc": "Market order with implicit IOC behavior.",
+            "protoRef": "orders.v1.MarketIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_gtc",
+            "jsonName": "limitGtc",
+            "number": 11,
+            "doc": "Resting GTC limit order, optionally post-only.",
+            "protoRef": "orders.v1.LimitGtc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_ioc",
+            "jsonName": "limitIoc",
+            "number": 12,
+            "doc": "Immediate-or-cancel limit order.",
+            "protoRef": "orders.v1.LimitIoc",
+            "oneof": "execution"
+          },
+          {
+            "name": "limit_fok",
+            "jsonName": "limitFok",
+            "number": 13,
+            "doc": "Fill-or-kill limit order.",
+            "protoRef": "orders.v1.LimitFok",
+            "oneof": "execution"
+          },
+          {
+            "name": "fee_asset",
+            "jsonName": "feeAsset",
+            "number": 20,
+            "doc": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY.",
+            "protoRef": "orders.v1.FeeAsset",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.PreviewOrderResponse",
+      "kind": "message",
+      "doc": "PreviewOrderResponse returns an advisory sizing and fee estimate. Values may\n change before submission as prices, liquidity, and fees change.",
+      "message": {
+        "fields": [
+          {
+            "name": "resolved_base_qty_scaled",
+            "jsonName": "resolvedBaseQtyScaled",
+            "number": 1,
+            "doc": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "price_bound_ticks",
+            "jsonName": "priceBoundTicks",
+            "number": 2,
+            "doc": "Protective execution price bound in quote units scaled by 1e6.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "estimated_quote_debit_scaled",
+            "jsonName": "estimatedQuoteDebitScaled",
+            "number": 3,
+            "doc": "Estimated all-in quote debit scaled by the pair's quote_quantity_scale\n from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "estimated_fee_scaled",
+            "jsonName": "estimatedFeeScaled",
+            "number": 4,
+            "doc": "Estimated fee amount scaled by the quantity scale of fee_asset.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "estimated_net_base_qty_scaled",
+            "jsonName": "estimatedNetBaseQtyScaled",
+            "number": 5,
+            "doc": "Estimated base quantity received after any BASE-denominated fee, scaled by\n the pair's base_quantity_scale from GetSpotConfig.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "fee_asset",
+            "jsonName": "feeAsset",
+            "number": 6,
+            "doc": "Asset in which estimated_fee_scaled is denominated.",
+            "protoRef": "orders.v1.FeeAsset"
+          },
+          {
+            "name": "fresh_at",
+            "jsonName": "freshAt",
+            "number": 7,
+            "doc": "Time at which the market and fee inputs used by this preview were fresh.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "fresh_at_ts_ns",
+            "jsonName": "freshAtTsNs",
+            "number": 8,
+            "doc": "Freshness time as epoch nanoseconds (UTC).",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -4020,17 +4338,17 @@
             "name": "fee_scaled",
             "jsonName": "feeScaled",
             "number": 9,
-            "doc": "Fee amount in the charged asset's scale. Use quote_quantity_scale when\n fee_source is QUOTE or UNSPECIFIED; use base_quantity_scale when fee_source\n is RECEIVED.",
+            "doc": "Fee amount in the charged asset's scale. Use quote_quantity_scale when\n fee_asset is QUOTE or UNSPECIFIED; use base_quantity_scale when fee_asset\n is BASE.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
           },
           {
-            "name": "fee_source",
-            "jsonName": "feeSource",
+            "name": "fee_asset",
+            "jsonName": "feeAsset",
             "number": 10,
-            "doc": "Fee source charged for this fill. This determines how to decode fee_scaled\n and referral_share_scaled.",
-            "protoRef": "orders.v1.FeeSource"
+            "doc": "Fee asset charged for this fill. This determines how to decode fee_scaled\n and referral_share_scaled.",
+            "protoRef": "orders.v1.FeeAsset"
           },
           {
             "name": "referral_share_scaled",

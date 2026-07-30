@@ -51,13 +51,14 @@ enum TimeInForce {
   FOK = 3;
 }
 
-enum FeeSource {
-  // Fee source was not provided; buy orders default to QUOTE.
-  FEE_SOURCE_UNSPECIFIED = 0;
-  // Fees are paid from the quote asset. SELL fees always use quote asset.
+// FeeAsset identifies the asset in which an order fee is charged.
+enum FeeAsset {
+  // Fee asset was not provided; orders default to QUOTE.
+  FEE_ASSET_UNSPECIFIED = 0;
+  // Fees are charged in the quote asset. SELL fees always use quote asset.
   QUOTE = 1;
-  // BUY-only option: fees are paid from the received base asset.
-  RECEIVED = 2;
+  // BUY-only option: fees are deducted from the received base asset.
+  BASE = 2;
 }
 
 enum SelfTradePreventionMode {
@@ -120,6 +121,17 @@ message LimitFok {
 // OrderIntent contains one order's complete, transport-independent placement
 // intent. Single and batch create use this same message.
 message OrderIntent {
+  option (buf.validate.message).cel = {
+    id: "order_intent.max_quote_debit_eligibility"
+    message: "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders"
+    expression: "!has(this.max_quote_debit_scaled) || (this.side == 1 && (has(this.market_ioc) || has(this.limit_ioc)))"
+  };
+  option (buf.validate.message).cel = {
+    id: "order_intent.sell_fee_asset"
+    message: "SELL orders must use the QUOTE fee asset"
+    expression: "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
+  };
+
   // Trading pair symbol, for example "BTC-USDT".
   string symbol = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -133,11 +145,16 @@ message OrderIntent {
     },
     (google.api.field_behavior) = REQUIRED
   ];
-  // Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
-  int64 qty_scaled = 3 [
-    (buf.validate.field).int64.gt = 0,
-    (google.api.field_behavior) = REQUIRED
-  ];
+  // Required order sizing intent. Exactly one sizing method must be supplied.
+  oneof sizing {
+    option (buf.validate.oneof).required = true;
+    // Exact gross base quantity scaled by the pair's base_quantity_scale from
+    // GetSpotConfig.
+    int64 base_qty_scaled = 3 [(buf.validate.field).int64.gt = 0];
+    // Hard all-in quote debit limit scaled by the pair's quote_quantity_scale
+    // from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.
+    int64 max_quote_debit_scaled = 4 [(buf.validate.field).int64.gt = 0];
+  }
   // Required execution behavior. The selected variant exposes only fields that
   // can be honored together.
   oneof execution {
@@ -156,9 +173,9 @@ message OrderIntent {
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
   ];
-  // Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders must
-  // use QUOTE.
-  FeeSource fee_source = 21 [(buf.validate.field).enum.defined_only = true];
+  // Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY
+  // orders; SELL orders must use QUOTE.
+  FeeAsset fee_asset = 21 [(buf.validate.field).enum.defined_only = true];
   // Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.
   SelfTradePreventionMode self_trade_prevention_mode = 22 [(buf.validate.field).enum.defined_only = true];
   // Optional attached risk controls that arm after the parent order fills.
@@ -188,12 +205,99 @@ message CreateOrderResponse {
   google.protobuf.Timestamp accepted_at = 3;
   // Admission completion time as epoch nanoseconds (UTC).
   uint64 accepted_at_ts_ns = 4;
+  // Gross base quantity resolved for execution, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig.
+  int64 resolved_base_qty_scaled = 5;
+  // Submitted hard all-in quote debit limit, scaled by the pair's
+  // quote_quantity_scale from GetSpotConfig. Present only when that sizing
+  // method was submitted.
+  optional int64 submitted_max_quote_debit_scaled = 6;
   // Trigger ID for attached take-profit.
   optional uint64 take_profit_trigger_id = 20;
   // Trigger ID for attached stop-loss.
   optional uint64 stop_loss_trigger_id = 21;
   // Trigger ID for attached trailing stop.
   optional uint64 trailing_stop_trigger_id = 22;
+}
+
+// PreviewOrderRequest asks for an advisory resolution of one order intent.
+// A preview does not reserve funds, submit an order, or guarantee later
+// admission or execution.
+message PreviewOrderRequest {
+  option (buf.validate.message).cel = {
+    id: "preview_order.max_quote_debit_eligibility"
+    message: "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders"
+    expression: "!has(this.max_quote_debit_scaled) || (this.side == 1 && (has(this.market_ioc) || has(this.limit_ioc)))"
+  };
+  option (buf.validate.message).cel = {
+    id: "preview_order.sell_fee_asset"
+    message: "SELL orders must use the QUOTE fee asset"
+    expression: "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
+  };
+
+  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  optional fixed64 subaccount_id = 1;
+  // Trading pair symbol, for example "BTC-USDT".
+  string symbol = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Order side.
+  Side side = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Required advisory sizing input.
+  oneof sizing {
+    option (buf.validate.oneof).required = true;
+    // Exact gross base quantity scaled by the pair's base_quantity_scale from
+    // GetSpotConfig.
+    int64 base_qty_scaled = 4 [(buf.validate.field).int64.gt = 0];
+    // Hard all-in quote debit limit scaled by the pair's quote_quantity_scale
+    // from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.
+    int64 max_quote_debit_scaled = 5 [(buf.validate.field).int64.gt = 0];
+  }
+  // Required execution behavior used to establish the preview price bound.
+  oneof execution {
+    option (buf.validate.oneof).required = true;
+    // Market order with implicit IOC behavior.
+    MarketIoc market_ioc = 10;
+    // Resting GTC limit order, optionally post-only.
+    LimitGtc limit_gtc = 11;
+    // Immediate-or-cancel limit order.
+    LimitIoc limit_ioc = 12;
+    // Fill-or-kill limit order.
+    LimitFok limit_fok = 13;
+  }
+  // Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY.
+  FeeAsset fee_asset = 20 [(buf.validate.field).enum.defined_only = true];
+}
+
+// PreviewOrderResponse returns an advisory sizing and fee estimate. Values may
+// change before submission as prices, liquidity, and fees change.
+message PreviewOrderResponse {
+  // Gross base quantity resolved for execution, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig.
+  int64 resolved_base_qty_scaled = 1;
+  // Protective execution price bound in quote units scaled by 1e6.
+  int64 price_bound_ticks = 2;
+  // Estimated all-in quote debit scaled by the pair's quote_quantity_scale
+  // from GetSpotConfig.
+  int64 estimated_quote_debit_scaled = 3;
+  // Estimated fee amount scaled by the quantity scale of fee_asset.
+  int64 estimated_fee_scaled = 4;
+  // Estimated base quantity received after any BASE-denominated fee, scaled by
+  // the pair's base_quantity_scale from GetSpotConfig.
+  int64 estimated_net_base_qty_scaled = 5;
+  // Asset in which estimated_fee_scaled is denominated.
+  FeeAsset fee_asset = 6;
+  // Time at which the market and fee inputs used by this preview were fresh.
+  google.protobuf.Timestamp fresh_at = 7;
+  // Freshness time as epoch nanoseconds (UTC).
+  uint64 fresh_at_ts_ns = 8;
 }
 
 // CancelOrderRequest is the binary (protobuf) request for canceling orders.
@@ -267,8 +371,8 @@ enum ErrorCode {
   ERROR_CODE_NOT_FOUND = 13;
   // Upstream dependency returned an error.
   ERROR_CODE_UPSTREAM_ERROR = 14;
-  // Requested fee source is not allowed for this order.
-  ERROR_CODE_FEE_SOURCE_NOT_ALLOWED = 15;
+  // Requested fee asset is not allowed for this order.
+  ERROR_CODE_FEE_ASSET_NOT_ALLOWED = 15;
   // Additional domain-specific codes used by the Orders API.
   ERROR_CODE_PAIR_DISABLED = 16;
   ERROR_CODE_ORDER_UNKNOWN = 17;
@@ -372,6 +476,8 @@ enum ErrorCode {
   ERROR_CODE_VALIDATION_ERROR = 66;
   // This edge is at its bounded concurrent BatchReplace admission capacity.
   ERROR_CODE_OVERLOADED = 67;
+  // The all-in quote budget cannot resolve one valid step-aligned base quantity.
+  ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL = 68;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -676,6 +782,12 @@ message BatchCreateAccepted {
   optional uint64 stop_loss_trigger_id = 3;
   // Trigger ID for attached trailing stop (when accepted and configured).
   optional uint64 trailing_stop_trigger_id = 4;
+  // Gross base quantity resolved for execution, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig.
+  int64 resolved_base_qty_scaled = 5;
+  // Submitted hard all-in quote debit limit, scaled by the pair's
+  // quote_quantity_scale from GetSpotConfig. Present only when submitted.
+  optional int64 submitted_max_quote_debit_scaled = 6;
 }
 
 // BatchCreateRejected contains the typed reason an item was not admitted.
@@ -967,9 +1079,21 @@ message BatchCancelOrdersResponse {
 }
 
 service OrdersService {
+  // Preview advisory order sizing and fees without reserving funds or
+  // submitting an order.
+  rpc PreviewOrder(PreviewOrderRequest) returns (PreviewOrderResponse) {
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Preview Order"
+      description:
+        "Preview resolved gross base quantity, price protection, quote debit, "
+        "fees, and net base using current market inputs. The result is advisory."
+      tags: "Orders Service"
+    };
+  }
+
   // Create a new order.
-  // REST clients use generated handlers that convert decimal strings to scaled ints.
-  // ConnectRPC clients use this directly with scaled integer values.
+  // REST clients submit decimal quantity and price strings. ConnectRPC clients
+  // submit scaled integer values.
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
     option (gnostic.openapi.v3.operation) = {
       summary: "Create Order"
@@ -981,8 +1105,8 @@ service OrdersService {
   }
 
   // Cancels an existing order by id or client order id.
-  // REST clients use generated handlers that convert base58 IDs to uint64.
-  // ConnectRPC clients use this directly with fixed64 IDs.
+  // REST clients submit base58 order IDs. ConnectRPC clients submit fixed64
+  // order IDs.
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel Order"

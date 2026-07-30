@@ -11641,9 +11641,9 @@
         "additionalProperties": false,
         "description": "PairConfig describes one spot trading pair and its trading constraints.",
         "properties": {
-          "allowBuyFeeFromReceived": {
-            "description": "Whether BUY order fees may be paid from the received base asset instead of\n the spent quote asset when the order request selects that fee source.",
-            "title": "allow_buy_fee_from_received",
+          "allowBuyFeeFromBase": {
+            "description": "Whether BUY order fees may be paid from the base asset instead of the\n spent quote asset when the order request selects the base fee asset.",
+            "title": "allow_buy_fee_from_base",
             "type": "boolean"
           },
           "baseAsset": {
@@ -12460,11 +12460,30 @@
               "string"
             ]
           },
+          "resolvedBaseQtyScaled": {
+            "description": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "format": "int64",
+            "title": "resolved_base_qty_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "stopLossTriggerId": {
             "description": "Trigger ID for attached stop-loss (when accepted and configured).",
             "format": "int64",
             "nullable": true,
             "title": "stop_loss_trigger_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "submittedMaxQuoteDebitScaled": {
+            "description": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when submitted.",
+            "format": "int64",
+            "nullable": true,
+            "title": "submitted_max_quote_debit_scaled",
             "type": [
               "integer",
               "string"
@@ -13295,11 +13314,30 @@
               "string"
             ]
           },
+          "resolvedBaseQtyScaled": {
+            "description": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "format": "int64",
+            "title": "resolved_base_qty_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "stopLossTriggerId": {
             "description": "Trigger ID for attached stop-loss.",
             "format": "int64",
             "nullable": true,
             "title": "stop_loss_trigger_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "submittedMaxQuoteDebitScaled": {
+            "description": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "format": "int64",
+            "nullable": true,
+            "title": "submitted_max_quote_debit_scaled",
             "type": [
               "integer",
               "string"
@@ -13347,7 +13385,7 @@
           "ERROR_CODE_PERMISSION_DENIED",
           "ERROR_CODE_NOT_FOUND",
           "ERROR_CODE_UPSTREAM_ERROR",
-          "ERROR_CODE_FEE_SOURCE_NOT_ALLOWED",
+          "ERROR_CODE_FEE_ASSET_NOT_ALLOWED",
           "ERROR_CODE_PAIR_DISABLED",
           "ERROR_CODE_ORDER_UNKNOWN",
           "ERROR_CODE_INTERNAL_ERROR",
@@ -13395,7 +13433,8 @@
           "ERROR_CODE_MAX_SLIPPAGE_INVALID",
           "ERROR_CODE_STALE_QUOTE",
           "ERROR_CODE_VALIDATION_ERROR",
-          "ERROR_CODE_OVERLOADED"
+          "ERROR_CODE_OVERLOADED",
+          "ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -13421,13 +13460,14 @@
         "title": "ErrorDetail",
         "type": "object"
       },
-      "orders.v1.FeeSource": {
+      "orders.v1.FeeAsset": {
+        "description": "FeeAsset identifies the asset in which an order fee is charged.",
         "enum": [
-          "FEE_SOURCE_UNSPECIFIED",
+          "FEE_ASSET_UNSPECIFIED",
           "QUOTE",
-          "RECEIVED"
+          "BASE"
         ],
-        "title": "FeeSource",
+        "title": "FeeAsset",
         "type": "string"
       },
       "orders.v1.FieldViolation": {
@@ -14299,10 +14339,10 @@
               "string"
             ]
           },
-          "feeSource": {
-            "$ref": "#/components/schemas/orders.v1.FeeSource",
-            "description": "Fee source selected for BUY fills. This also determines the decode scale\n for fee_scaled and referral_share_scaled on user trade rows.",
-            "title": "fee_source"
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Fee asset selected for fills. This also determines the decode scale\n for fee_scaled and referral_share_scaled on user trade rows.",
+            "title": "fee_asset"
           },
           "leavesQtyScaled": {
             "description": "Remaining working quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig for symbol_id. Zero for terminal orders.",
@@ -14391,6 +14431,16 @@
             "description": "Current order lifecycle status.",
             "title": "status"
           },
+          "submittedMaxQuoteDebitScaled": {
+            "description": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "format": "int64",
+            "nullable": true,
+            "title": "submitted_max_quote_debit_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "symbolId": {
             "description": "Trading symbol numeric identifier.",
             "title": "symbol_id",
@@ -14434,58 +14484,6 @@
       "orders.v1.OrderIntent": {
         "additionalProperties": false,
         "allOf": [
-          {
-            "properties": {
-              "attachedRisk": {
-                "$ref": "#/components/schemas/orders.v1.RiskPolicy",
-                "description": "Optional attached risk controls that arm after the parent order fills.",
-                "title": "attached_risk"
-              },
-              "clientOrderId": {
-                "description": "Optional client order identifier for idempotency.",
-                "maxLength": 36,
-                "pattern": "^[A-Za-z0-9._:/-]*$",
-                "title": "client_order_id",
-                "type": "string"
-              },
-              "feeSource": {
-                "$ref": "#/components/schemas/orders.v1.FeeSource",
-                "description": "Fee source for BUY orders: QUOTE (default) or RECEIVED. SELL orders must\n use QUOTE.",
-                "title": "fee_source"
-              },
-              "qtyScaled": {
-                "description": "Quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
-                "exclusiveMinimum": 0,
-                "format": "int64",
-                "title": "qty_scaled",
-                "type": [
-                  "integer",
-                  "string"
-                ]
-              },
-              "selfTradePreventionMode": {
-                "$ref": "#/components/schemas/orders.v1.SelfTradePreventionMode",
-                "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
-                "title": "self_trade_prevention_mode"
-              },
-              "side": {
-                "$ref": "#/components/schemas/orders.v1.Side",
-                "description": "Order side.",
-                "not": {
-                  "enum": [
-                    0
-                  ]
-                },
-                "title": "side"
-              },
-              "symbol": {
-                "description": "Trading pair symbol, for example \"BTC-USDT\".",
-                "minLength": 1,
-                "title": "symbol",
-                "type": "string"
-              }
-            }
-          },
           {
             "oneOf": [
               {
@@ -14541,13 +14539,92 @@
                 "title": "market_ioc"
               }
             ]
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "baseQtyScaled": {
+                    "description": "Exact gross base quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "base_qty_scaled",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "baseQtyScaled"
+                ],
+                "title": "base_qty_scaled"
+              },
+              {
+                "properties": {
+                  "maxQuoteDebitScaled": {
+                    "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "max_quote_debit_scaled",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "maxQuoteDebitScaled"
+                ],
+                "title": "max_quote_debit_scaled"
+              }
+            ]
           }
         ],
-        "description": "OrderIntent contains one order's complete, transport-independent placement\n intent. Single and batch create use this same message.",
+        "description": "OrderIntent contains one order's complete, transport-independent placement\n intent. Single and batch create use this same message.\norder_intent.max_quote_debit_eligibility // max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders\norder_intent.sell_fee_asset // SELL orders must use the QUOTE fee asset\n",
+        "properties": {
+          "attachedRisk": {
+            "$ref": "#/components/schemas/orders.v1.RiskPolicy",
+            "description": "Optional attached risk controls that arm after the parent order fills.",
+            "title": "attached_risk"
+          },
+          "clientOrderId": {
+            "description": "Optional client order identifier for idempotency.",
+            "maxLength": 36,
+            "pattern": "^[A-Za-z0-9._:/-]*$",
+            "title": "client_order_id",
+            "type": "string"
+          },
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY\n orders; SELL orders must use QUOTE.",
+            "title": "fee_asset"
+          },
+          "selfTradePreventionMode": {
+            "$ref": "#/components/schemas/orders.v1.SelfTradePreventionMode",
+            "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
+            "title": "self_trade_prevention_mode"
+          },
+          "side": {
+            "$ref": "#/components/schemas/orders.v1.Side",
+            "description": "Order side.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "side"
+          },
+          "symbol": {
+            "description": "Trading pair symbol, for example \"BTC-USDT\".",
+            "minLength": 1,
+            "title": "symbol",
+            "type": "string"
+          }
+        },
         "required": [
           "symbol",
-          "side",
-          "qtyScaled"
+          "side"
         ],
         "title": "OrderIntent",
         "type": "object"
@@ -14698,6 +14775,219 @@
         ],
         "title": "OrderType",
         "type": "string"
+      },
+      "orders.v1.PreviewOrderRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "limitFok": {
+                    "$ref": "#/components/schemas/orders.v1.LimitFok",
+                    "description": "Fill-or-kill limit order.",
+                    "title": "limit_fok"
+                  }
+                },
+                "required": [
+                  "limitFok"
+                ],
+                "title": "limit_fok"
+              },
+              {
+                "properties": {
+                  "limitGtc": {
+                    "$ref": "#/components/schemas/orders.v1.LimitGtc",
+                    "description": "Resting GTC limit order, optionally post-only.",
+                    "title": "limit_gtc"
+                  }
+                },
+                "required": [
+                  "limitGtc"
+                ],
+                "title": "limit_gtc"
+              },
+              {
+                "properties": {
+                  "limitIoc": {
+                    "$ref": "#/components/schemas/orders.v1.LimitIoc",
+                    "description": "Immediate-or-cancel limit order.",
+                    "title": "limit_ioc"
+                  }
+                },
+                "required": [
+                  "limitIoc"
+                ],
+                "title": "limit_ioc"
+              },
+              {
+                "properties": {
+                  "marketIoc": {
+                    "$ref": "#/components/schemas/orders.v1.MarketIoc",
+                    "description": "Market order with implicit IOC behavior.",
+                    "title": "market_ioc"
+                  }
+                },
+                "required": [
+                  "marketIoc"
+                ],
+                "title": "market_ioc"
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "baseQtyScaled": {
+                    "description": "Exact gross base quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "base_qty_scaled",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "baseQtyScaled"
+                ],
+                "title": "base_qty_scaled"
+              },
+              {
+                "properties": {
+                  "maxQuoteDebitScaled": {
+                    "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "max_quote_debit_scaled",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "maxQuoteDebitScaled"
+                ],
+                "title": "max_quote_debit_scaled"
+              }
+            ]
+          }
+        ],
+        "description": "PreviewOrderRequest asks for an advisory resolution of one order intent.\n A preview does not reserve funds, submit an order, or guarantee later\n admission or execution.\npreview_order.max_quote_debit_eligibility // max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders\npreview_order.sell_fee_asset // SELL orders must use the QUOTE fee asset\n",
+        "properties": {
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY.",
+            "title": "fee_asset"
+          },
+          "side": {
+            "$ref": "#/components/schemas/orders.v1.Side",
+            "description": "Order side.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "side"
+          },
+          "subaccountId": {
+            "description": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "symbol": {
+            "description": "Trading pair symbol, for example \"BTC-USDT\".",
+            "minLength": 1,
+            "title": "symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "side"
+        ],
+        "title": "PreviewOrderRequest",
+        "type": "object"
+      },
+      "orders.v1.PreviewOrderResponse": {
+        "additionalProperties": false,
+        "description": "PreviewOrderResponse returns an advisory sizing and fee estimate. Values may\n change before submission as prices, liquidity, and fees change.",
+        "properties": {
+          "estimatedFeeScaled": {
+            "description": "Estimated fee amount scaled by the quantity scale of fee_asset.",
+            "format": "int64",
+            "title": "estimated_fee_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "estimatedNetBaseQtyScaled": {
+            "description": "Estimated base quantity received after any BASE-denominated fee, scaled by\n the pair's base_quantity_scale from GetSpotConfig.",
+            "format": "int64",
+            "title": "estimated_net_base_qty_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "estimatedQuoteDebitScaled": {
+            "description": "Estimated all-in quote debit scaled by the pair's quote_quantity_scale\n from GetSpotConfig.",
+            "format": "int64",
+            "title": "estimated_quote_debit_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Asset in which estimated_fee_scaled is denominated.",
+            "title": "fee_asset"
+          },
+          "freshAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time at which the market and fee inputs used by this preview were fresh.",
+            "title": "fresh_at"
+          },
+          "freshAtTsNs": {
+            "description": "Freshness time as epoch nanoseconds (UTC).",
+            "format": "int64",
+            "title": "fresh_at_ts_ns",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "priceBoundTicks": {
+            "description": "Protective execution price bound in quote units scaled by 1e6.",
+            "format": "int64",
+            "title": "price_bound_ticks",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "resolvedBaseQtyScaled": {
+            "description": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "format": "int64",
+            "title": "resolved_base_qty_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "PreviewOrderResponse",
+        "type": "object"
       },
       "orders.v1.RiskExecution": {
         "additionalProperties": false,
@@ -15007,19 +15297,19 @@
         "additionalProperties": false,
         "description": "UserTrade is the Connect-facing per-user trade fill view.",
         "properties": {
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Fee asset charged for this fill. This determines how to decode fee_scaled\n and referral_share_scaled.",
+            "title": "fee_asset"
+          },
           "feeScaled": {
-            "description": "Fee amount in the charged asset's scale. Use quote_quantity_scale when\n fee_source is QUOTE or UNSPECIFIED; use base_quantity_scale when fee_source\n is RECEIVED.",
+            "description": "Fee amount in the charged asset's scale. Use quote_quantity_scale when\n fee_asset is QUOTE or UNSPECIFIED; use base_quantity_scale when fee_asset\n is BASE.",
             "format": "int64",
             "title": "fee_scaled",
             "type": [
               "integer",
               "string"
             ]
-          },
-          "feeSource": {
-            "$ref": "#/components/schemas/orders.v1.FeeSource",
-            "description": "Fee source charged for this fill. This determines how to decode fee_scaled\n and referral_share_scaled.",
-            "title": "fee_source"
           },
           "isMaker": {
             "description": "True if this fill was maker-side.",
@@ -17400,10 +17690,10 @@
             "description": "Creation timestamp.",
             "title": "created_at"
           },
-          "feeSource": {
-            "$ref": "#/components/schemas/orders.v1.FeeSource",
-            "description": "Fee source for BUY child orders.",
-            "title": "fee_source"
+          "feeAsset": {
+            "$ref": "#/components/schemas/orders.v1.FeeAsset",
+            "description": "Fee asset for BUY child orders.",
+            "title": "fee_asset"
           },
           "parentOrderId": {
             "description": "Parent order ID for attached-risk triggers; empty for standalone triggers.",
@@ -17572,10 +17862,10 @@
                 "title": "client_trigger_id",
                 "type": "string"
               },
-              "feeSource": {
-                "$ref": "#/components/schemas/orders.v1.FeeSource",
-                "description": "Fee source for BUY children. SELL children must use QUOTE.",
-                "title": "fee_source"
+              "feeAsset": {
+                "$ref": "#/components/schemas/orders.v1.FeeAsset",
+                "description": "Fee asset for BUY children. SELL children must use QUOTE.",
+                "title": "fee_asset"
               },
               "qtyScaled": {
                 "description": "Total quantity scaled by the pair's base_quantity_scale.",
@@ -19781,6 +20071,81 @@
           }
         },
         "summary": "Modify Order",
+        "tags": [
+          "Orders Service",
+          "OrdersService"
+        ]
+      }
+    },
+    "/orders.v1.OrdersService/PreviewOrder": {
+      "post": {
+        "description": "Preview resolved gross base quantity, price protection, quote debit, fees, and net base using current market inputs. The result is advisory.",
+        "operationId": "OrdersService_PreviewOrder",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/orders.v1.PreviewOrderRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/orders.v1.PreviewOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/orders.v1.PreviewOrderResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/orders.v1.PreviewOrderResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview Order",
         "tags": [
           "Orders Service",
           "OrdersService"
