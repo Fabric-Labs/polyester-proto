@@ -110,8 +110,76 @@ message CreateWalletTradingWithdrawRequest {
   bytes payload_signature = 4 [(buf.validate.field).bytes.min_len = 1];
 }
 
+// WithdrawDestinationValidationCode identifies the public outcome of an
+// external-chain destination validation.
+enum WithdrawDestinationValidationCode {
+  // No validation outcome was produced.
+  RESULT_UNSPECIFIED = 0;
+
+  // The destination is valid and may be used for a withdraw.
+  VALID = 1;
+
+  // The address is not valid for the selected destination chain.
+  INVALID_ADDRESS = 2;
+
+  // The selected destination chain is not supported for withdraws.
+  UNSUPPORTED_CHAIN = 3;
+
+  // The destination is a Polyester smart account and cannot be used for an
+  // external-chain withdraw.
+  POLYESTER_SMART_ACCOUNT = 4;
+
+  // The destination is a token contract and cannot receive withdrawals.
+  TOKEN_CONTRACT = 5;
+
+  // The destination is blocked by Polyester's user-safety denylist.
+  DENYLISTED_ADDRESS = 6;
+}
+
+// ValidateWithdrawDestinationRequest checks one external-chain
+// destination for an authenticated caller without creating a withdraw.
+message ValidateWithdrawDestinationRequest {
+  // External destination chain identifier.
+  uint64 destination_chain_id = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // Destination address to validate for destination_chain_id.
+  string destination_address = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// ValidateWithdrawDestinationResponse returns a user-safe validation
+// result without exposing internal denylist details.
+message ValidateWithdrawDestinationResponse {
+  // Whether the destination may be used for a withdraw.
+  bool valid = 1;
+
+  // Public validation outcome code.
+  WithdrawDestinationValidationCode code = 2;
+
+  // User-safe explanation of the validation outcome.
+  string message = 3;
+
+  // Canonical destination address when valid. Empty when valid is false.
+  string canonical_destination_address = 4;
+}
+
 // WithdrawService manages authenticated chain-facing withdraw request intake.
 service WithdrawService {
+  // Validate an external-chain withdraw destination for an authenticated
+  // caller without creating, signing, or reserving a withdraw.
+  rpc ValidateWithdrawDestination(ValidateWithdrawDestinationRequest) returns (ValidateWithdrawDestinationResponse) {
+    option (google.api.http) = {
+      post: "/v1/chain/withdraws:validate-destination"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Validate Withdraw Destination"
+      description:
+        "Validate an external-chain withdraw destination for "
+        "an authenticated caller without creating a withdraw."
+      tags: "Withdrawals"
+    };
+  }
+
   // Create or return one durable withdraw from Trading.
   rpc CreateTradingWithdraw(CreateTradingWithdrawRequest) returns (CreateTradingWithdrawResponse) {
     option (google.api.http) = {
