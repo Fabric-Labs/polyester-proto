@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package vip.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/vip/v1;vipv1";
+// Document-level OpenAPI metadata for the VIP API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "VIP Service"
+      description:
+        "Public VIP tier reference data and authenticated root-account "
+        "qualification status."
+    }
+  ]
+};
+
+// VIPTier describes one row in a complete VIP0 through VIP10 policy catalog.
+message VIPTier {
+  // Numeric VIP tier in the inclusive range 0 through 10.
+  uint32 tier = 1 [(buf.validate.field).uint32.lte = 10];
+
+  // Rolling 30-day settled spot volume entry threshold in USD, encoded as a
+  // non-negative base-10 decimal string without separators or a currency
+  // symbol.
+  string volume_threshold_usd = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$"
+  ];
+
+  // Rolling 30-day average portfolio value entry threshold in USD, encoded as
+  // a positive base-10 decimal string without separators or a currency symbol.
+  // Omitted for VIP0, which has no average portfolio value entry threshold.
+  optional string aop_threshold_usd = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0[.][0-9]{1,18}|[1-9][0-9]{0,20}([.][0-9]{1,18})?)$"
+  ];
+
+  // Absolute maker fee rate before symbol-specific adjustments, encoded as a
+  // base-10 percentage string without a percent sign. Values are between
+  // -100 and 100 inclusive.
+  string maker_fee_rate_percent = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 14,
+    (buf.validate.field).string.pattern = "^-?(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+
+  // Absolute taker fee rate before symbol-specific adjustments, encoded as a
+  // non-negative base-10 percentage string without a percent sign. Values are
+  // between 0 and 100 inclusive.
+  string taker_fee_rate_percent = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 13,
+    (buf.validate.field).string.pattern = "^(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+}
+
+// ListVIPTiersRequest requests the complete active VIP tier catalog.
+message ListVIPTiersRequest {}
+
+// ListVIPTiersResponse contains one complete, immutable VIP policy version.
+message ListVIPTiersResponse {
+  // Positive identifier of the returned VIP policy version.
+  uint64 policy_version = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // UTC time at which this policy version became effective.
+  google.protobuf.Timestamp effective_from = 2 [(buf.validate.field).required = true];
+
+  // Average portfolio value retention threshold in basis points. One basis
+  // point is 0.01%; valid values are 1 through 10000.
+  uint32 retention_threshold_bp = 3 [
+    (buf.validate.field).uint32.gt = 0,
+    (buf.validate.field).uint32.lte = 10000
+  ];
+
+  // Complete VIP0 through VIP10 catalog ordered by tier ascending. This is a
+  // naturally bounded 11-row snapshot and is not paginated.
+  repeated VIPTier tiers = 4 [(buf.validate.field).repeated = {
+    min_items: 11
+    max_items: 11
+  }];
+}
+
+// NextVIPTierThresholds contains the entry thresholds for the tier immediately
+// above the caller's effective tier.
+message NextVIPTierThresholds {
+  // Numeric next tier in the inclusive range 1 through 10.
+  uint32 tier = 1 [
+    (buf.validate.field).uint32.gte = 1,
+    (buf.validate.field).uint32.lte = 10
+  ];
+
+  // Rolling 30-day settled spot volume entry threshold in USD, encoded as a
+  // non-negative base-10 decimal string without separators or a currency
+  // symbol.
+  string volume_threshold_usd = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$"
+  ];
+
+  // Rolling 30-day average portfolio value entry threshold in USD, encoded as
+  // a positive base-10 decimal string without separators or a currency symbol.
+  string aop_threshold_usd = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0[.][0-9]{1,18}|[1-9][0-9]{0,20}([.][0-9]{1,18})?)$"
+  ];
+}
+
+// GetVIPStatusRequest requests VIP status for the authenticated caller's root
+// account. All subaccounts inherit that root status, so this request has no
+// subaccount selector.
+message GetVIPStatusRequest {}
+
+// GetVIPStatusResponse contains the authenticated caller-root VIP assignment
+// and the qualification facts available for that assignment.
+message GetVIPStatusResponse {
+  // Effective VIP tier in the inclusive range 0 through 10.
+  uint32 tier = 1 [(buf.validate.field).uint32.lte = 10];
+
+  // Tier earned from rolling 30-day settled spot volume, in the inclusive
+  // range 0 through 10.
+  uint32 volume_tier = 2 [(buf.validate.field).uint32.lte = 10];
+
+  // Tier earned from rolling 30-day average portfolio value, in the inclusive
+  // range 0 through 10.
+  uint32 aop_tier = 3 [(buf.validate.field).uint32.lte = 10];
+
+  // Rolling 30-day settled spot volume in USD, encoded as a non-negative
+  // base-10 decimal string without separators or a currency symbol. Omitted
+  // when complete qualification metrics are unavailable for the assignment.
+  optional string settled_volume_30d_usd = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$"
+  ];
+
+  // Rolling 30-day average portfolio value in USD, encoded as a non-negative
+  // base-10 decimal string without separators or a currency symbol. Omitted
+  // when complete qualification metrics are unavailable for the assignment.
+  optional string average_aop_30d_usd = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 40,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$"
+  ];
+
+  // Positive identifier of the VIP policy used for this assignment.
+  uint64 policy_version = 6 [(buf.validate.field).uint64.gt = 0];
+
+  // UTC time at which the selected assignment policy became effective.
+  google.protobuf.Timestamp policy_effective_from = 7 [(buf.validate.field).required = true];
+
+  // UTC time from which the explicit VIP assignment is effective. Omitted
+  // while a new account is using the default VIP0 tier.
+  optional google.protobuf.Timestamp effective_from = 8;
+
+  // UTC time at which the explicit assignment was evaluated. Omitted while a
+  // new account is using the default VIP0 tier.
+  optional google.protobuf.Timestamp evaluated_at = 9;
+
+  // UTC cutoff of the rolling metrics used for this assignment. Omitted when
+  // complete qualification metrics are unavailable.
+  optional google.protobuf.Timestamp metrics_as_of = 10;
+
+  // Entry thresholds for the tier immediately above the effective tier.
+  // Omitted when the effective tier is VIP10.
+  optional NextVIPTierThresholds next_tier_thresholds = 11;
+}
+
+// VIPService serves public VIP policy reference data and the authenticated
+// caller-root qualification status.
+service VIPService {
+  // List the complete active VIP0 through VIP10 tier catalog in ascending tier
+  // order.
+  rpc ListVIPTiers(ListVIPTiersRequest) returns (ListVIPTiersResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/vip/tiers"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List VIP Tiers"
+      description: "List the complete active VIP0 through VIP10 tier catalog."
+      tags: "VIP Service"
+      security: [{}]
+    };
+  }
+
+  // Get VIP qualification status for the authenticated caller's root account.
+  rpc GetVIPStatus(GetVIPStatusRequest) returns (GetVIPStatusResponse) {
+    option (google.api.http) = {get: "/v1/vip/status"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get VIP Status"
+      description: "Get VIP qualification status for the authenticated caller's root account."
+      tags: "VIP Service"
+    };
+  }
+}
