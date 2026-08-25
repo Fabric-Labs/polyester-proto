@@ -16,45 +16,48 @@ option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1"
 // Write-style actions also grant the matching read visibility where needed by
 // the product experience.
 enum PolicyAction {
-  // No policy action selected. Requests must choose one or more explicit actions.
+  reserved 2, 7, 13;
+  reserved "TRADE_PERP", "READ_PERP", "READ_TRANSFER_DESTINATIONS", "MANAGE_TRANSFER_WHITELISTS";
+
+  // No policy action selected. An empty API-key action list grants no access;
+  // sub-account policies retain their mandatory read-only actions.
   UNSPECIFIED = 0;
-  // Allow placing/modifying/cancelling spot orders.
+  // Allow placing and modifying spot orders and triggers, including reading
+  // spot orders and trades. Cancellation and pausing remain available as
+  // safety actions.
   TRADE_SPOT = 1;
-  // Allow placing/modifying/cancelling perpetual futures orders.
-  TRADE_PERP = 2;
-  // Allow internal transfers between sub-accounts or linked Polyester accounts.
+  // Allow internal transfers between sub-accounts or linked Polyester accounts,
+  // including reading internal transfer history.
   INTERNAL_TRANSFER = 3;
-  // Allow external withdrawals to whitelisted addresses.
+  // Allow value to leave Trading through external withdrawals. Destination
+  // authorization is enforced separately from this policy.
   EXTERNAL_WITHDRAW = 4;
-  // Allow reading balances, positions and equity for a sub-account or API key.
+  // Allow reading balances and equity for a sub-account or API key.
   READ_BALANCES = 5;
-  // Allow reading spot orders/trades/positions (no write).
+  // Allow reading spot orders and trades (no write).
   READ_SPOT = 6;
-  // Allow reading perp orders/trades/positions (no write).
-  READ_PERP = 7;
   // Allow reading internal transfer history.
   READ_INTERNAL_TRANSFERS = 8;
-  // Allow reading external withdrawal history.
-  READ_EXTERNAL_WITHDRAWALS = 9;
-  // Allow listing destination books, address book entries, recents, and mirrored whitelist state.
-  READ_TRANSFER_CONTROLS = 11;
-  // Allow creating, updating, deleting, and copying saved destination entries.
+  reserved 9;
+  reserved "READ_EXTERNAL_WITHDRAWALS";
+  // Allow reading saved, recent, and whitelisted address-book destinations.
+  READ_ADDRESS_BOOK = 11;
+  // Allow creating, updating, deleting, and copying saved destination entries,
+  // including reading the address book.
   MANAGE_ADDRESS_BOOK = 12;
-  // Allow mutating internal-transfer whitelist rows and requesting withdraw whitelist changes.
-  MANAGE_TRANSFER_WHITELISTS = 13;
 }
 
-// MarketScope describes how a policy applies to spot markets or perp contracts.
+// MarketScope describes how a policy applies to spot markets.
 message MarketScope {
   // Value is the market-level scope:
   // - ALL: no market-level restriction; new listings are automatically allowed.
-  // - ALLOWLIST: only the listed markets or contracts are allowed.
+  // - ALLOWLIST: only the listed markets are allowed.
   enum Value {
     // No scope selected. Create and update requests treat this as ALL.
     UNSPECIFIED = 0;
-    // Allow all current and future markets or contracts for this policy.
+    // Allow all current and future markets for this policy.
     ALL = 1;
-    // Allow only the markets or contracts listed on this policy.
+    // Allow only the markets listed on this policy.
     ALLOWLIST = 2;
   }
 }
@@ -68,21 +71,14 @@ message SpotMarketRule {
   ];
 }
 
-// PerpMarketRule describes an allowed perp contract and optional max leverage.
-message PerpMarketRule {
-  // Perp contract symbol, e.g. "BTCUSDT".
-  string symbol = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 32
-  ];
-  // Optional maximum leverage multiplier. Supported non-zero values are 1, 3,
-  // 5, 10, 20, 50, and 100. A value of 0 means no explicit per-contract cap;
-  // global_perp_leverage_x and product defaults still apply.
-  uint32 max_leverage_x = 2 [(buf.validate.field).uint32.lte = 1000];
-}
-
 // SubaccountPolicyView is the public view of a sub-account policy.
 message SubaccountPolicyView {
+  reserved 5, 7, 12, 15 to 19, 22, 24 to 26;
+  reserved "perp_markets", "perp_market_scope", "global_notional_cap", "max_open_positions",
+    "global_perp_leverage_x", "daily_internal_transfer_out_limit", "daily_withdraw_limit",
+    "internal_transfers_own_only", "enforce_withdraw_whitelist", "liquidation_only",
+    "daily_loss_limit", "intraday_drawdown_limit_bps";
+
   // Policy identifier (opaque ID).
   fixed64 id = 1;
   // Human-readable policy name.
@@ -93,18 +89,12 @@ message SubaccountPolicyView {
   // Allowed spot markets for this sub-account.
   repeated SpotMarketRule spot_markets = 4;
 
-  // Allowed perp contracts for this sub-account, with optional per-contract caps.
-  repeated PerpMarketRule perp_markets = 5;
-
   // Market-level scope for spot markets. When ALL, spot_markets is returned
   // for display only and is not enforced.
   MarketScope.Value spot_market_scope = 6 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When ALL, perp_markets is returned
-  // for display only and is not enforced.
-  MarketScope.Value perp_market_scope = 7 [(buf.validate.field).enum = {defined_only: true}];
 
-  // High-level actions enabled for the sub-account. Up to 64 unique explicit
-  // actions may be returned.
+  // Effective high-level actions enabled for the sub-account. Mandatory
+  // read-only actions are always included.
   repeated PolicyAction actions = 8 [
     (buf.validate.field).repeated = {
       unique: true
@@ -124,15 +114,8 @@ message SubaccountPolicyView {
   // audit metadata only and does not imply live linkage.
   fixed64 source_template_id = 11;
 
-  // --- Global risk limits (sub-account scope) ---
-
-  // Maximum total notional exposure (across all positions) allowed for this
-  // sub-account, expressed in a canonical quote unit (e.g. micro-USDT).
-  // A value of 0 means "no explicit cap".
-  uint64 global_notional_cap = 12;
-
   // Maximum notional size allowed for any single order on this sub-account,
-  // expressed in the same canonical quote unit as global_notional_cap.
+  // expressed in canonical quote microunits (one unit is 0.000001 USDT).
   // A value of 0 means "no explicit cap".
   uint64 max_order_notional = 13;
 
@@ -140,57 +123,12 @@ message SubaccountPolicyView {
   // A value of 0 means "no explicit cap".
   uint32 max_open_orders = 14;
 
-  // Maximum number of open perp positions allowed on this sub-account.
-  // A value of 0 means "no explicit cap".
-  uint32 max_open_positions = 15;
-
-  // Optional global leverage cap across all perp contracts, expressed as a
-  // maximum leverage multiple. Supported non-zero values are 1, 3, 5, 10, 20,
-  // 50, and 100. A value of 0 means "no explicit global cap"; per-contract
-  // caps still apply.
-  uint32 global_perp_leverage_x = 16;
-
-  // --- Capital movement limits (sub-account scope) ---
-
-  // Maximum total notional this sub-account can transfer out internally per
-  // day, expressed in the canonical quote unit (for example, micro-USDT). A
-  // value of 0 means "no explicit cap".
-  uint64 daily_internal_transfer_out_limit = 17;
-
-  // Maximum total notional this sub-account can withdraw per day, expressed in
-  // the canonical quote unit (for example, micro-USDT). A value of 0 means "no
-  // explicit cap".
-  uint64 daily_withdraw_limit = 18;
-
-  // When true, internal transfers from this sub-account may only target other
-  // sub-accounts owned by the same root account. When false, transfers to
-  // other owners are allowed (subject to other policy checks).
-  bool internal_transfers_own_only = 19;
-
-  // When true, external withdrawals from this sub-account must target an
-  // approved withdrawal destination.
-  bool enforce_withdraw_whitelist = 22;
-
   // --- Safety / kill-switch controls ---
 
-  // When true, trading on this sub-account is halted: new orders are rejected
-  // regardless of other settings. Existing positions may still be closed by
-  // product safety controls.
+  // When true, new orders and exposure-increasing order or trigger changes are
+  // rejected regardless of other settings. Existing orders and triggers may
+  // still be canceled or paused.
   bool trading_halted = 23;
-
-  // When true, this sub-account is in liquidation-only mode: new exposure
-  // cannot be opened, but reduce-only / close-out actions are allowed.
-  bool liquidation_only = 24;
-
-  // Maximum allowed realized loss for this sub-account over a rolling day
-  // before safety controls may halt activity, expressed in the canonical quote
-  // unit (for example, micro-USDT). A value of 0 means "no explicit limit".
-  uint64 daily_loss_limit = 25;
-
-  // Maximum allowed drawdown from peak equity in basis points (1/100 of a
-  // percent) before safety controls may halt activity. A value of 0 means "no
-  // explicit limit".
-  uint32 intraday_drawdown_limit_bps = 26 [(buf.validate.field).uint32.lte = 10000];
 
   // --- Governance / lifecycle metadata ---
 
@@ -246,25 +184,21 @@ message GetSubaccountPolicyResponse {
 
 // SubaccountPolicySpec contains the mutable configuration of a sub-account policy.
 message SubaccountPolicySpec {
+  reserved 4, 6, 12, 15 to 20, 22 to 24;
+  reserved "perp_markets", "perp_market_scope", "global_notional_cap", "max_open_positions",
+    "global_perp_leverage_x", "daily_internal_transfer_out_limit", "daily_withdraw_limit",
+    "internal_transfers_own_only", "enforce_withdraw_whitelist", "liquidation_only",
+    "daily_loss_limit", "intraday_drawdown_limit_bps";
+
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
     expression: "this.spot_market_scope != 2 ? true : size(this.spot_markets) > 0"
   };
   option (buf.validate.message).cel = {
-    id: "perp_allowlist_requires_markets"
-    message: "perp_markets must be non-empty when perp_market_scope is ALLOWLIST"
-    expression: "this.perp_market_scope != 2 ? true : size(this.perp_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
     id: "spot_markets_unique"
     message: "spot_markets must not contain duplicate symbols"
     expression: "this.spot_markets.map(m, m.symbol).unique()"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_markets_unique"
-    message: "perp_markets must not contain duplicate symbols"
-    expression: "this.perp_markets.map(m, m.symbol).unique()"
   };
 
   // Human-readable policy name. Create requires a non-empty value; update
@@ -277,16 +211,12 @@ message SubaccountPolicySpec {
 
   // Allowed spot markets for this policy.
   repeated SpotMarketRule spot_markets = 3;
-  // Allowed perp markets and optional per-contract leverage caps.
-  repeated PerpMarketRule perp_markets = 4;
-
   // Market-level scope for spot markets. When unspecified, defaults to ALL.
   MarketScope.Value spot_market_scope = 5 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When unspecified, defaults to ALL.
-  MarketScope.Value perp_market_scope = 6 [(buf.validate.field).enum = {defined_only: true}];
 
-  // High-level actions enabled for the sub-account policy. Up to 64 unique
-  // explicit actions are allowed.
+  // High-level actions enabled for the sub-account policy. Mandatory read-only
+  // actions are included when omitted. Up to 64 unique explicit actions are
+  // allowed.
   repeated PolicyAction actions = 7 [
     (buf.validate.field).repeated = {
       unique: true
@@ -298,51 +228,17 @@ message SubaccountPolicySpec {
     }
   ];
 
-  // Maximum total notional exposure across all positions for this sub-account,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no explicit cap.
-  uint64 global_notional_cap = 12;
   // Maximum notional size for any single order on this sub-account, expressed
-  // in the canonical quote unit (for example, micro-USDT). A value of 0 means
-  // no explicit cap.
+  // in canonical quote microunits (one unit is 0.000001 USDT). A value of 0
+  // means no explicit cap.
   uint64 max_order_notional = 13;
   // Maximum number of resting orders allowed on this sub-account at any time.
   // A value of 0 means no explicit cap.
   uint32 max_open_orders = 14;
-  // Maximum number of open perp positions allowed on this sub-account. A value
-  // of 0 means no explicit cap.
-  uint32 max_open_positions = 15;
-  // Optional global leverage cap across all perp contracts. Supported non-zero
-  // values are 1, 3, 5, 10, 20, 50, and 100. A value of 0 means no explicit cap.
-  uint32 global_perp_leverage_x = 16;
-
-  // Maximum total notional this sub-account can transfer out internally per
-  // rolling day, expressed in the canonical quote unit (for example,
-  // micro-USDT). A value of 0 means no explicit cap.
-  uint64 daily_internal_transfer_out_limit = 17;
-  // Maximum total notional this sub-account can withdraw per rolling day,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no explicit cap.
-  uint64 daily_withdraw_limit = 18;
-  // When true, internal transfers from this sub-account may only target other
-  // sub-accounts owned by the same root account.
-  bool internal_transfers_own_only = 19;
-  // When true, external withdrawals from this sub-account must target an
-  // approved withdrawal destination.
-  bool enforce_withdraw_whitelist = 20;
-
-  // When true, new orders for this sub-account are rejected regardless of other
-  // policy settings.
+  // When true, new orders and exposure-increasing order or trigger changes are
+  // rejected regardless of other settings. Existing orders and triggers may
+  // still be canceled or paused.
   bool trading_halted = 21;
-  // When true, this sub-account may only reduce or close existing exposure.
-  bool liquidation_only = 22;
-  // Maximum realized loss over a rolling day before safety controls may halt
-  // activity, expressed in the canonical quote unit (for example, micro-USDT).
-  // A value of 0 means no explicit limit.
-  uint64 daily_loss_limit = 23;
-  // Maximum drawdown from peak equity in basis points. One basis point is
-  // 1/100 of one percent. A value of 0 means no explicit limit.
-  uint32 intraday_drawdown_limit_bps = 24 [(buf.validate.field).uint32.lte = 10000];
   // When true, the policy is write-protected and requires an elevated mutation path.
   bool locked = 25;
   // Optional review time in UTC. This does not automatically disable the policy.
@@ -419,16 +315,20 @@ message SetSubaccountPolicyRequest {
   fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
 
   // Policy template to attach (opaque ID). A value of 0 clears the policy
-  // and reverts to the platform default for this sub-account.
+  // so no additional sub-account ceiling is applied.
   fixed64 policy_id = 2;
 }
 
 // SetSubaccountPolicyResponse is empty when the policy binding succeeds.
 message SetSubaccountPolicyResponse {}
 
-// ApiPolicyView is the public view of an API key policy template. API key
-// policy limits are additional caps and cannot exceed the sub-account policy.
+// ApiPolicyView is the public view of an API key policy template. Its action
+// and spot-market floor cannot exceed an attached sub-account policy.
 message ApiPolicyView {
+  reserved 5, 8, 13, 17, 18;
+  reserved "perp_markets", "perp_market_scope", "daily_internal_transfer_out_limit",
+    "daily_withdraw_limit", "max_order_notional";
+
   // Policy identifier (opaque ID).
   fixed64 id = 1;
   // Human-readable policy name.
@@ -438,9 +338,6 @@ message ApiPolicyView {
 
   // Allowed spot markets for this API key policy.
   repeated SpotMarketRule spot_markets = 4;
-
-  // Allowed perp contracts for this API key policy, with optional per-contract caps.
-  repeated PerpMarketRule perp_markets = 5;
 
   // High-level actions enabled for this API key. Up to 64 unique explicit
   // actions may be returned.
@@ -458,29 +355,6 @@ message ApiPolicyView {
   // Market-level scope for spot markets. When ALL, spot_markets is returned
   // for display only and is not enforced.
   MarketScope.Value spot_market_scope = 7 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When ALL, perp_markets is returned
-  // for display only and is not enforced.
-  MarketScope.Value perp_market_scope = 8 [(buf.validate.field).enum = {defined_only: true}];
-
-  // --- Global risk limits (API key scope) ---
-
-  // Maximum notional size allowed for any single order via this key, expressed
-  // in a canonical quote unit (e.g. micro-USDT). A value of 0 means "no
-  // explicit additional cap" beyond the sub-account policy.
-  uint64 max_order_notional = 13;
-
-  // --- Capital movement limits (API key scope) ---
-
-  // Maximum total notional this API key can transfer out internally per day,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no additional cap beyond the sub-account policy.
-  uint64 daily_internal_transfer_out_limit = 17;
-
-  // Maximum total notional this API key can withdraw per day, expressed in the
-  // canonical quote unit (for example, micro-USDT). A value of 0 means no
-  // additional cap beyond the sub-account policy.
-  uint64 daily_withdraw_limit = 18;
-
   // --- Template / lifecycle metadata ---
 
   // When true, this policy is intended to be reused as a template across
@@ -536,25 +410,19 @@ message GetApiPolicyResponse {
 
 // ApiPolicySpec contains the mutable configuration of an API key policy.
 message ApiPolicySpec {
+  reserved 4, 6, 13, 17, 18;
+  reserved "perp_markets", "perp_market_scope", "daily_internal_transfer_out_limit",
+    "daily_withdraw_limit", "max_order_notional";
+
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
     expression: "this.spot_market_scope != 2 ? true : size(this.spot_markets) > 0"
   };
   option (buf.validate.message).cel = {
-    id: "perp_allowlist_requires_markets"
-    message: "perp_markets must be non-empty when perp_market_scope is ALLOWLIST"
-    expression: "this.perp_market_scope != 2 ? true : size(this.perp_markets) > 0"
-  };
-  option (buf.validate.message).cel = {
     id: "spot_markets_unique"
     message: "spot_markets must not contain duplicate symbols"
     expression: "this.spot_markets.map(m, m.symbol).unique()"
-  };
-  option (buf.validate.message).cel = {
-    id: "perp_markets_unique"
-    message: "perp_markets must not contain duplicate symbols"
-    expression: "this.perp_markets.map(m, m.symbol).unique()"
   };
 
   // Human-readable policy name. Create requires a non-empty value; update
@@ -567,16 +435,11 @@ message ApiPolicySpec {
 
   // Allowed spot markets for this API key policy.
   repeated SpotMarketRule spot_markets = 3;
-  // Allowed perp markets and optional per-contract leverage caps.
-  repeated PerpMarketRule perp_markets = 4;
-
   // Market-level scope for spot markets. When unspecified, defaults to ALL.
   MarketScope.Value spot_market_scope = 5 [(buf.validate.field).enum = {defined_only: true}];
-  // Market-level scope for perp contracts. When unspecified, defaults to ALL.
-  MarketScope.Value perp_market_scope = 6 [(buf.validate.field).enum = {defined_only: true}];
 
-  // High-level actions enabled for the API key policy. Up to 64 unique explicit
-  // actions are allowed.
+  // High-level actions enabled for the API key policy. An empty list grants no
+  // access. Up to 64 unique explicit actions are allowed.
   repeated PolicyAction actions = 7 [
     (buf.validate.field).repeated = {
       unique: true
@@ -587,20 +450,6 @@ message ApiPolicySpec {
       not_in: [0]
     }
   ];
-
-  // Maximum notional size for any single order submitted with this API key,
-  // expressed in the canonical quote unit (for example, micro-USDT). A value of
-  // 0 means no additional cap beyond the sub-account policy.
-  uint64 max_order_notional = 13;
-
-  // Maximum total notional this API key can transfer out internally per rolling
-  // day, expressed in the canonical quote unit (for example, micro-USDT). A
-  // value of 0 means no additional cap beyond the sub-account policy.
-  uint64 daily_internal_transfer_out_limit = 17;
-  // Maximum total notional this API key can withdraw per rolling day, expressed
-  // in the canonical quote unit (for example, micro-USDT). A value of 0 means
-  // no additional cap beyond the sub-account policy.
-  uint64 daily_withdraw_limit = 18;
 
   // Whether this policy should be treated as a reusable template.
   bool is_template = 19;
