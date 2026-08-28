@@ -33,6 +33,137 @@ enum SubaccountRole {
   OWNER = 6;
 }
 
+// A stable capability granted by a sub-account role. These values describe
+// role authorization only; resource state, MFA, limits, and other request
+// context may still deny an operation.
+enum SubaccountPermission {
+  // No permission selected.
+  SUBACCOUNT_PERMISSION_UNSPECIFIED = 0;
+  // Read the sub-account and its non-sensitive metadata.
+  SUBACCOUNT_PERMISSION_READ_SUBACCOUNT = 1;
+  // Update sub-account metadata or lifecycle status.
+  SUBACCOUNT_PERMISSION_UPDATE_SUBACCOUNT = 2;
+  // Read balances and equity.
+  SUBACCOUNT_PERMISSION_READ_BALANCES = 3;
+  // Read spot orders and trades.
+  SUBACCOUNT_PERMISSION_READ_SPOT = 4;
+  // Place and manage spot orders and triggers.
+  SUBACCOUNT_PERMISSION_TRADE_SPOT = 5;
+  // Read internal-transfer history.
+  SUBACCOUNT_PERMISSION_READ_INTERNAL_TRANSFERS = 6;
+  // Create internal transfers.
+  SUBACCOUNT_PERMISSION_INTERNAL_TRANSFER = 7;
+  // Withdraw value from Trading to an external destination.
+  SUBACCOUNT_PERMISSION_EXTERNAL_WITHDRAW = 8;
+  // Read saved, recent, and whitelisted destinations.
+  SUBACCOUNT_PERMISSION_READ_ADDRESS_BOOK = 9;
+  // Create, update, delete, and copy saved destinations.
+  SUBACCOUNT_PERMISSION_MANAGE_ADDRESS_BOOK = 10;
+  // Read the current member roster.
+  SUBACCOUNT_PERMISSION_READ_MEMBERS = 11;
+  // Invite, remove, and change delegated members.
+  SUBACCOUNT_PERMISSION_MANAGE_MEMBERS = 12;
+  // Read pending and historical invitations for the sub-account.
+  SUBACCOUNT_PERMISSION_READ_INVITES = 13;
+  // Cancel invitations for the sub-account.
+  SUBACCOUNT_PERMISSION_MANAGE_INVITES = 14;
+  // Read API keys and their attached policies for the sub-account.
+  SUBACCOUNT_PERMISSION_READ_API_KEYS = 15;
+  // Create, update, and delete API keys for the sub-account.
+  SUBACCOUNT_PERMISSION_MANAGE_API_KEYS = 16;
+  // Read the policy attached to the sub-account.
+  SUBACCOUNT_PERMISSION_READ_SUBACCOUNT_POLICY = 17;
+  // Create, update, attach, or replace policies for the sub-account, subject to owner-only policy safeguards.
+  SUBACCOUNT_PERMISSION_MANAGE_SUBACCOUNT_POLICY = 18;
+  // Read sub-account activity with role-appropriate redaction.
+  SUBACCOUNT_PERMISSION_READ_ACTIVITY = 19;
+  // Read unmasked security details in sub-account activity.
+  SUBACCOUNT_PERMISSION_READ_ACTIVITY_SECURITY_DETAILS = 20;
+  // Change the delegated-member MFA requirement.
+  SUBACCOUNT_PERMISSION_MANAGE_MEMBER_MFA_REQUIREMENT = 21;
+  // Create or retrieve a deposit address for the sub-account.
+  SUBACCOUNT_PERMISSION_CREATE_DEPOSIT_ADDRESS = 22;
+  // List deposit addresses for the sub-account.
+  SUBACCOUNT_PERMISSION_READ_DEPOSIT_ADDRESSES = 23;
+  // Read Guard Signer wallet and on-chain status for the sub-account.
+  SUBACCOUNT_PERMISSION_READ_GUARD_SIGNER_STATUS = 24;
+  // Create, sign with, rotate, or export the sub-account Guard Signer wallet.
+  SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER = 25;
+}
+
+// User-facing metadata for one stable sub-account permission.
+message SubaccountPermissionDefinition {
+  // Stable permission identifier used by authorization and clients.
+  SubaccountPermission permission = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Human-readable permission name.
+  string display_name = 2;
+  // Human-readable explanation of the capability and its important boundaries.
+  string description = 3;
+  // Policy action that can further restrict this permission. Unspecified means
+  // the permission is controlled by role and request context only.
+  PolicyAction policy_action = 4 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+// Authoritative definition of one built-in sub-account role.
+message SubaccountRoleDefinition {
+  // Stable built-in role identifier.
+  SubaccountRole role = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Human-readable role name.
+  string display_name = 2;
+  // Human-readable summary of the role.
+  string description = 3;
+  // Whether this role can be assigned to a delegated member.
+  bool assignable = 4;
+  // Complete role-granted permission set in canonical permission order.
+  repeated SubaccountPermission permissions = 5 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 64
+  }];
+}
+
+// Request for the public built-in sub-account role and permission catalog.
+message ListSubaccountRolesRequest {}
+
+// Public built-in sub-account role and permission catalog.
+message ListSubaccountRolesResponse {
+  // Stable permission metadata in canonical permission order.
+  repeated SubaccountPermissionDefinition permissions = 1;
+  // Built-in roles in display order from Owner through Viewer.
+  repeated SubaccountRoleDefinition roles = 2;
+}
+
+// Request for the authenticated caller's effective permissions on one sub-account.
+message GetEffectiveSubaccountPermissionsRequest {
+  // Target sub-account (opaque ID).
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Effective role-granted permissions for the caller on one sub-account.
+message GetEffectiveSubaccountPermissionsResponse {
+  // Current role of the caller on the sub-account.
+  SubaccountRole role = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Permissions allowed by the role and current sub-account policy. Resource
+  // state, MFA, limits, and other request context may still deny an operation.
+  repeated SubaccountPermission permissions = 2 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 64
+  }];
+  // Attached sub-account policy identifier, or zero when no policy is attached.
+  fixed64 subaccount_policy_id = 3;
+}
+
 // Role summary for one sub-account visible to the caller.
 message SubaccountRoleView {
   // Sub-account identifier (opaque ID).
@@ -391,7 +522,9 @@ message InviteSubaccountMemberResponse {
 
 // Request to list sub-account invitations.
 message ListSubaccountInvitesRequest {
-  // Optional direction filter. Use "incoming" for invites where the caller is grantee, "outgoing" for invites sent by the caller, or empty for both.
+  // Optional direction filter. Use "incoming" for invites where the caller is grantee,
+  // "outgoing" for all invites on sub-accounts the caller currently owns or administers,
+  // or empty for both scopes.
   string direction = 1 [
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string = {
@@ -406,7 +539,8 @@ message ListSubaccountInvitesRequest {
 
 // Response containing sub-account invitations.
 message ListSubaccountInvitesResponse {
-  // Invitations for the caller, ordered newest first.
+  // Invitations visible to the caller, ordered newest first. Owners and admins
+  // see all invitations for sub-accounts they administer, regardless of inviter.
   repeated SubaccountInvite invites = 1;
 }
 
@@ -418,7 +552,7 @@ enum SubaccountInviteAction {
   SUBACCOUNT_INVITE_ACTION_ACCEPT = 1;
   // Decline an incoming invitation as the grantee.
   SUBACCOUNT_INVITE_ACTION_DECLINE = 2;
-  // Cancel an outgoing invitation as the inviter.
+  // Cancel an invitation as a current owner or admin of its sub-account.
   SUBACCOUNT_INVITE_ACTION_CANCEL = 3;
 }
 
@@ -442,7 +576,9 @@ message RespondSubaccountInviteResponse {
   SubaccountInvite invite = 1;
 }
 
-// Request for an aggregated sub-account read view.
+// Request for an aggregated sub-account read view. Requested administrative
+// sections unavailable to the caller are returned empty without failing an
+// otherwise authorized sub-account read.
 message GetSubaccountRequest {
   // Target sub-account (opaque ID).
   fixed64 subaccount_id = 1 [
@@ -450,13 +586,13 @@ message GetSubaccountRequest {
     (google.api.field_behavior) = REQUIRED
   ];
 
-  // Include API keys scoped to this sub-account.
+  // Include API keys scoped to this sub-account. Only owner and admin callers receive API keys.
   bool include_api_keys = 2;
-  // Include members for this sub-account. Only owner and admin callers receive members.
+  // Include current members for this sub-account. Every current member may receive the roster.
   bool include_members = 3;
-  // Include invitations for the caller.
+  // Include invitations visible to the caller.
   bool include_invites = 4;
-  // Include the attached sub-account policy, when one is attached.
+  // Include the attached sub-account policy, when one is attached. Every current member may receive it.
   bool include_policy = 5;
   // Include current balances for this sub-account.
   bool include_balances = 6;
@@ -470,13 +606,13 @@ message GetSubaccountResponse {
   // Requested sub-account summary.
   Subaccount subaccount = 1;
 
-  // API keys scoped to this sub-account when include_api_keys is true.
+  // API keys scoped to this sub-account when include_api_keys is true and the caller is owner or admin.
   repeated ApiKey api_keys = 2;
-  // Members for this sub-account when include_members is true and the caller is owner or admin.
+  // Current members for this sub-account when include_members is true and the caller is a current member.
   repeated SubaccountMemberView members = 3;
-  // Invitations for the caller when include_invites is true.
+  // Invitations visible to the caller when include_invites is true.
   repeated SubaccountInvite invites = 4;
-  // Attached policy when include_policy is true and the sub-account has a policy.
+  // Attached policy when include_policy is true, the caller is a current member, and the sub-account has a policy.
   SubaccountPolicyView policy = 5;
   // Current balances when include_balances is true.
   ledger.read.v1.GetBalancesResponse balances = 6;
@@ -682,7 +818,7 @@ service SubaccountService {
     };
   }
 
-  // List members for a sub-account (owner/admin only).
+  // List current members for a sub-account visible to any current member.
   rpc ListSubaccountMembers(ListSubaccountMembersRequest) returns (ListSubaccountMembersResponse) {
     option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}/members"};
     option (gnostic.openapi.v3.operation) = {
@@ -736,17 +872,17 @@ service SubaccountService {
     };
   }
 
-  // List incoming/outgoing sub-account invitations.
+  // List incoming invitations and invitations for administered sub-accounts.
   rpc ListSubaccountInvites(ListSubaccountInvitesRequest) returns (ListSubaccountInvitesResponse) {
     option (google.api.http) = {get: "/v1/auth/subaccounts:invites"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccount Invites"
-      description: "List incoming and outgoing sub-account invitations for the caller."
+      description: "List incoming invitations and all invitations for sub-accounts the caller owns or administers."
       tags: "Auth Service"
     };
   }
 
-  // Accept/decline an invite (grantee) or cancel an invite (inviter).
+  // Accept/decline an invite as the grantee, or cancel it as a current owner or admin.
   rpc RespondSubaccountInvite(RespondSubaccountInviteRequest) returns (RespondSubaccountInviteResponse) {
     option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
@@ -756,6 +892,29 @@ service SubaccountService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Respond Subaccount Invite"
       description: "Accept or decline an invite as grantee, or cancel it as inviter."
+      tags: "Auth Service"
+    };
+  }
+}
+
+// Read-only discovery of built-in role capabilities and caller-effective permissions.
+service SubaccountRoleService {
+  // List the authoritative built-in role and permission catalog. This metadata is public.
+  rpc ListSubaccountRoles(ListSubaccountRolesRequest) returns (ListSubaccountRolesResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccount-roles"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Subaccount Roles"
+      description: "List every built-in sub-account role and the exact permission definitions used by backend authorization."
+      tags: "Auth Service"
+    };
+  }
+
+  // Return the authenticated caller's effective permissions for one sub-account.
+  rpc GetEffectiveSubaccountPermissions(GetEffectiveSubaccountPermissionsRequest) returns (GetEffectiveSubaccountPermissionsResponse) {
+    option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}/permissions"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Effective Subaccount Permissions"
+      description: "Return permissions granted by the caller's current role after applying the attached sub-account policy. Contextual checks such as MFA and resource state still apply."
       tags: "Auth Service"
     };
   }

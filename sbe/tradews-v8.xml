@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Public SBE evolution rules:
+  - Describe client-visible meaning, units, null/default behavior, and scope.
+  - Do not expose internal service names, transports, storage systems, or topology.
+  - Append new fixed fields to the end of the fixed block and assign sinceVersion.
+  - Never reuse template IDs, field IDs, enum values, or bit positions.
+-->
+<messageSchema package="tradews" id="7" version="8" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
+  <types>
+    <composite name="messageHeader" description="Eight-byte SBE header that prefixes every WebSocket binary message">
+      <type name="blockLength" primitiveType="uint16" description="Encoded length in bytes of the message fixed block, excluding this header and variable-length data"/>
+      <type name="templateId" primitiveType="uint16" description="Message template identifier used to select the payload type"/>
+      <type name="schemaId" primitiveType="uint16" description="Schema identifier; must equal 7 for this contract"/>
+      <type name="version" primitiveType="uint16" description="Schema version used by the sender to encode the message"/>
+    </composite>
+
+    <composite name="varDataEncoding" description="Length-prefixed byte sequence used for variable-length message data">
+      <type name="length" primitiveType="uint32" maxValue="2147483647" description="Number of payload bytes that immediately follow this length prefix"/>
+      <type name="varData" primitiveType="char" description="Payload bytes interpreted according to the containing data field"/>
+    </composite>
+
+    <enum name="CommandType" encodingType="uint8" description="Client command carried in a WebSocket binary message">
+      <validValue name="PING" description="Tests session liveness without submitting a trading command">1</validValue>
+      <validValue name="CREATE_ORDER" description="Submits one new order for admission">2</validValue>
+      <validValue name="CANCEL_ORDER" description="Requests cancellation of one order">3</validValue>
+      <validValue name="MODIFY_ORDER" description="Requests changes to one existing order">4</validValue>
+      <validValue name="CANCEL_ALL_ORDERS" description="Requests cancellation of all matching open orders in the authenticated account scope">5</validValue>
+      <validValue name="SUBSCRIBE" description="Replaces the private event-channel subscription for the connection">6</validValue>
+    </enum>
+
+    <enum name="Side" encodingType="uint8" description="Direction of an order or account execution">
+      <validValue name="BUY" description="Buy the base asset using the quote asset">1</validValue>
+      <validValue name="SELL" description="Sell the base asset for the quote asset">2</validValue>
+    </enum>
+
+    <enum name="OrderType" encodingType="uint8" description="Price behavior requested for an order">
+      <validValue name="LIMIT" description="Executes only at the specified limit price or better">1</validValue>
+      <validValue name="MARKET" description="Executes immediately against available liquidity subject to price protection">2</validValue>
+    </enum>
+
+    <enum name="TimeInForce" encodingType="uint8" description="Policy controlling how long an order may remain active and whether partial execution is allowed">
+      <validValue name="GTC" description="Good-til-canceled; unexecuted quantity may remain active until canceled">1</validValue>
+      <validValue name="IOC" description="Immediate-or-cancel; executes available quantity immediately and cancels any remainder">2</validValue>
+      <validValue name="FOK" description="Fill-or-kill; executes the entire quantity immediately or cancels without execution">3</validValue>
+    </enum>
+
+    <enum name="FeeAsset" encodingType="uint8" description="Asset in which order fees are charged; SELL orders must use QUOTE">
+      <validValue name="QUOTE" description="Charge fees in the quote asset">1</validValue>
+      <validValue name="BASE" description="BUY-only option that deducts fees from the received base asset">2</validValue>
+    </enum>
+
+    <enum name="OrderSizingKind" encodingType="uint8" description="Required method used to size a new order">
+      <validValue name="BASE_QUANTITY" description="Size the order by an exact gross base-asset quantity">1</validValue>
+      <validValue name="MAX_QUOTE_DEBIT" description="Size an eligible BUY order by a hard all-in quote-asset debit limit">2</validValue>
+    </enum>
+
+    <enum name="STPMode" encodingType="uint8" description="Self-trade prevention mode">
+      <validValue name="EXPIRE_MAKER" description="Cancel the resting order when it would trade against the same account">1</validValue>
+      <validValue name="EXPIRE_TAKER" description="Cancel the incoming order when it would trade against the same account">2</validValue>
+      <validValue name="EXPIRE_BOTH" description="Cancel both orders when they would trade against the same account">3</validValue>
+    </enum>
+
+    <enum name="ModifyBehavior" encodingType="uint8" description="Policy controlling whether modification may retain or replace the existing order">
+      <validValue name="AMEND_OR_REPLACE" description="Amend in place when possible; otherwise cancel and replace the order">1</validValue>
+      <validValue name="AMEND_ONLY" description="Amend in place and reject changes that require replacement">2</validValue>
+      <validValue name="REPLACE_ONLY" description="Always cancel the existing order and create a replacement">3</validValue>
+    </enum>
+
+    <enum name="RejectCode" encodingType="uint16" description="Stable machine-readable rejection reason; shared order-domain values use the same numbers as the Orders API">
+      <validValue name="BAD_REQUEST" description="The message could not be decoded or was structurally invalid">1</validValue>
+      <validValue name="INVALID_ARGUMENT" description="One or more request fields or field combinations were invalid">2</validValue>
+      <validValue name="INSUFFICIENT_FUNDS" description="The account did not have enough available balance for the order">3</validValue>
+      <validValue name="UNKNOWN_SYMBOL" description="The requested trading pair was unknown">4</validValue>
+      <validValue name="BAD_PRICE" description="The requested price was invalid">5</validValue>
+      <validValue name="BAD_QTY" description="The requested quantity was invalid">6</validValue>
+      <validValue name="MIN_NOTIONAL" description="The order notional was below the pair minimum">7</validValue>
+      <validValue name="QTY_STEP_SIZE" description="The quantity did not align with the pair step size">8</validValue>
+      <validValue name="CONFLICT_DUPLICATE_CLIENT_ORDER_ID" description="The client order identifier was already used for a different active order">9</validValue>
+      <validValue name="UNAVAILABLE" description="A required trading capability was temporarily unavailable">10</validValue>
+      <validValue name="UNAUTHENTICATED" description="The caller was not authenticated">11</validValue>
+      <validValue name="PERMISSION_DENIED" description="The authenticated caller was not allowed to perform the command">12</validValue>
+      <validValue name="NOT_FOUND" description="The requested order or resource was not found">13</validValue>
+      <validValue name="UPSTREAM_ERROR" description="A required dependency rejected or failed the command">14</validValue>
+      <validValue name="FEE_ASSET_NOT_ALLOWED" description="The requested fee asset was not allowed for the order">15</validValue>
+      <validValue name="PAIR_DISABLED" description="The trading pair was disabled">16</validValue>
+      <validValue name="ORDER_UNKNOWN" description="The requested order was unknown in the authenticated account scope">17</validValue>
+      <validValue name="INTERNAL_ERROR" description="The command failed because of an unexpected server error">18</validValue>
+      <validValue name="POLICY_MARKET_DENY" description="The account policy did not allow trading on the requested pair">20</validValue>
+      <validValue name="POLICY_MAX_NOTIONAL" description="The order exceeded the account policy maximum notional">21</validValue>
+      <validValue name="POLICY_TRADING_HALTED" description="Trading was halted for the authenticated account scope">22</validValue>
+      <validValue name="POLICY_SPOT_TRADE_DENY" description="The account policy did not allow spot trading">23</validValue>
+      <validValue name="API_KEY_POLICY_REQUIRED" description="The API key required an attached trading policy">27</validValue>
+      <validValue name="API_KEY_UNKNOWN" description="The API key could not be resolved">28</validValue>
+      <validValue name="API_KEY_MARKET_DENY" description="The API key policy did not allow trading on the requested pair">29</validValue>
+      <validValue name="PRICE_TICK_SIZE" description="The price did not align with the pair tick size">30</validValue>
+      <validValue name="MIN_QTY" description="The quantity was below the pair minimum">31</validValue>
+      <validValue name="POLICY_MAX_OPEN_ORDERS" description="The account reached its policy limit for open orders">34</validValue>
+      <validValue name="MODIFICATION_REQUIRES_REPLACE" description="The requested modification required replacement but replacement was not allowed">35</validValue>
+      <validValue name="CONFLICT_IDEMPOTENCY_KEY_REUSE" description="An idempotency key was reused with a different payload">36</validValue>
+      <validValue name="MARKET_PRICE_UNAVAILABLE" description="No reference price was available to admit the market order">37</validValue>
+      <validValue name="TRIGGER_PRICE_INVALID" description="The trigger price was invalid for the requested order">40</validValue>
+      <validValue name="TRIGGER_PRICE_SOURCE_UNSUPPORTED" description="The requested trigger price source was unsupported">41</validValue>
+      <validValue name="TRAILING_DISTANCE_INVALID" description="The trailing-stop distance was invalid">42</validValue>
+      <validValue name="PAIR_NOT_LISTED_YET" description="The trading pair was known but not yet listed">50</validValue>
+      <validValue name="PAIR_DELISTED" description="The trading pair was delisted">51</validValue>
+      <validValue name="PAIR_CANCEL_ONLY" description="The trading pair accepted cancellations but not new or replacement orders">52</validValue>
+      <validValue name="PAIR_POST_ONLY" description="The trading pair required post-only order placement">53</validValue>
+      <validValue name="PAIR_REDUCE_ONLY" description="The trading pair did not accept new spot exposure">54</validValue>
+      <validValue name="RISK_LIMIT" description="An account-level risk limit was exceeded">55</validValue>
+      <validValue name="MARKET_HALTED" description="The market was halted">56</validValue>
+      <validValue name="ACCOUNT_UNKNOWN" description="The authenticated account could not be resolved">57</validValue>
+      <validValue name="POST_ONLY_CROSS" description="A post-only order would have immediately crossed the book">58</validValue>
+      <validValue name="REDUCE_ONLY_BLOCKED" description="Reduce-only policy blocked the order">59</validValue>
+      <validValue name="PRICE_BAND_VIOLATION" description="The order violated the market price band">60</validValue>
+      <validValue name="MARKET_CAP_VIOLATION" description="The order violated the market-cap guard">61</validValue>
+      <validValue name="EMPTY_BOOK" description="The market order could not execute because the book was empty">62</validValue>
+      <validValue name="FOK_INSUFFICIENT_LIQUIDITY" description="The fill-or-kill order lacked sufficient immediate liquidity">63</validValue>
+      <validValue name="ORDER_ALREADY_TERMINAL" description="The client order identifier referred to an order already in a terminal state">64</validValue>
+      <validValue name="STALE_QUOTE" description="The client reference price was stale under the server drift policy">65</validValue>
+      <validValue name="VALIDATION_ERROR" description="The request failed structural or cross-field validation">66</validValue>
+      <validValue name="OVERLOADED" description="The connection or trading service reached bounded admission capacity">67</validValue>
+      <validValue name="MAX_QUOTE_DEBIT_TOO_SMALL" description="The quote debit limit could not resolve one valid step-aligned base quantity">68</validValue>
+      <validValue name="RATE_LIMIT_EXCEEDED" description="The authenticated account exhausted the applicable trading quota">69</validValue>
+      <validValue name="SEQUENCE_OUT_OF_ORDER" description="The client sequence did not equal the next expected sequence for this connection">1001</validValue>
+    </enum>
+
+    <enum name="LiquidityRole" encodingType="uint8" description="Liquidity role of the authenticated account's order in an execution">
+      <validValue name="MAKER" description="The order was resting and provided liquidity">1</validValue>
+      <validValue name="TAKER" description="The order was incoming and removed liquidity">2</validValue>
+    </enum>
+
+    <enum name="SettlementStatus" encodingType="uint8" description="Financial finality of an execution notification">
+      <validValue name="PENDING" description="The execution occurred but financial settlement is not yet final; fee amounts are not yet available">1</validValue>
+      <validValue name="SETTLED" description="Financial settlement completed and the execution is available from durable trade history">2</validValue>
+    </enum>
+
+    <enum name="OrderStatus" encodingType="uint8" description="Current lifecycle state of an order">
+      <validValue name="PENDING" description="Accepted for processing but not yet active for execution">1</validValue>
+      <validValue name="PENDING_CANCEL" description="Cancellation requested; the order may execute until cancellation completes">2</validValue>
+      <validValue name="PENDING_REPLACE" description="Replacement requested; the replacement is not yet active for execution">3</validValue>
+      <validValue name="WORKING" description="Active and eligible to rest or execute">4</validValue>
+      <validValue name="FILLED" description="Fully executed with no remaining quantity">5</validValue>
+      <validValue name="CANCELED" description="Canceled with no remaining active quantity">6</validValue>
+      <validValue name="REJECTED" description="Rejected before becoming active">7</validValue>
+    </enum>
+
+    <set name="EventChannels" encodingType="uint32" description="Private event channels enabled for this authenticated connection">
+      <choice name="executions" description="Receive private execution notifications for the authenticated account scope">0</choice>
+      <choice name="orders" description="Receive private order lifecycle notifications for the authenticated account scope">1</choice>
+    </set>
+
+    <enum name="RateLimitOperation" encodingType="uint8" description="Trading operation whose rate limit rejected the command">
+      <validValue name="CREATE_ORDER" description="Single-order placement operation">1</validValue>
+      <validValue name="CANCEL_ORDER" description="Single-order cancellation operation">2</validValue>
+      <validValue name="MODIFY_ORDER" description="Single-order modification operation">3</validValue>
+      <validValue name="CANCEL_ALL_ORDERS" description="Bulk cancellation operation">4</validValue>
+    </enum>
+
+    <enum name="RateLimitPolicyClass" encodingType="uint8" description="Quota family used for a rate-limit decision">
+      <validValue name="TRADING_PLACE" description="Quota shared by order placement and modification operations">1</validValue>
+      <validValue name="TRADING_CANCEL" description="Quota shared by order cancellation operations">2</validValue>
+    </enum>
+
+    <enum name="RateLimitScope" encodingType="uint8" description="Caller dimension that owns exhausted capacity">
+      <validValue name="ACCOUNT" description="Quota capacity is shared by the authenticated account">1</validValue>
+    </enum>
+
+    <enum name="RateLimitRefillModel" encodingType="uint8" description="How exhausted quota capacity becomes available again">
+      <validValue name="CONTINUOUS" description="Capacity replenishes continuously over time">1</validValue>
+    </enum>
+
+    <set name="OrderFlags" encodingType="uint32" description="Order behavior flags">
+      <choice name="postOnly" description="Reject the order rather than execute immediately; valid only for GTC limit orders">0</choice>
+    </set>
+  </types>
+
+  <message name="Ping" id="1" description="Tests connection liveness without submitting a trading command">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding Pong"/>
+    <data name="payload" id="3" type="varDataEncoding" description="Opaque bytes copied unchanged into the corresponding Pong"/>
+  </message>
+
+  <message name="CreateOrder" id="2" description="Submits one order for admission; an acknowledgement does not imply that the order is active or executed">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
+    <field name="symbolId" id="4" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig; must be greater than zero"/>
+    <field name="side" id="5" type="Side" description="Required direction of the order"/>
+    <field name="orderType" id="6" type="OrderType" description="Required price behavior of the order"/>
+    <field name="timeInForce" id="7" type="TimeInForce" description="Required lifetime and fill policy; MARKET orders require IOC"/>
+    <field name="baseQtyScaled" id="8" type="int64" presence="optional" nullValue="-9223372036854775808" description="Exact gross base-asset quantity scaled by the pair's base_quantity_scale from GetSpotConfig; required and positive for BASE_QUANTITY sizing, otherwise null"/>
+    <field name="priceTicks" id="9" type="int64" presence="optional" nullValue="-9223372036854775808" description="Limit price in quote units scaled by 1e6; required and positive for LIMIT orders, null for MARKET orders"/>
+    <field name="flags" id="10" type="OrderFlags" description="Bitset of requested order behaviors; zero enables no optional behaviors"/>
+    <field name="feeAsset" id="11" type="FeeAsset" description="Required asset in which fees are charged; SELL orders must use QUOTE"/>
+    <field name="stpMode" id="12" type="STPMode" presence="optional" nullValue="0" description="Self-trade prevention mode; null defaults to EXPIRE_MAKER"/>
+    <field name="marketClientRefPriceTicks" id="13" type="int64" presence="optional" nullValue="-9223372036854775808" description="Optional client reference price for MARKET price protection in quote units scaled by 1e6; null uses server reference pricing"/>
+    <field name="marketMaxSlippageTicks" id="14" type="int32" presence="optional" nullValue="-2147483648" description="Optional positive MARKET slippage limit as a price delta in 1e-6 quote-unit ticks; null uses the pair default and is mutually exclusive with marketMaxSlippageBps"/>
+    <field name="marketMaxSlippageBps" id="15" type="int32" presence="optional" nullValue="-2147483648" description="Optional MARKET slippage limit from 1 to 10000 basis points, where 1 basis point is 0.01 percent; null uses the pair default and is mutually exclusive with marketMaxSlippageTicks"/>
+    <field name="sizingKind" id="17" type="OrderSizingKind" sinceVersion="2" description="Required sizing method that selects exactly one of baseQtyScaled or maxQuoteDebitScaled"/>
+    <field name="maxQuoteDebitScaled" id="18" type="int64" presence="optional" nullValue="-9223372036854775808" sinceVersion="2" description="Hard all-in quote-asset debit limit scaled by the pair's quote_quantity_scale from GetSpotConfig; required and positive for MAX_QUOTE_DEBIT sizing, valid only for BUY MARKET IOC and BUY LIMIT IOC, otherwise null"/>
+    <data name="clientOrderId" id="16" type="varDataEncoding" description="Required client-generated idempotency key for WebSocket order placement; 1 to 36 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen"/>
+  </message>
+
+  <message name="CancelOrder" id="3" description="Requests cancellation of one order identified by orderId or clientOrderId">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
+    <field name="orderId" id="4" type="uint64" presence="optional" nullValue="0" description="Public order identifier; exactly one of orderId or clientOrderId is required, and this field is zero when clientOrderId is used"/>
+    <field name="symbolId" id="5" type="uint32" presence="optional" nullValue="0" description="Optional stable numeric trading-pair identifier returned by GetSpotConfig; zero lets the service resolve the pair from the order key"/>
+    <data name="clientOrderId" id="6" type="varDataEncoding" description="Client-generated order identifier scoped to the authenticated account; exactly one of orderId or clientOrderId is required, and this value is empty when orderId is used"/>
+  </message>
+
+  <message name="ModifyOrder" id="4" description="Requests a quantity, price, or client identifier change to one existing order">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
+    <field name="orderId" id="4" type="uint64" presence="optional" nullValue="0" description="Public identifier of the order to modify; exactly one of orderId or clientOrderId is required, and this field is zero when clientOrderId is used"/>
+    <field name="symbolId" id="5" type="uint32" presence="optional" nullValue="0" description="Optional stable numeric trading-pair identifier returned by GetSpotConfig; zero lets the service resolve the pair from the order key"/>
+    <field name="newQtyScaled" id="6" type="int64" presence="optional" nullValue="-9223372036854775808" description="Optional positive target total gross base-asset quantity after modification, scaled by the pair's base_quantity_scale from GetSpotConfig; null leaves quantity unchanged"/>
+    <field name="priceTicks" id="7" type="int64" presence="optional" nullValue="-9223372036854775808" description="Optional positive target limit price after modification in quote units scaled by 1e6; null leaves price unchanged"/>
+    <field name="behavior" id="8" type="ModifyBehavior" presence="optional" nullValue="0" description="Required modification policy; zero is invalid"/>
+    <data name="clientOrderId" id="9" type="varDataEncoding" description="Client-generated identifier of the order to modify; exactly one of orderId or clientOrderId is required, and this value is empty when orderId is used"/>
+    <data name="newClientOrderId" id="10" type="varDataEncoding" description="Optional replacement client order identifier; empty leaves the identifier unchanged, and a non-empty value must use 1 to 36 supported ASCII characters"/>
+  </message>
+
+  <message name="CancelAllOrders" id="5" description="Cancel open orders for an account, optionally scoped by symbol and side">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
+    <field name="symbolId" id="4" type="uint32" presence="optional" nullValue="0" description="Stable numeric trading-pair identifier returned by GetSpotConfig; zero matches all trading pairs"/>
+    <field name="side" id="5" type="Side" presence="optional" nullValue="0" description="Order-side filter; null matches both BUY and SELL orders"/>
+    <field name="dryRun" id="7" type="uint8" description="Boolean encoded as 0 or 1; 1 returns the matched order count without requesting cancellations, while 0 requests cancellation"/>
+  </message>
+
+  <message name="Subscribe" id="6" description="Replace the private event-channel subscription for this authenticated connection">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding SubscriptionAck or rejection"/>
+    <field name="channels" id="3" type="EventChannels" description="Complete desired channel bitset that replaces the previous subscription; zero unsubscribes from all private events"/>
+  </message>
+
+  <message name="CommandAck" id="20" description="Confirms that a trading command was accepted; later order and execution events report lifecycle outcomes">
+    <field name="seq" id="1" type="uint64" description="Client sequence number copied from the accepted command"/>
+    <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the accepted command"/>
+    <field name="commandType" id="3" type="CommandType" description="Type of command that was accepted"/>
+    <field name="orderId" id="4" type="uint64" presence="optional" nullValue="0" description="Public order identifier returned for CREATE_ORDER, CANCEL_ORDER, or MODIFY_ORDER; zero when the command has no single-order result"/>
+    <field name="symbolId" id="5" type="uint32" presence="optional" nullValue="0" description="Stable numeric trading-pair identifier associated with the result; zero when the command was not scoped to one pair"/>
+    <field name="tsNs" id="6" type="uint64" epoch="unix" timeUnit="nanosecond" description="Command acceptance timestamp in nanoseconds since the Unix epoch, UTC"/>
+    <field name="matchedOrders" id="7" type="uint32" presence="optional" nullValue="0" description="For CANCEL_ALL_ORDERS, number of open orders matching the requested filters; zero for other commands or when none matched"/>
+    <field name="submittedCancels" id="8" type="uint32" presence="optional" nullValue="0" description="For non-dry-run CANCEL_ALL_ORDERS, number of cancellation requests accepted for processing; zero otherwise"/>
+    <field name="failedCancels" id="9" type="uint32" presence="optional" nullValue="0" description="For non-dry-run CANCEL_ALL_ORDERS, number of matching orders whose cancellation could not be submitted; zero otherwise"/>
+    <field name="resolvedBaseQtyScaled" id="10" type="int64" presence="optional" nullValue="-9223372036854775808" sinceVersion="2" description="For CREATE_ORDER, gross base-asset quantity resolved for execution and scaled by the pair's base_quantity_scale from GetSpotConfig; null for other commands"/>
+    <field name="submittedMaxQuoteDebitScaled" id="11" type="int64" presence="optional" nullValue="-9223372036854775808" sinceVersion="2" description="For CREATE_ORDER using MAX_QUOTE_DEBIT sizing, the submitted hard all-in quote-asset debit limit scaled by the pair's quote_quantity_scale from GetSpotConfig; null otherwise"/>
+  </message>
+
+  <message name="CommandReject" id="21" description="Reports a command-level failure without closing the connection">
+    <field name="seq" id="1" type="uint64" description="Client sequence number copied from the rejected command when decodable; zero when unavailable"/>
+    <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the rejected command when decodable; zero when unavailable"/>
+    <field name="code" id="4" type="RejectCode" description="Stable machine-readable reason for the rejection"/>
+    <field name="tsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Rejection timestamp in nanoseconds since the Unix epoch, UTC"/>
+    <field name="rateLimitWeight" id="7" type="uint64" presence="optional" nullValue="0" sinceVersion="3" description="Maximum weighted capacity of the applicable quota; zero when the rejection is not rate-limit related"/>
+    <field name="rateLimitRemaining" id="8" type="uint64" presence="optional" nullValue="18446744073709551615" sinceVersion="3" description="Weighted capacity remaining after the decision; null when the rejection is not rate-limit related"/>
+    <field name="rateLimitRetryAfterNs" id="9" type="uint64" presence="optional" nullValue="0" sinceVersion="3" description="Minimum delay in nanoseconds before retrying the rate-limited operation; zero when no delay applies"/>
+    <field name="rateLimitPolicyVersion" id="10" type="uint64" presence="optional" nullValue="0" sinceVersion="3" description="Version of the quota policy used for the decision; zero when the rejection is not rate-limit related"/>
+    <field name="rateLimitOperation" id="11" type="RateLimitOperation" presence="optional" nullValue="0" sinceVersion="4" description="Trading operation whose quota was exhausted; null when the rejection is not rate-limit related"/>
+    <field name="rateLimitPolicyClass" id="12" type="RateLimitPolicyClass" presence="optional" nullValue="0" sinceVersion="4" description="Quota family used for the decision; null when the rejection is not rate-limit related"/>
+    <field name="rateLimitScope" id="13" type="RateLimitScope" presence="optional" nullValue="0" sinceVersion="4" description="Authenticated caller scope that owns the exhausted capacity; null when the rejection is not rate-limit related"/>
+    <field name="rateLimitRefillModel" id="14" type="RateLimitRefillModel" presence="optional" nullValue="0" sinceVersion="4" description="Method by which the exhausted capacity replenishes; null when the rejection is not rate-limit related"/>
+    <data name="detail" id="6" type="varDataEncoding" description="UTF-8 diagnostic text safe to display or log; clients must branch on code rather than this text"/>
+  </message>
+
+  <message name="Pong" id="22" description="Server response to Ping">
+    <field name="seq" id="1" type="uint64" description="Client sequence number copied from the Ping"/>
+    <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the Ping"/>
+    <data name="payload" id="3" type="varDataEncoding" description="Opaque bytes copied unchanged from the Ping payload"/>
+  </message>
+
+  <message name="SubscriptionAck" id="23" description="Confirms the complete private event-channel subscription for this connection">
+    <field name="seq" id="1" type="uint64" description="Client sequence number copied from the Subscribe command"/>
+    <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the Subscribe command"/>
+    <field name="channels" id="3" type="EventChannels" description="Complete private event-channel bitset now active for the connection; zero means no private events are subscribed"/>
+    <field name="tsNs" id="4" type="uint64" epoch="unix" timeUnit="nanosecond" description="Subscription update timestamp in nanoseconds since the Unix epoch, UTC"/>
+  </message>
+
+  <message name="ExecutionEvent" id="24" description="Private low-latency execution notification for one order in the authenticated account scope; the same execution may be sent first as PENDING and later as SETTLED">
+    <field name="symbolId" id="1" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig"/>
+    <field name="matchId" id="2" type="uint64" description="Trade identifier monotonic within one trading pair; use with symbolId and orderId to de-duplicate PENDING and SETTLED notifications"/>
+    <field name="matchSeq" id="3" type="uint64" description="Execution sequence monotonic within one trading pair; gaps are expected because this private feed includes only the authenticated account's executions"/>
+    <field name="orderId" id="4" type="uint64" description="Public identifier of the authenticated account's order that received this fill"/>
+    <field name="side" id="5" type="Side" description="Side of the authenticated account's order"/>
+    <field name="liquidityRole" id="6" type="LiquidityRole" description="Whether the authenticated account's order provided or removed liquidity"/>
+    <field name="feeAsset" id="7" type="FeeAsset" description="Asset selected for fees; this message does not include the fee amount, which is available from durable trade history after settlement"/>
+    <field name="settlementStatus" id="8" type="SettlementStatus" description="Whether financial settlement for this execution is pending or complete"/>
+    <field name="fillQtyScaled" id="9" type="int64" description="Executed base-asset quantity for this fill, scaled by the pair's base_quantity_scale from GetSpotConfig"/>
+    <field name="fillPriceTicks" id="10" type="int64" description="Execution price in quote units scaled by 1e6"/>
+    <field name="remainingQtyScaled" id="11" type="int64" presence="optional" nullValue="-9223372036854775808" description="Order quantity remaining immediately after this execution, scaled by the pair's base_quantity_scale from GetSpotConfig; null on SETTLED notifications"/>
+    <field name="matchTsNs" id="12" type="uint64" epoch="unix" timeUnit="nanosecond" description="Execution timestamp in nanoseconds since the Unix epoch, UTC"/>
+    <field name="gatewayTsNs" id="13" type="uint64" epoch="unix" timeUnit="nanosecond" description="Timestamp when this WebSocket message was encoded, in nanoseconds since the Unix epoch, UTC; subtract matchTsNs to estimate server-side delivery latency"/>
+  </message>
+
+  <message name="OrderEvent" id="25" description="Private authoritative order lifecycle transition for one order in the authenticated account scope">
+    <field name="symbolId" id="1" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig"/>
+    <field name="orderId" id="2" type="uint64" description="Public identifier of the authenticated account's order"/>
+    <field name="version" id="3" type="uint32" description="Per-order state version starting at 1 and increasing with each published transition; ignore duplicate or older versions and recover current state through the Orders API after a gap"/>
+    <field name="status" id="4" type="OrderStatus" description="Lifecycle state after this transition; PENDING_REPLACE is not active liquidity"/>
+    <field name="remainingQtyScaled" id="5" type="int64" description="Unexecuted base-asset quantity after this transition, scaled by the pair's base_quantity_scale from GetSpotConfig; zero for terminal states"/>
+    <field name="cumulativeQtyScaled" id="6" type="int64" description="Total base-asset quantity executed by this order through this transition, scaled by the pair's base_quantity_scale from GetSpotConfig"/>
+    <field name="reasonCode" id="7" type="uint16" description="Stable public cancellation or rejection reason code for CANCELED and REJECTED states; zero when no terminal reason applies"/>
+    <field name="eventTsNs" id="8" type="uint64" epoch="unix" timeUnit="nanosecond" description="Order state-transition timestamp in nanoseconds since the Unix epoch, UTC"/>
+    <field name="gatewayTsNs" id="9" type="uint64" epoch="unix" timeUnit="nanosecond" description="Timestamp when this WebSocket message was encoded, in nanoseconds since the Unix epoch, UTC; subtract eventTsNs to estimate server-side delivery latency"/>
+  </message>
+</messageSchema>

@@ -2056,7 +2056,7 @@
       },
       "auth.v1.GetApiKeyRequest": {
         "additionalProperties": false,
-        "description": "GetApiKeyRequest returns a single API key owned by the caller's account.",
+        "description": "GetApiKeyRequest returns one API key visible to its owner or a sub-account admin.",
         "properties": {
           "keyId": {
             "description": "Opaque API key identifier, formatted as \"ak_\" followed by 32 lowercase hex\n characters.",
@@ -2074,7 +2074,7 @@
       },
       "auth.v1.GetApiKeyResponse": {
         "additionalProperties": false,
-        "description": "GetApiKeyResponse returns one API key owned by the caller.",
+        "description": "GetApiKeyResponse returns one API key visible to the caller.",
         "properties": {
           "apiKey": {
             "$ref": "#/components/schemas/auth.v1.ApiKey",
@@ -2121,6 +2121,64 @@
           }
         },
         "title": "GetApiPolicyResponse",
+        "type": "object"
+      },
+      "auth.v1.GetEffectiveSubaccountPermissionsRequest": {
+        "additionalProperties": false,
+        "description": "Request for the authenticated caller's effective permissions on one sub-account.",
+        "properties": {
+          "subaccountId": {
+            "description": "Target sub-account (opaque ID).",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "subaccountId"
+        ],
+        "title": "GetEffectiveSubaccountPermissionsRequest",
+        "type": "object"
+      },
+      "auth.v1.GetEffectiveSubaccountPermissionsResponse": {
+        "additionalProperties": false,
+        "description": "Effective role-granted permissions for the caller on one sub-account.",
+        "properties": {
+          "permissions": {
+            "description": "Permissions allowed by the role and current sub-account policy. Resource\n state, MFA, limits, and other request context may still deny an operation.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.SubaccountPermission"
+            },
+            "maxItems": 64,
+            "title": "permissions",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "role": {
+            "$ref": "#/components/schemas/auth.v1.SubaccountRole",
+            "description": "Current role of the caller on the sub-account.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "role"
+          },
+          "subaccountPolicyId": {
+            "description": "Attached sub-account policy identifier, or zero when no policy is attached.",
+            "format": "int64",
+            "title": "subaccount_policy_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetEffectiveSubaccountPermissionsResponse",
         "type": "object"
       },
       "auth.v1.GetNonceRequest": {
@@ -2213,7 +2271,7 @@
             ]
           },
           "subaccountId": {
-            "description": "Optional sub-account context for delegated administration. When omitted,\n the policy must be owned by the caller's root account.",
+            "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner may also read another policy\n owned by their root account. When omitted, the policy must be owned by the\n caller's root account.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -2242,10 +2300,10 @@
       },
       "auth.v1.GetSubaccountRequest": {
         "additionalProperties": false,
-        "description": "Request for an aggregated sub-account read view.",
+        "description": "Request for an aggregated sub-account read view. Requested administrative\n sections unavailable to the caller are returned empty without failing an\n otherwise authorized sub-account read.",
         "properties": {
           "includeApiKeys": {
-            "description": "Include API keys scoped to this sub-account.",
+            "description": "Include API keys scoped to this sub-account. Only owner and admin callers receive API keys.",
             "title": "include_api_keys",
             "type": "boolean"
           },
@@ -2255,17 +2313,17 @@
             "type": "boolean"
           },
           "includeInvites": {
-            "description": "Include invitations for the caller.",
+            "description": "Include invitations visible to the caller.",
             "title": "include_invites",
             "type": "boolean"
           },
           "includeMembers": {
-            "description": "Include members for this sub-account. Only owner and admin callers receive members.",
+            "description": "Include current members for this sub-account. Every current member may receive the roster.",
             "title": "include_members",
             "type": "boolean"
           },
           "includePolicy": {
-            "description": "Include the attached sub-account policy, when one is attached.",
+            "description": "Include the attached sub-account policy, when one is attached. Every current member may receive it.",
             "title": "include_policy",
             "type": "boolean"
           },
@@ -2296,7 +2354,7 @@
         "description": "Aggregated sub-account read view.",
         "properties": {
           "apiKeys": {
-            "description": "API keys scoped to this sub-account when include_api_keys is true.",
+            "description": "API keys scoped to this sub-account when include_api_keys is true and the caller is owner or admin.",
             "items": {
               "$ref": "#/components/schemas/auth.v1.ApiKey"
             },
@@ -2309,7 +2367,7 @@
             "title": "balances"
           },
           "invites": {
-            "description": "Invitations for the caller when include_invites is true.",
+            "description": "Invitations visible to the caller when include_invites is true.",
             "items": {
               "$ref": "#/components/schemas/auth.v1.SubaccountInvite"
             },
@@ -2317,7 +2375,7 @@
             "type": "array"
           },
           "members": {
-            "description": "Members for this sub-account when include_members is true and the caller is owner or admin.",
+            "description": "Current members for this sub-account when include_members is true and the caller is a current member.",
             "items": {
               "$ref": "#/components/schemas/auth.v1.SubaccountMemberView"
             },
@@ -2326,7 +2384,7 @@
           },
           "policy": {
             "$ref": "#/components/schemas/auth.v1.SubaccountPolicyView",
-            "description": "Attached policy when include_policy is true and the sub-account has a policy.",
+            "description": "Attached policy when include_policy is true, the caller is a current member, and the sub-account has a policy.",
             "title": "policy"
           },
           "subaccount": {
@@ -2876,10 +2934,10 @@
       },
       "auth.v1.ListApiKeysRequest": {
         "additionalProperties": false,
-        "description": "ListApiKeysRequest lists non-revoked API keys owned by the caller.",
+        "description": "ListApiKeysRequest lists non-revoked API keys visible to the caller.",
         "properties": {
           "subaccountId": {
-            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). If unset,\n all non-revoked keys owned by the caller are returned.",
+            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.",
             "format": "int64",
             "nullable": true,
             "title": "subaccount_id",
@@ -3076,7 +3134,7 @@
         "description": "Request to list sub-account invitations.",
         "properties": {
           "direction": {
-            "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee, \"outgoing\" for invites sent by the caller, or empty for both.",
+            "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee,\n \"outgoing\" for all invites on sub-accounts the caller currently owns or administers,\n or empty for both scopes.",
             "enum": [
               "incoming",
               "outgoing"
@@ -3094,7 +3152,7 @@
         "description": "Response containing sub-account invitations.",
         "properties": {
           "invites": {
-            "description": "Invitations for the caller, ordered newest first.",
+            "description": "Invitations visible to the caller, ordered newest first. Owners and admins\n see all invitations for sub-accounts they administer, regardless of inviter.",
             "items": {
               "$ref": "#/components/schemas/auth.v1.SubaccountInvite"
             },
@@ -3147,7 +3205,7 @@
         "description": "ListSubaccountPoliciesRequest lists the finite set of sub-account policies\n visible in the requested account scope. Results are sorted by ascending\n policy ID and are not paginated.",
         "properties": {
           "subaccountId": {
-            "description": "Optional sub-account context for delegated administration. When omitted,\n only policies owned by the caller's root account are returned.",
+            "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner retains visibility of all\n policies owned by their root account. When omitted, only policies owned by\n the caller's root account are returned.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -3175,6 +3233,36 @@
           }
         },
         "title": "ListSubaccountPoliciesResponse",
+        "type": "object"
+      },
+      "auth.v1.ListSubaccountRolesRequest": {
+        "additionalProperties": false,
+        "description": "Request for the public built-in sub-account role and permission catalog.",
+        "title": "ListSubaccountRolesRequest",
+        "type": "object"
+      },
+      "auth.v1.ListSubaccountRolesResponse": {
+        "additionalProperties": false,
+        "description": "Public built-in sub-account role and permission catalog.",
+        "properties": {
+          "permissions": {
+            "description": "Stable permission metadata in canonical permission order.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.SubaccountPermissionDefinition"
+            },
+            "title": "permissions",
+            "type": "array"
+          },
+          "roles": {
+            "description": "Built-in roles in display order from Owner through Viewer.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.SubaccountRoleDefinition"
+            },
+            "title": "roles",
+            "type": "array"
+          }
+        },
+        "title": "ListSubaccountRolesResponse",
         "type": "object"
       },
       "auth.v1.ListSubaccountsRequest": {
@@ -4489,6 +4577,72 @@
         "title": "SubaccountMemberView",
         "type": "object"
       },
+      "auth.v1.SubaccountPermission": {
+        "description": "A stable capability granted by a sub-account role. These values describe\n role authorization only; resource state, MFA, limits, and other request\n context may still deny an operation.",
+        "enum": [
+          "SUBACCOUNT_PERMISSION_UNSPECIFIED",
+          "SUBACCOUNT_PERMISSION_READ_SUBACCOUNT",
+          "SUBACCOUNT_PERMISSION_UPDATE_SUBACCOUNT",
+          "SUBACCOUNT_PERMISSION_READ_BALANCES",
+          "SUBACCOUNT_PERMISSION_READ_SPOT",
+          "SUBACCOUNT_PERMISSION_TRADE_SPOT",
+          "SUBACCOUNT_PERMISSION_READ_INTERNAL_TRANSFERS",
+          "SUBACCOUNT_PERMISSION_INTERNAL_TRANSFER",
+          "SUBACCOUNT_PERMISSION_EXTERNAL_WITHDRAW",
+          "SUBACCOUNT_PERMISSION_READ_ADDRESS_BOOK",
+          "SUBACCOUNT_PERMISSION_MANAGE_ADDRESS_BOOK",
+          "SUBACCOUNT_PERMISSION_READ_MEMBERS",
+          "SUBACCOUNT_PERMISSION_MANAGE_MEMBERS",
+          "SUBACCOUNT_PERMISSION_READ_INVITES",
+          "SUBACCOUNT_PERMISSION_MANAGE_INVITES",
+          "SUBACCOUNT_PERMISSION_READ_API_KEYS",
+          "SUBACCOUNT_PERMISSION_MANAGE_API_KEYS",
+          "SUBACCOUNT_PERMISSION_READ_SUBACCOUNT_POLICY",
+          "SUBACCOUNT_PERMISSION_MANAGE_SUBACCOUNT_POLICY",
+          "SUBACCOUNT_PERMISSION_READ_ACTIVITY",
+          "SUBACCOUNT_PERMISSION_READ_ACTIVITY_SECURITY_DETAILS",
+          "SUBACCOUNT_PERMISSION_MANAGE_MEMBER_MFA_REQUIREMENT",
+          "SUBACCOUNT_PERMISSION_CREATE_DEPOSIT_ADDRESS",
+          "SUBACCOUNT_PERMISSION_READ_DEPOSIT_ADDRESSES",
+          "SUBACCOUNT_PERMISSION_READ_GUARD_SIGNER_STATUS",
+          "SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER"
+        ],
+        "title": "SubaccountPermission",
+        "type": "string"
+      },
+      "auth.v1.SubaccountPermissionDefinition": {
+        "additionalProperties": false,
+        "description": "User-facing metadata for one stable sub-account permission.",
+        "properties": {
+          "description": {
+            "description": "Human-readable explanation of the capability and its important boundaries.",
+            "title": "description",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Human-readable permission name.",
+            "title": "display_name",
+            "type": "string"
+          },
+          "permission": {
+            "$ref": "#/components/schemas/auth.v1.SubaccountPermission",
+            "description": "Stable permission identifier used by authorization and clients.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "permission"
+          },
+          "policyAction": {
+            "$ref": "#/components/schemas/auth.v1.PolicyAction",
+            "description": "Policy action that can further restrict this permission. Unspecified means\n the permission is controlled by role and request context only.",
+            "title": "policy_action"
+          }
+        },
+        "title": "SubaccountPermissionDefinition",
+        "type": "object"
+      },
       "auth.v1.SubaccountPolicySpec": {
         "additionalProperties": false,
         "description": "SubaccountPolicySpec contains the mutable configuration of a sub-account policy.\nspot_allowlist_requires_markets // spot_markets must be non-empty when spot_market_scope is ALLOWLIST\nspot_markets_unique // spot_markets must not contain duplicate symbol IDs\n",
@@ -4696,6 +4850,49 @@
         ],
         "title": "SubaccountRole",
         "type": "string"
+      },
+      "auth.v1.SubaccountRoleDefinition": {
+        "additionalProperties": false,
+        "description": "Authoritative definition of one built-in sub-account role.",
+        "properties": {
+          "assignable": {
+            "description": "Whether this role can be assigned to a delegated member.",
+            "title": "assignable",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "Human-readable summary of the role.",
+            "title": "description",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Human-readable role name.",
+            "title": "display_name",
+            "type": "string"
+          },
+          "permissions": {
+            "description": "Complete role-granted permission set in canonical permission order.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.SubaccountPermission"
+            },
+            "maxItems": 64,
+            "title": "permissions",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "role": {
+            "$ref": "#/components/schemas/auth.v1.SubaccountRole",
+            "description": "Stable built-in role identifier.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "role"
+          }
+        },
+        "title": "SubaccountRoleDefinition",
+        "type": "object"
       },
       "auth.v1.SubaccountUpdateSpec": {
         "additionalProperties": false,
@@ -13946,8 +14143,19 @@
       },
       "orders.v1.GetUserTradesRequest": {
         "additionalProperties": false,
-        "description": "GetUserTradesRequest lists trade fills for an account.\nuser_trades_bin.ordered_time_range // start_ts_ns must be <= end_ts_ns when both are set\n",
+        "description": "GetUserTradesRequest lists trade fills for an account.\nuser_trades_bin.after_match_requires_symbol // symbol_id is required when after_match_id is set\nuser_trades_bin.ordered_time_range // start_ts_ns must be <= end_ts_ns when both are set\n",
         "properties": {
+          "afterMatchId": {
+            "description": "Return only durable fills whose per-symbol match ID is greater than this\n value. Subscribe to the execution WebSocket before calling this method and\n de-duplicate overlapping results by (symbol_id, match_id, order_id).",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "nullable": true,
+            "title": "after_match_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "endTsNs": {
             "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).",
             "format": "int64",
@@ -14230,7 +14438,7 @@
                 ]
               },
               "symbolId": {
-                "description": "Trading symbol numeric identifier. Required so API-key market policy can\n be enforced before forwarding; AAS verifies it against the target order.",
+                "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the target order.",
                 "exclusiveMinimum": 0,
                 "title": "symbol_id",
                 "type": "integer"
@@ -17386,7 +17594,7 @@
             ]
           },
           "symbolId": {
-            "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+            "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
             "exclusiveMinimum": 0,
             "title": "symbol_id",
             "type": "integer"
@@ -17533,7 +17741,7 @@
             ]
           },
           "symbolId": {
-            "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+            "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
             "exclusiveMinimum": 0,
             "title": "symbol_id",
             "type": "integer"
@@ -21262,15 +21470,15 @@
     },
     "/v1/auth/api-keys": {
       "get": {
-        "description": "List non-revoked API keys for the caller account, newest first, optionally filtered by sub-account.",
+        "description": "List non-revoked API keys for the caller account, or for a sub-account the caller owns or administers, newest first.",
         "operationId": "ApiKeyService_ListApiKeys",
         "parameters": [
           {
-            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). If unset,\n all non-revoked keys owned by the caller are returned.",
+            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.",
             "in": "query",
             "name": "subaccountId",
             "schema": {
-              "description": "Optional filter: only keys scoped to this sub-account (opaque ID). If unset,\n all non-revoked keys owned by the caller are returned.",
+              "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.",
               "format": "int64",
               "title": "subaccount_id",
               "type": [
@@ -21370,7 +21578,7 @@
         ]
       },
       "get": {
-        "description": "Retrieve a single API key owned by the caller account.",
+        "description": "Retrieve a single API key owned by the caller account or scoped to a sub-account the caller administers.",
         "operationId": "ApiKeyService_GetApiKey",
         "parameters": [
           {
@@ -22630,11 +22838,11 @@
         "operationId": "PolicyService_ListSubaccountPolicies",
         "parameters": [
           {
-            "description": "Optional sub-account context for delegated administration. When omitted,\n only policies owned by the caller's root account are returned.",
+            "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner retains visibility of all\n policies owned by their root account. When omitted, only policies owned by\n the caller's root account are returned.",
             "in": "query",
             "name": "subaccountId",
             "schema": {
-              "description": "Optional sub-account context for delegated administration. When omitted,\n only policies owned by the caller's root account are returned.",
+              "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner retains visibility of all\n policies owned by their root account. When omitted, only policies owned by\n the caller's root account are returned.",
               "exclusiveMinimum": 0,
               "format": "int64",
               "title": "subaccount_id",
@@ -22758,11 +22966,11 @@
             }
           },
           {
-            "description": "Optional sub-account context for delegated administration. When omitted,\n the policy must be owned by the caller's root account.",
+            "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner may also read another policy\n owned by their root account. When omitted, the policy must be owned by the\n caller's root account.",
             "in": "query",
             "name": "subaccountId",
             "schema": {
-              "description": "Optional sub-account context for delegated administration. When omitted,\n the policy must be owned by the caller's root account.",
+              "description": "Optional sub-account context. When provided, a current member may read the\n policy attached to that sub-account; the owner may also read another policy\n owned by their root account. When omitted, the policy must be owned by the\n caller's root account.",
               "exclusiveMinimum": 0,
               "format": "int64",
               "title": "subaccount_id",
@@ -23097,6 +23305,28 @@
         ]
       }
     },
+    "/v1/auth/subaccount-roles": {
+      "get": {
+        "description": "List every built-in sub-account role and the exact permission definitions used by backend authorization.",
+        "operationId": "SubaccountRoleService_ListSubaccountRoles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.ListSubaccountRolesResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List Subaccount Roles",
+        "tags": [
+          "Auth Service"
+        ]
+      }
+    },
     "/v1/auth/subaccounts": {
       "get": {
         "description": "List sub-accounts owned by or shared with the caller, including role and label.",
@@ -23266,41 +23496,41 @@
             }
           },
           {
-            "description": "Include API keys scoped to this sub-account.",
+            "description": "Include API keys scoped to this sub-account. Only owner and admin callers receive API keys.",
             "in": "query",
             "name": "includeApiKeys",
             "schema": {
-              "description": "Include API keys scoped to this sub-account.",
+              "description": "Include API keys scoped to this sub-account. Only owner and admin callers receive API keys.",
               "title": "include_api_keys",
               "type": "boolean"
             }
           },
           {
-            "description": "Include members for this sub-account. Only owner and admin callers receive members.",
+            "description": "Include current members for this sub-account. Every current member may receive the roster.",
             "in": "query",
             "name": "includeMembers",
             "schema": {
-              "description": "Include members for this sub-account. Only owner and admin callers receive members.",
+              "description": "Include current members for this sub-account. Every current member may receive the roster.",
               "title": "include_members",
               "type": "boolean"
             }
           },
           {
-            "description": "Include invitations for the caller.",
+            "description": "Include invitations visible to the caller.",
             "in": "query",
             "name": "includeInvites",
             "schema": {
-              "description": "Include invitations for the caller.",
+              "description": "Include invitations visible to the caller.",
               "title": "include_invites",
               "type": "boolean"
             }
           },
           {
-            "description": "Include the attached sub-account policy, when one is attached.",
+            "description": "Include the attached sub-account policy, when one is attached. Every current member may receive it.",
             "in": "query",
             "name": "includePolicy",
             "schema": {
-              "description": "Include the attached sub-account policy, when one is attached.",
+              "description": "Include the attached sub-account policy, when one is attached. Every current member may receive it.",
               "title": "include_policy",
               "type": "boolean"
             }
@@ -23906,6 +24136,46 @@
         ]
       }
     },
+    "/v1/auth/subaccounts/{subaccount_id}/permissions": {
+      "get": {
+        "description": "Return permissions granted by the caller's current role after applying the attached sub-account policy. Contextual checks such as MFA and resource state still apply.",
+        "operationId": "SubaccountRoleService_GetEffectiveSubaccountPermissions",
+        "parameters": [
+          {
+            "description": "Target sub-account (opaque ID).",
+            "in": "path",
+            "name": "subaccount_id",
+            "required": true,
+            "schema": {
+              "description": "Target sub-account (opaque ID).",
+              "exclusiveMinimum": 0,
+              "format": "int64",
+              "title": "subaccount_id",
+              "type": [
+                "integer",
+                "string"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.GetEffectiveSubaccountPermissionsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Get Effective Subaccount Permissions",
+        "tags": [
+          "Auth Service"
+        ]
+      }
+    },
     "/v1/auth/subaccounts/{subaccount_id}/policy": {
       "patch": {
         "description": "Attach or clear a sub-account policy for the target sub-account.",
@@ -23991,15 +24261,15 @@
     },
     "/v1/auth/subaccounts:invites": {
       "get": {
-        "description": "List incoming and outgoing sub-account invitations for the caller.",
+        "description": "List incoming invitations and all invitations for sub-accounts the caller owns or administers.",
         "operationId": "SubaccountService_ListSubaccountInvites",
         "parameters": [
           {
-            "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee, \"outgoing\" for invites sent by the caller, or empty for both.",
+            "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee,\n \"outgoing\" for all invites on sub-accounts the caller currently owns or administers,\n or empty for both scopes.",
             "in": "query",
             "name": "direction",
             "schema": {
-              "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee, \"outgoing\" for invites sent by the caller, or empty for both.",
+              "description": "Optional direction filter. Use \"incoming\" for invites where the caller is grantee,\n \"outgoing\" for all invites on sub-accounts the caller currently owns or administers,\n or empty for both scopes.",
               "enum": [
                 "incoming",
                 "outgoing"
@@ -27695,7 +27965,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
                     "exclusiveMinimum": 0,
                     "title": "symbol_id",
                     "type": "integer"
@@ -27823,7 +28093,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
                     "exclusiveMinimum": 0,
                     "title": "symbol_id",
                     "type": "integer"
@@ -28078,7 +28348,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
                     "exclusiveMinimum": 0,
                     "title": "symbol_id",
                     "type": "integer"
@@ -28107,7 +28377,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy;\n AAS verifies it against the stored trigger.",
+                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
                     "exclusiveMinimum": 0,
                     "title": "symbol_id",
                     "type": "integer"
@@ -28232,6 +28502,10 @@
     {
       "description": "Service for creating, updating, sharing, and listing sub-accounts.",
       "name": "SubaccountService"
+    },
+    {
+      "description": "Read-only discovery of built-in role capabilities and caller-effective permissions.",
+      "name": "SubaccountRoleService"
     },
     {
       "description": "Saved transfer destinations, recent counterparties, and whitelist status for external withdrawals and internal transfers.",
