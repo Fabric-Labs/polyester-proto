@@ -76,6 +76,106 @@ enum TriggerEventType {
   EVENT_FAILED = 4;
 }
 
+// TriggerCancelReason identifies why an admitted trigger became canceled.
+enum TriggerCancelReason {
+  // No cancellation reason was provided.
+  TRIGGER_CANCEL_REASON_UNSPECIFIED = 0;
+  // The user explicitly canceled the trigger.
+  TRIGGER_CANCEL_REASON_USER_REQUEST = 1;
+  // A linked one-cancels-the-other trigger fired.
+  TRIGGER_CANCEL_REASON_OCO = 2;
+  // The parent order ended without a fill, so its attached trigger was canceled.
+  TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL = 3;
+  // The terminal state did not contain a cancellation reason.
+  TRIGGER_CANCEL_REASON_MISSING_REASON_CODE = 998;
+  // An internal invariant or processing failure canceled the trigger.
+  TRIGGER_CANCEL_REASON_INTERNAL_ERROR = 999;
+}
+
+// TriggerFailureReason identifies why an admitted trigger became failed.
+enum TriggerFailureReason {
+  // No failure reason was provided.
+  TRIGGER_FAILURE_REASON_UNSPECIFIED = 0;
+  // The requested trading pair was not recognized.
+  TRIGGER_FAILURE_REASON_UNKNOWN_SYMBOL = 1;
+  // The trading pair was not accepting new orders.
+  TRIGGER_FAILURE_REASON_PAIR_DISABLED = 2;
+  // The child order value was below the pair's minimum notional.
+  TRIGGER_FAILURE_REASON_MIN_NOTIONAL = 3;
+  // The child order price was not aligned to the pair's tick size.
+  TRIGGER_FAILURE_REASON_TICK_SIZE = 4;
+  // The account did not have enough available funds for the child order.
+  TRIGGER_FAILURE_REASON_INSUFFICIENT_FUNDS = 5;
+  // The child order would have exceeded an account risk limit.
+  TRIGGER_FAILURE_REASON_RISK_LIMIT = 6;
+  // The child order reused a client order ID that was already accepted.
+  TRIGGER_FAILURE_REASON_DUPLICATE_CLIENT_ID = 7;
+  // Trading was halted for the requested market.
+  TRIGGER_FAILURE_REASON_MARKET_HALTED = 8;
+  // The market could not accept the child order at that time.
+  TRIGGER_FAILURE_REASON_ENGINE_BUSY = 9;
+  // The account associated with the trigger was not recognized.
+  TRIGGER_FAILURE_REASON_ACCOUNT_UNKNOWN = 10;
+  // An order referenced by the trigger was not found.
+  TRIGGER_FAILURE_REASON_ORDER_UNKNOWN = 11;
+  // The post-only child order would have immediately taken liquidity.
+  TRIGGER_FAILURE_REASON_POST_ONLY_CROSS = 12;
+  // The reduce-only child order would not have reduced the position.
+  TRIGGER_FAILURE_REASON_REDUCE_ONLY_BLOCKED = 13;
+  // The child order price was outside the allowed market price band.
+  TRIGGER_FAILURE_REASON_PRICE_BAND_VIOLATION = 14;
+  // The market child order exceeded the configured execution cap.
+  TRIGGER_FAILURE_REASON_MARKET_CAP_VIOLATION = 15;
+  // The order book had no liquidity available for the child order.
+  TRIGGER_FAILURE_REASON_EMPTY_BOOK = 16;
+  // The order book could not fill the entire fill-or-kill child order.
+  TRIGGER_FAILURE_REASON_FOK_INSUFFICIENT_LIQUIDITY = 17;
+  // The selected fee asset was not permitted for the child order.
+  TRIGGER_FAILURE_REASON_FEE_ASSET_NOT_ALLOWED = 18;
+  // A current market price was unavailable for sizing or validation.
+  TRIGGER_FAILURE_REASON_MARKET_PRICE_UNAVAILABLE = 19;
+  // The quote used to size or validate the child order was no longer current.
+  TRIGGER_FAILURE_REASON_STALE_QUOTE = 20;
+  // The child order quantity was below the pair's minimum quantity.
+  TRIGGER_FAILURE_REASON_MIN_QUANTITY = 21;
+  // The child order quantity was not aligned to the pair's step size.
+  TRIGGER_FAILURE_REASON_STEP_SIZE = 22;
+  // The child order sizing fields did not form a valid sizing request.
+  TRIGGER_FAILURE_REASON_INVALID_SIZING = 23;
+  // The maximum quote debit could not fund the minimum valid child order.
+  TRIGGER_FAILURE_REASON_MAX_QUOTE_DEBIT_TOO_SMALL = 24;
+  // The applicable fee rate exceeded the maximum accepted by the trigger.
+  TRIGGER_FAILURE_REASON_FEE_CEILING_EXCEEDED = 25;
+  // The configured trigger price was invalid.
+  TRIGGER_FAILURE_REASON_TRIGGER_PRICE_INVALID = 40;
+  // The selected trigger price source was not supported.
+  TRIGGER_FAILURE_REASON_TRIGGER_PRICE_SOURCE_UNSUPPORTED = 41;
+  // The configured trailing distance was invalid.
+  TRIGGER_FAILURE_REASON_TRAILING_DISTANCE_INVALID = 42;
+  // The requested modification required replacing the trigger instead.
+  TRIGGER_FAILURE_REASON_MODIFICATION_REQUIRES_REPLACE = 43;
+  // The referenced order had already reached a terminal state.
+  TRIGGER_FAILURE_REASON_ORDER_ALREADY_TERMINAL = 44;
+  // An idempotency key was reused with different request details.
+  TRIGGER_FAILURE_REASON_CONFLICT_IDEMPOTENCY_KEY_REUSE = 45;
+  // The request exceeded an applicable rate limit.
+  TRIGGER_FAILURE_REASON_RATE_LIMITED = 46;
+  // Account policy did not permit spot trading.
+  TRIGGER_FAILURE_REASON_POLICY_SPOT_TRADE_DENY = 47;
+  // Account policy did not permit trading in this market.
+  TRIGGER_FAILURE_REASON_POLICY_MARKET_DENY = 48;
+  // The child order would have exceeded the policy notional limit.
+  TRIGGER_FAILURE_REASON_POLICY_MAX_NOTIONAL = 49;
+  // The child order would have exceeded the policy open-order limit.
+  TRIGGER_FAILURE_REASON_POLICY_MAX_OPEN_ORDERS = 50;
+  // Account policy had halted trading.
+  TRIGGER_FAILURE_REASON_POLICY_TRADING_HALTED = 51;
+  // The terminal state did not contain a failure reason.
+  TRIGGER_FAILURE_REASON_MISSING_REASON_CODE = 998;
+  // An internal invariant or processing failure caused the trigger to fail.
+  TRIGGER_FAILURE_REASON_INTERNAL_ERROR = 999;
+}
+
 // LadderDistribution defines how quantity is distributed across ladder levels.
 enum LadderDistribution {
   // Ladder distribution was not provided.
@@ -425,8 +525,13 @@ message TriggerEvent {
   // 1e6. Absent for time-scheduled triggers such as TWAP.
   optional int64 fire_price_ticks = 13 [(buf.validate.field).int64.gt = 0];
 
-  // Cancel or failure reason.
-  string reason = 20;
+  // Terminal reason for canceled or failed events. Other event types leave it unset.
+  oneof terminal_reason {
+    // Why an admitted trigger was canceled.
+    TriggerCancelReason cancel_reason = 20;
+    // Why an admitted trigger failed.
+    TriggerFailureReason failure_reason = 21;
+  }
 }
 
 // ListTriggerEventsResponse returns historical events ordered newest-first.
@@ -643,6 +748,13 @@ message Trigger {
   TriggerStatus status = 5;
   // Parent order ID for attached-risk triggers; empty for standalone triggers.
   optional fixed64 parent_order_id = 6;
+  // Terminal reason for canceled or failed triggers. Other statuses leave it unset.
+  oneof terminal_reason {
+    // Why an admitted trigger was canceled.
+    TriggerCancelReason cancel_reason = 7;
+    // Why an admitted trigger failed.
+    TriggerFailureReason failure_reason = 8;
+  }
 
   // Child quantity scaled by the pair's base_quantity_scale from GetSpotConfig.
   int64 qty_scaled = 20;

@@ -755,6 +755,10 @@ message GetAddressBookViewRequest {
   // Maximum number of recent destinations to return. Defaults to 200 when
   // omitted; maximum is 200.
   uint32 limit = 6 [(buf.validate.field).uint32.lte = 200];
+  // Minimum revision observed in AddressBookViewInvalidated. When set, the
+  // server waits for its local projection to reach this revision instead of
+  // returning an older view.
+  uint64 minimum_view_revision = 7;
 }
 
 message GetAddressBookViewResponse {
@@ -771,6 +775,8 @@ message GetAddressBookViewResponse {
   // True when more recent destinations exist than were returned. This bounded
   // aggregate view does not provide continuation.
   bool recent_destinations_truncated = 6;
+  // Revision of the complete scope projection returned by this response.
+  uint64 view_revision = 7;
 }
 
 // AddressBookViewInvalidated notifies clients to refetch the address-book aggregate view.
@@ -779,6 +785,9 @@ message AddressBookViewInvalidated {
   AccountScopeRef scope = 1;
   // Time the view was invalidated.
   google.protobuf.Timestamp invalidated_at = 2;
+  // Revision that GetAddressBookView must reach before the invalidation is
+  // considered satisfied.
+  uint64 view_revision = 3 [(buf.validate.field).uint64.gt = 0];
 }
 
 service AddressBookService {
@@ -801,56 +810,63 @@ service AddressBookService {
   }
 
   rpc CreateAddressBookEntry(CreateAddressBookEntryRequest) returns (CreateAddressBookEntryResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       post: "/v1/auth/address-book-entries"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Create Address Book Entry"
-      description: "Create one saved address-book entry in the selected root or subaccount book."
+      description:
+        "Create one saved address-book entry in the selected root or subaccount book. "
+        "Interactive callers with enrolled MFA need recent assurance; API keys need MANAGE_ADDRESS_BOOK."
       tags: "Address Book"
     };
   }
 
   rpc UpdateAddressBookEntry(UpdateAddressBookEntryRequest) returns (UpdateAddressBookEntryResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       patch: "/v1/auth/address-book-entries/{address_book_entry_id}"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Update Address Book Entry"
-      description: "Update the label, note, or tags for one address-book entry."
+      description:
+        "Update the label, note, or tags for one address-book entry. "
+        "Interactive callers with enrolled MFA need recent assurance; API keys need MANAGE_ADDRESS_BOOK."
       tags: "Address Book"
     };
   }
 
   rpc DeleteAddressBookEntry(DeleteAddressBookEntryRequest) returns (DeleteAddressBookEntryResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {delete: "/v1/auth/address-book-entries/{address_book_entry_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Delete Address Book Entry"
-      description: "Delete one address-book entry from the selected address book."
+      description:
+        "Delete one address-book entry from the selected address book. "
+        "Interactive callers with enrolled MFA need recent assurance; API keys need MANAGE_ADDRESS_BOOK."
       tags: "Address Book"
     };
   }
 
   rpc CopyAddressBookEntry(CopyAddressBookEntryRequest) returns (CopyAddressBookEntryResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       post: "/v1/auth/address-book-entries/{address_book_entry_id}:copy"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Copy Address Book Entry"
-      description: "Copy one address-book entry into another visible root or subaccount book."
+      description:
+        "Copy one address-book entry into another visible root or subaccount book. "
+        "Interactive callers with enrolled MFA need recent assurance; API keys need MANAGE_ADDRESS_BOOK."
       tags: "Address Book"
     };
   }
 
   rpc CreateAddressBookTag(CreateAddressBookTagRequest) returns (CreateAddressBookTagResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
     option (google.api.http) = {
       post: "/v1/auth/address-book-tags"
       body: "*"
@@ -863,7 +879,6 @@ service AddressBookService {
   }
 
   rpc UpdateAddressBookTag(UpdateAddressBookTagRequest) returns (UpdateAddressBookTagResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
     option (google.api.http) = {
       patch: "/v1/auth/address-book-tags/{tag_id}"
       body: "*"
@@ -876,7 +891,6 @@ service AddressBookService {
   }
 
   rpc DeleteAddressBookTag(DeleteAddressBookTagRequest) returns (DeleteAddressBookTagResponse) {
-    option (polyester.api.mfa_requirement) = MFA_RECENT;
     option (google.api.http) = {delete: "/v1/auth/address-book-tags/{tag_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Delete Address Book Tag"
