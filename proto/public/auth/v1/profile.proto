@@ -176,6 +176,31 @@ message GetUsernameHistoryResponse {
   repeated UsernameHistoryEntry history = 1;
 }
 
+// GenerateUsernameOptionsRequest requests a fresh set of generated usernames.
+message GenerateUsernameOptionsRequest {}
+
+// GenerateUsernameOptionsResponse contains five generated usernames that the
+// caller may claim before the offer expires.
+message GenerateUsernameOptionsResponse {
+  // Five distinct generated usernames available when this offer was created.
+  repeated string usernames = 1;
+  // Opaque proof required to claim one of the returned usernames.
+  string offer_token = 2;
+  // Time in UTC after which this offer can no longer be claimed.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// ClaimGeneratedUsernameRequest selects one username from a generated offer.
+message ClaimGeneratedUsernameRequest {
+  // Opaque proof returned with the generated username options.
+  string offer_token = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4096
+  }];
+  // Zero-based position in the five returned username options.
+  uint32 option_index = 2 [(buf.validate.field).uint32 = {lt: 5}];
+}
+
 // ProfileService manages the authenticated caller's public profile.
 service ProfileService {
   // Get the caller's profile.
@@ -209,6 +234,34 @@ service ProfileService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Username History"
       description: "Retrieve recent username history entries for the caller, newest first. Returns at most 20 entries."
+      tags: "Auth Service"
+    };
+  }
+
+  // Generate five random username options for an account that has never
+  // claimed a username. Calling this method again returns a fresh set.
+  rpc GenerateUsernameOptions(GenerateUsernameOptionsRequest) returns (GenerateUsernameOptionsResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/profile/username-options:generate"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Generate Username Options"
+      description: "Generate five random username options for an account that has never claimed a username."
+      tags: "Auth Service"
+    };
+  }
+
+  // Claim one username by its position in a valid generated offer. The
+  // selected value comes from the offer and cannot be supplied directly.
+  rpc ClaimGeneratedUsername(ClaimGeneratedUsernameRequest) returns (UserProfile) {
+    option (google.api.http) = {
+      post: "/v1/auth/profile/username:claim-generated"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Claim Generated Username"
+      description: "Claim one username by its position in a valid generated offer."
       tags: "Auth Service"
     };
   }
