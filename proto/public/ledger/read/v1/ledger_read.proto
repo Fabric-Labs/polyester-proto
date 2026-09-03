@@ -138,6 +138,15 @@ message AssetGrouping {
   string symbol = 2; // asset symbol ("BTC", "ETH", "OTHER")
 }
 
+// Logical account grouping used by root portfolio equity history.
+message PortfolioAccountGrouping {
+  // Public account or subaccount ID. Its encoded entity type distinguishes
+  // the master account from an owned subaccount. Omitted for Remaining.
+  optional fixed64 account_id = 1;
+  // True when this series combines all non-selected owned subaccounts.
+  bool remaining = 2;
+}
+
 // Equity history in USDT (or BTC via client-side conversion using btc_prices).
 // Values are derived from per-asset balances and market prices (close ticks).
 message GetEquityHistorySeriesRequest {
@@ -158,10 +167,11 @@ message GetEquityHistorySeriesRequest {
 // Columnar equity series payload (scaled integers).
 // REST renders decimal strings from these values.
 message EquitySeries {
-  // Grouping identifier: either account or asset, depending on request group_by.
+  // Grouping identifier. The serving RPC documents which grouping is returned.
   oneof grouping {
     AccountGrouping account = 1; // set when group_by = ACCOUNT
     AssetGrouping asset = 3; // set when group_by = ASSET
+    PortfolioAccountGrouping portfolio_account = 4; // set for root portfolio history
   }
   // Equity in quote currency (USDT) scaled by 1e4 (4 decimals).
   // Values align 1:1 with timestamps.
@@ -187,6 +197,76 @@ message GetEquityHistorySeriesResponse {
   // BTC-USDT close price at each timestamp, scaled by 1e6 (same as price_ticks).
   // Enables client-side conversion to BTC denomination without refetch.
   repeated int64 btc_prices_q = 10;
+}
+
+// Requests root portfolio equity history.
+message GetPortfolioEquityHistorySeriesRequest {
+  // History window to return. When unset/UNSPECIFIED, defaults to 1D.
+  BalanceRange range = 1 [(buf.validate.field).enum.defined_only = true];
+}
+
+// Root portfolio equity history with aligned, implicit timestamps.
+message GetPortfolioEquityHistorySeriesResponse {
+  // Resolved history window.
+  BalanceRange range = 1;
+  // Sampling interval between points, such as "5m" or "1h".
+  string bucket = 2;
+  // First point timestamp in seconds since epoch (UTC).
+  fixed32 start_ts_sec = 3;
+  // Last point timestamp in seconds since epoch (UTC).
+  fixed32 end_ts_sec = 4;
+  // Human-readable quote asset symbol (always "USDT").
+  string quote_asset = 5;
+  // Number of aligned points in each returned series.
+  uint32 points = 6;
+  // Master account first, followed by up to nine owned subaccounts ordered by
+  // current equity descending, then Remaining when other subaccounts exist.
+  repeated EquitySeries series = 7;
+  // BTC-USDT close price at each timestamp, scaled by 1e6 (same as price_ticks).
+  // Enables client-side conversion to BTC denomination without refetch.
+  repeated int64 btc_prices_q = 8;
+}
+
+// Current equity for one logical account in the root portfolio.
+message PortfolioAccountEquity {
+  // Public master-account or subaccount ID.
+  fixed64 account_id = 1;
+  // Current equity in USDT scaled by 1e4 (4 decimals).
+  sint64 equity_q = 2;
+  // Up to three assets with the highest current equity value, ordered highest
+  // first. Assets without a current value are omitted.
+  repeated uint32 top_asset_ids = 3 [(buf.validate.field).repeated.max_items = 3];
+}
+
+// Current aggregate balance and equity for one asset in the root portfolio.
+message PortfolioAssetEquity {
+  // Public unified asset ID.
+  uint32 asset_id = 1;
+  // Combined Funding and Trading balance in asset units scaled by 1e7
+  // (7 decimals).
+  uint64 balance_q = 2;
+  // Current equity in USDT scaled by 1e4 (4 decimals).
+  sint64 equity_q = 3;
+}
+
+// Requests a current root portfolio equity snapshot.
+message GetPortfolioEquitySnapshotRequest {}
+
+// Current root portfolio equity, grouped by logical account and asset.
+message GetPortfolioEquitySnapshotResponse {
+  // Human-readable quote asset symbol (always "USDT").
+  string quote_asset = 1;
+  // Current equity across the master account and all owned subaccounts in USDT,
+  // scaled by 1e4 (4 decimals).
+  sint64 total_equity_q = 2;
+  // Master account first, followed by every owned subaccount ordered by current
+  // equity descending and public ID ascending for ties.
+  repeated PortfolioAccountEquity accounts = 3;
+  // Non-zero asset balances ordered by current equity descending and public
+  // asset ID ascending for ties.
+  repeated PortfolioAssetEquity assets = 4;
+  // Current BTC-USDT price scaled by 1e6. Zero when unavailable.
+  int64 btc_price_q = 5;
 }
 
 message ListTransfersRequest {
@@ -337,6 +417,16 @@ service LedgerReadService {
   // Retrieve equity history as columnar series data.
   // Supports optional subaccount, range, account-code filtering, and grouping by account or asset.
   rpc GetEquityHistorySeries(GetEquityHistorySeriesRequest) returns (GetEquityHistorySeriesResponse) {}
+
+  // Retrieve root portfolio equity history as master, top owned subaccounts,
+  // and an aggregate of the remaining owned subaccounts. Requires an
+  // interactive root-account session; API keys are not supported.
+  rpc GetPortfolioEquityHistorySeries(GetPortfolioEquityHistorySeriesRequest) returns (GetPortfolioEquityHistorySeriesResponse) {}
+
+  // Retrieve current root portfolio equity grouped by logical account and
+  // asset. Requires an interactive root-account session; API keys are not
+  // supported.
+  rpc GetPortfolioEquitySnapshot(GetPortfolioEquitySnapshotRequest) returns (GetPortfolioEquitySnapshotResponse) {}
 
   // List finalized transfer history for an account.
   // Supports optional subaccount, asset, ordering, and cursor filters.
