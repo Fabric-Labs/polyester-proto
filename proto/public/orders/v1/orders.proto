@@ -459,6 +459,8 @@ enum ErrorCode {
   ERROR_CODE_POLICY_SPOT_READ_DENY = 71;
   // API key policy does not allow reading spot data.
   ERROR_CODE_API_KEY_SPOT_READ_DENY = 72;
+  // The cancel request exceeded its bounded internal replay window.
+  ERROR_CODE_CANCEL_REQUEST_EXPIRED = 73;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -669,17 +671,19 @@ enum BatchReplaceItemAdmissionStatus {
 message CancelAllOrdersRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
-  // Symbol ID filter. When set, only orders on this symbol are canceled.
-  // When zero, all symbols are canceled.
-  uint32 symbol_id = 2 [
-    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
-    (buf.validate.field).uint32.gt = 0
-  ];
+  // Optional trading-pair IDs from GetSpotConfig. Empty matches all symbols.
+  // At most 100 positive IDs; duplicates are ignored and ordering is immaterial.
+  repeated uint32 symbol_ids = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    items: {uint32: {gt: 0}}
+  }];
   // Side filter. When set, only orders on this side are canceled.
   Side side = 3 [(buf.validate.field).enum.defined_only = true];
   // If true, return matched counts without actually canceling.
   bool dry_run = 4;
-  // Idempotency key (required).
+  // Idempotency key (required). Reuse the same key and criteria for retries.
+  // Completed results are retained for at least two minutes. Use a fresh key
+  // for a new cancellation; do not reuse a key after its replay window.
   string request_id = 6 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,

@@ -2348,11 +2348,11 @@
       },
       "auth.v1.GetSocialVerificationResponse": {
         "additionalProperties": false,
-        "description": "GetSocialVerificationResponse contains the caller's current social\n verification state for one provider.",
+        "description": "GetSocialVerificationResponse contains the caller's current social\n verification state for one provider. A successful response with verification\n absent means the caller has not started verification for that provider.",
         "properties": {
           "verification": {
             "$ref": "#/components/schemas/auth.v1.SocialVerification",
-            "description": "Current verification state for the requested provider.",
+            "description": "Current verification state for the requested provider. Absent when no\n verification has been started.",
             "title": "verification"
           }
         },
@@ -12677,10 +12677,10 @@
       },
       "orderbook.v1.GetOrderBookResponse": {
         "additionalProperties": false,
-        "description": "GetOrderBookResponse is a depth snapshot for the binary (protobuf) API (scaled integers).\n REST surfaces expose decimal strings via DTO conversion.",
+        "description": "GetOrderBookResponse is a depth snapshot for the binary (protobuf) API (scaled integers).\n REST surfaces expose decimal strings via DTO conversion. A configured symbol\n without an initialized book returns a successful snapshot with sequence zero\n and empty bid and ask collections.",
         "properties": {
           "asks": {
-            "description": "Best ask first; ascending price.",
+            "description": "Best ask first; ascending price. Empty when there is no current liquidity.",
             "items": {
               "$ref": "#/components/schemas/orderbook.v1.PriceLevel"
             },
@@ -12688,7 +12688,7 @@
             "type": "array"
           },
           "bids": {
-            "description": "Best bid first; descending price.",
+            "description": "Best bid first; descending price. Empty when there is no current liquidity.",
             "items": {
               "$ref": "#/components/schemas/orderbook.v1.PriceLevel"
             },
@@ -13675,7 +13675,7 @@
             "type": "boolean"
           },
           "requestId": {
-            "description": "Idempotency key (required).",
+            "description": "Idempotency key (required). Reuse the same key and criteria for retries.\n Completed results are retained for at least two minutes. Use a fresh key\n for a new cancellation; do not reuse a key after its replay window.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -13697,11 +13697,16 @@
               "string"
             ]
           },
-          "symbolId": {
-            "description": "Symbol ID filter. When set, only orders on this symbol are canceled.\n When zero, all symbols are canceled.",
-            "exclusiveMinimum": 0,
-            "title": "symbol_id",
-            "type": "integer"
+          "symbolIds": {
+            "description": "Optional trading-pair IDs from GetSpotConfig. Empty matches all symbols.\n At most 100 positive IDs; duplicates are ignored and ordering is immaterial.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 100,
+              "type": "integer"
+            },
+            "maxItems": 100,
+            "title": "symbol_ids",
+            "type": "array"
           }
         },
         "title": "CancelAllOrdersRequest",
@@ -14074,7 +14079,8 @@
           "ERROR_CODE_RATE_LIMIT_EXCEEDED",
           "ERROR_CODE_SUBACCOUNT_READ_FORBIDDEN",
           "ERROR_CODE_POLICY_SPOT_READ_DENY",
-          "ERROR_CODE_API_KEY_SPOT_READ_DENY"
+          "ERROR_CODE_API_KEY_SPOT_READ_DENY",
+          "ERROR_CODE_CANCEL_REQUEST_EXPIRED"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -17652,8 +17658,23 @@
       },
       "triggers.v1.LadderDetails": {
         "additionalProperties": false,
-        "description": "LadderDetails contains configuration for LADDER triggers.",
+        "description": "LadderDetails contains configuration and aggregate execution progress for LADDER triggers.",
         "properties": {
+          "executedLevels": {
+            "description": "Number of distinct ladder levels with at least one fill. A partially\n filled level counts once, including across replacement child orders.\n This is not the number of fully filled levels.",
+            "format": "int32",
+            "title": "executed_levels",
+            "type": "integer"
+          },
+          "executedQtyScaled": {
+            "description": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed,\n including when the parent completed because all children were canceled.",
+            "format": "int64",
+            "title": "executed_qty_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "ladderDistribution": {
             "$ref": "#/components/schemas/triggers.v1.LadderDistribution",
             "description": "Quantity distribution across ladder levels.",
@@ -19124,6 +19145,39 @@
       "triggers.v1.TwapMarketIoc": {
         "additionalProperties": false,
         "description": "TwapMarketIoc configures server-priced market-IOC slices.",
+        "oneOf": [
+          {
+            "properties": {
+              "maxSlippageBps": {
+                "description": "Maximum adverse price movement per slice in basis points (1 bp = 0.01%).",
+                "exclusiveMinimum": 0,
+                "format": "int32",
+                "maximum": 10000,
+                "title": "max_slippage_bps",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "maxSlippageBps"
+            ],
+            "title": "max_slippage_bps"
+          },
+          {
+            "properties": {
+              "maxSlippageTicks": {
+                "description": "Maximum adverse price delta per slice in 1e-6 quote-unit ticks.",
+                "exclusiveMinimum": 0,
+                "format": "int32",
+                "title": "max_slippage_ticks",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "maxSlippageTicks"
+            ],
+            "title": "max_slippage_ticks"
+          }
+        ],
         "title": "TwapMarketIoc",
         "type": "object"
       },

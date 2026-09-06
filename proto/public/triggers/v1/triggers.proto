@@ -292,7 +292,21 @@ message TrailingStopTrigger {
 }
 
 // TwapMarketIoc configures server-priced market-IOC slices.
-message TwapMarketIoc {}
+message TwapMarketIoc {
+  // Optional protection for each slice, relative to the server-side reference
+  // price at that slice's admission. If omitted, each slice uses the pair's
+  // default market slippage. This does not bound price movement over the whole
+  // TWAP duration or guarantee that every slice fills.
+  oneof max_slippage {
+    // Maximum adverse price delta per slice in 1e-6 quote-unit ticks.
+    int32 max_slippage_ticks = 1 [(buf.validate.field).int32.gt = 0];
+    // Maximum adverse price movement per slice in basis points (1 bp = 0.01%).
+    int32 max_slippage_bps = 2 [(buf.validate.field).int32 = {
+      gt: 0
+      lte: 10000
+    }];
+  }
+}
 
 // TwapLimitGtc configures one resting limit slice at a time. A previous open
 // slice is canceled before the next interval.
@@ -732,7 +746,7 @@ message TwapDetails {
   int64 executed_qty_scaled = 6;
 }
 
-// LadderDetails contains configuration for LADDER triggers.
+// LadderDetails contains configuration and aggregate execution progress for LADDER triggers.
 message LadderDetails {
   // Minimum price in quote units scaled by 1e6 for the ladder range.
   int64 ladder_price_min_ticks = 1;
@@ -742,6 +756,14 @@ message LadderDetails {
   int32 ladder_levels = 3;
   // Quantity distribution across ladder levels.
   LadderDistribution ladder_distribution = 4;
+  // Cumulative filled child-order base quantity scaled by the pair's
+  // base_quantity_scale from GetSpotConfig. Zero means no quantity executed,
+  // including when the parent completed because all children were canceled.
+  int64 executed_qty_scaled = 5;
+  // Number of distinct ladder levels with at least one fill. A partially
+  // filled level counts once, including across replacement child orders.
+  // This is not the number of fully filled levels.
+  int32 executed_levels = 6;
 }
 
 // Trigger represents current trigger configuration, lifecycle state, and

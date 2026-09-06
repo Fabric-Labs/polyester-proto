@@ -6,13 +6,18 @@
   - Append new fixed fields to the end of the fixed block and assign sinceVersion.
   - Never reuse template IDs, field IDs, enum values, or bit positions.
 -->
-<messageSchema package="tradews" id="7" version="8" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
+<messageSchema package="tradews" id="7" version="10" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
   <types>
     <composite name="messageHeader" description="Eight-byte SBE header that prefixes every WebSocket binary message">
       <type name="blockLength" primitiveType="uint16" description="Encoded length in bytes of the message fixed block, excluding this header and variable-length data"/>
       <type name="templateId" primitiveType="uint16" description="Message template identifier used to select the payload type"/>
       <type name="schemaId" primitiveType="uint16" description="Schema identifier; must equal 7 for this contract"/>
       <type name="version" primitiveType="uint16" description="Schema version used by the sender to encode the message"/>
+    </composite>
+
+    <composite name="groupSizeEncoding" description="Header describing a repeating group">
+      <type name="blockLength" primitiveType="uint16" description="Encoded size in bytes of each group entry"/>
+      <type name="numInGroup" primitiveType="uint16" description="Number of entries following this header"/>
     </composite>
 
     <composite name="varDataEncoding" description="Length-prefixed byte sequence used for variable-length message data">
@@ -122,6 +127,7 @@
       <validValue name="OVERLOADED" description="The connection or trading service reached bounded admission capacity">67</validValue>
       <validValue name="MAX_QUOTE_DEBIT_TOO_SMALL" description="The quote debit limit could not resolve one valid step-aligned base quantity">68</validValue>
       <validValue name="RATE_LIMIT_EXCEEDED" description="The authenticated account exhausted the applicable trading quota">69</validValue>
+      <validValue name="CANCEL_REQUEST_EXPIRED" description="The cancellation expired before admission; use a fresh request ID for a new cancellation">73</validValue>
       <validValue name="SEQUENCE_OUT_OF_ORDER" description="The client sequence did not equal the next expected sequence for this connection">1001</validValue>
     </enum>
 
@@ -221,12 +227,14 @@
     <data name="newClientOrderId" id="10" type="varDataEncoding" description="Optional replacement client order identifier; empty leaves the identifier unchanged, and a non-empty value must use 1 to 36 supported ASCII characters"/>
   </message>
 
-  <message name="CancelAllOrders" id="5" description="Cancel open orders for an account, optionally scoped by symbol and side">
+  <message name="CancelAllOrders" id="5" description="Cancel open orders for an account, optionally scoped by symbols and side">
     <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
-    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
-    <field name="symbolId" id="4" type="uint32" presence="optional" nullValue="0" description="Stable numeric trading-pair identifier returned by GetSpotConfig; zero matches all trading pairs"/>
+    <field name="correlationId" id="2" type="uint64" description="Nonzero cancellation identity copied into the response. Retries must keep this token and criteria; use a fresh token for each new cancellation, including after the two-minute replay window"/>
     <field name="side" id="5" type="Side" presence="optional" nullValue="0" description="Order-side filter; null matches both BUY and SELL orders"/>
     <field name="dryRun" id="7" type="uint8" description="Boolean encoded as 0 or 1; 1 returns the matched order count without requesting cancellations, while 0 requests cancellation"/>
+    <group name="symbols" id="8" dimensionType="groupSizeEncoding" description="Up to 100 positive trading-pair IDs; empty matches all pairs; duplicates are ignored and ordering is immaterial">
+      <field name="symbolId" id="9" type="uint32" description="Positive trading-pair identifier returned by GetSpotConfig"/>
+    </group>
   </message>
 
   <message name="Subscribe" id="6" description="Replace the private event-channel subscription for this authenticated connection">
