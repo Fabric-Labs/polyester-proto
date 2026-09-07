@@ -204,6 +204,8 @@ enum AuthErrorCode {
   AUTH_MFA_LAST_FACTOR_REQUIRED = 39;
   // An unexpected internal failure prevented the auth mutation from completing.
   AUTH_INTERNAL_ERROR = 40;
+  // The caller has not explicitly accepted the currently required terms.
+  AUTH_TERMS_NOT_ACCEPTED = 41;
 }
 
 // AuthErrorDetail describes an authentication or account-domain failure.
@@ -214,7 +216,14 @@ message AuthErrorDetail {
   string message = 2;
 }
 
-// AuthService manages wallet login and caller authentication context.
+// AcceptTermsRequest records explicit consent to the currently required terms.
+message AcceptTermsRequest {}
+
+// AcceptTermsResponse confirms acceptance. Repeated acceptance of the current
+// version succeeds and preserves the first acceptance time.
+message AcceptTermsResponse {}
+
+// AuthService manages wallet login, explicit terms consent, and caller authentication context.
 service AuthService {
   // Get a short-lived login nonce.
   rpc GetNonce(GetNonceRequest) returns (GetNonceResponse) {
@@ -229,7 +238,8 @@ service AuthService {
     };
   }
 
-  // Verify a signed nonce and issue an access token.
+  // Verify a signed nonce and issue an access token. Login and account creation
+  // do not accept terms; explicit consent is recorded only by AcceptTerms.
   rpc LoginWithWallet(LoginWithWalletRequest) returns (LoginWithWalletResponse) {
     option (google.api.http) = {
       post: "/v1/auth/login/wallet"
@@ -237,7 +247,25 @@ service AuthService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Login With Wallet"
-      description: "Verify a signed wallet nonce and issue an access token for the caller account."
+      description: "Verify a signed wallet nonce and issue an access token for the caller account. This does not accept terms."
+      tags: "Auth Service"
+    };
+  }
+
+  // Explicitly accept the currently required terms for the caller's root account.
+  // Requires an interactive JWT session; API keys are not allowed. No MFA is
+  // required. Login, trading, reads, and use of existing resources remain available
+  // without acceptance. Only CreateSubaccount, CreateApiKey, and
+  // CreateDepositAddress require acceptance of the current version.
+  rpc AcceptTerms(AcceptTermsRequest) returns (AcceptTermsResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {
+      post: "/v1/auth/terms/accept"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Accept Terms"
+      description: "Explicitly accept the currently required terms for the caller's root account. Requires an interactive JWT without MFA. Repeated acceptance succeeds."
       tags: "Auth Service"
     };
   }
