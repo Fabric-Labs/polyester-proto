@@ -39,9 +39,8 @@ enum MarketOrderBy {
   MARKET_ORDER_BY_UNSPECIFIED = 0;
   // Sort by absolute 24h change (basis points).
   ORDER_BY_CHANGE_24H_BPS = 1;
-  // Sort by 24h quote volume scaled by the pair's quote_quantity_scale from
-  // GetSpotConfig.
-  ORDER_BY_VOLUME_24H_QUOTE = 2;
+  // Sort by canonical USD 24h volume. Unvalued markets sort last in either direction.
+  ORDER_BY_VOLUME_24H_USD = 2;
   // Sort by last price in quote units scaled by 1e6.
   ORDER_BY_LAST_PRICE = 3;
   // Sort by listing time (new listings first).
@@ -99,11 +98,18 @@ message MarketOverview {
   // Lowest traded price in the 24h window, in quote units scaled by 1e6.
   int64 low_24h_ticks = 7;
   // Rolling 24h base volume scaled by the pair's base_quantity_scale from
-  // GetSpotConfig.
-  int64 volume_24h_base_scaled = 8;
+  // GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.
+  optional int64 volume_24h_base_scaled = 8;
   // Rolling 24h quote volume scaled by the pair's quote_quantity_scale from
-  // GetSpotConfig.
-  int64 volume_24h_quote_scaled = 14;
+  // GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.
+  optional int64 volume_24h_quote_scaled = 14;
+
+  // Rolling 24h USD volume, scaled by 1e6 (one unit is 0.000001 USD).
+  // Omitted if any contributing volume cannot be valued reliably. Quote volumes
+  // use execution prices; USD conversion uses historical quarter-hour marks.
+  // Covers the 24 hours ending at the latest completed UTC minute.
+  // Refreshed every 15 seconds after completed minutes become available.
+  optional int64 volume_24h_usd_scaled = 17;
 
   // Listing timestamp in nanoseconds since epoch.
   uint64 listed_ts_ns = 15;
@@ -146,7 +152,7 @@ message ListMarketOverviewRequest {
   // affect only response enrichment and may change between pages.
   string page_token = 3 [(buf.validate.field).string.max_len = 512];
 
-  // Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.
+  // Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.
   MarketOrderBy order_by = 4 [(buf.validate.field).enum.defined_only = true];
   // Sort direction (DESC=newest/highest first).
   SortDirection sort = 5 [(buf.validate.field).enum.defined_only = true];
@@ -174,9 +180,69 @@ message MarketOverviewBatch {
   uint64 ts_ns = 2;
 }
 
+// A finite spot-volume chart request; no pagination or arbitrary time range.
+message GetSpotVolumeHistoryRequest {
+  // Pair IDs from GetSpotConfig; empty selects every configured pair separately.
+  // At most 2000 distinct positive IDs. Unknown IDs are rejected. If the full
+  // universe exceeds 2000 pairs, specify a filter; results are never truncated.
+  repeated uint32 symbol_id = 1 [
+    (buf.validate.field).repeated = {unique: true, max_items: 2000},
+    (buf.validate.field).repeated.items.uint32.gt = 0
+  ];
+}
+
+// One pair appears exactly once, regardless of its base and quote assets.
+// REST renders the scaled amounts as decimal strings in volumeUsd.
+message SpotPairVolumeSeries {
+  // Stable numeric pair ID; clients may group these series by base asset.
+  uint32 symbol_id = 1;
+  // Trailing-24h USD amounts scaled by 1e6, oldest first. Exactly points values,
+  // aligned with the shared response grid. Zero means no executed trades in
+  // the window. USD values round down once per contributing 15-minute bucket.
+  repeated sint64 volume_usd_scaled = 2;
+}
+
+// Aligned columnar trailing-24h USD series over the most recent 24 hours.
+// The grid always contains 97 samples ending at the latest completed UTC
+// quarter-hour. Index i maps to start_ts_sec + i * 900 seconds. Each sample
+// covers [sample time - 24h, sample time); only the preceding 48 hours contribute.
+// USD conversion uses the latest trustworthy quote/USD mark at or before each
+// bucket's start. Stablecoin quotes also require historical USD prices.
+// If any contributing trade cannot be valued, or a USD amount overflows,
+// the RPC fails as unavailable; partial or zero-filled valuations are not returned.
+// Intervals without executed trades are zero. Results may be reused for 15 seconds.
+message GetSpotVolumeHistoryResponse {
+  // Sampling interval between points; currently always "15m".
+  string bucket = 1;
+  // First sample timestamp in seconds since Unix epoch (UTC), inclusive.
+  fixed32 start_ts_sec = 2;
+  // Last sample timestamp in seconds since Unix epoch (UTC), inclusive.
+  fixed32 end_ts_sec = 3;
+  // Number of aligned values in every pair array and the total array; always 97.
+  uint32 points = 4;
+  // Pairs ordered by ascending symbol_id; at most 2000, each included once.
+  repeated SpotPairVolumeSeries pairs = 5;
+  // Sum across selected pairs, USD scaled by 1e6. Exactly points values,
+  // oldest first. REST renders decimal strings in totalVolumeUsd.
+  // Do not sum overlapping trailing-24h samples to obtain period traded volume.
+  repeated sint64 total_volume_usd_scaled = 6;
+}
+
 // List ticker-style market overview rows with optional sparklines.
 // Supports symbol filtering, sorting, and pagination controls.
 service MarketOverviewService {
+  // Get aligned pair-level and total trailing-24h USD volume, sampled every
+  // 15 minutes over the latest day. Unavailable valuations fail the request.
+  rpc GetSpotVolumeHistory(GetSpotVolumeHistoryRequest) returns (GetSpotVolumeHistoryResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/spot/markets/volume-history"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Spot Volume History"
+      description: "Get aligned columnar pair-level and total trailing-24h USD volume at 15-minute intervals over the latest day. Unavailable valuations fail the request."
+      tags: "Market Overview Service"
+    };
+  }
+
   rpc ListMarketOverview(ListMarketOverviewRequest) returns (ListMarketOverviewResponse) {
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/spot/markets/overview"};

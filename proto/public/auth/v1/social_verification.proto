@@ -59,16 +59,17 @@ message SocialVerification {
   int64 id = 12;
   // Provider account being verified.
   SocialProvider provider = 1;
-  // Method used for this verification. If unspecified at start time, profile
-  // verification is used.
+  // Method used for this verification. If unspecified at start time, the
+  // provider default is used.
   SocialVerificationMethod method = 11;
   // Provider handle being verified. Handles are returned lowercase and without
   // a leading "@".
   string handle = 2;
   // Stable provider-side user identifier. Empty until verification succeeds.
   string provider_user_id = 3;
-  // Challenge code the user must place according to the verification method.
-  // Codes start with "poly_" and expire after 15 minutes.
+  // Challenge code the user must submit according to the verification method.
+  // Discord codes are returned only when a challenge is issued. Codes expire
+  // after 15 minutes.
   string challenge_code = 13;
   // Current verification status.
   SocialVerificationStatus status = 4;
@@ -95,6 +96,16 @@ message StartSocialVerificationRequest {
     message: "twitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'"
     expression: "this.provider != 1 ? true : this.handle.matches('^@?[A-Za-z0-9_]{1,15}$')"
   };
+  option (buf.validate.message).cel = {
+    id: "discord_handle_omitted"
+    message: "discord verification does not accept a handle"
+    expression: "this.provider != 2 ? true : this.handle == ''"
+  };
+  option (buf.validate.message).cel = {
+    id: "discord_channel_method"
+    message: "discord verification uses the channel method"
+    expression: "this.provider != 2 ? true : this.method == 0 || this.method == 2"
+  };
 
   // Provider account to verify.
   SocialProvider provider = 1 [
@@ -104,32 +115,32 @@ message StartSocialVerificationRequest {
     },
     (google.api.field_behavior) = REQUIRED
   ];
-  // Verification method. If unspecified, profile verification is used.
+  // Verification method. If unspecified, profile verification is used for
+  // X/Twitter and channel verification is used for Discord.
   SocialVerificationMethod method = 3 [
     // Allow METHOD_UNSPECIFIED so the provider default can apply, but reject
     // unknown numeric values.
     (buf.validate.field).enum = {defined_only: true}
   ];
-  // Provider handle the user claims. A leading "@" is accepted and removed.
-  // X/Twitter handles must be 1 to 15 letters, digits, or underscores.
-  // Other provider handles can be up to 64 characters.
+  // Provider handle the user claims. Required for X/Twitter and omitted for
+  // Discord, where the authenticated bot supplies the provider identity.
+  // A leading "@" is accepted and removed from X/Twitter handles.
   string handle = 2 [
     (buf.validate.field).string = {
-      min_len: 1
       max_len: 64
     },
     (buf.validate.field).cel = {
       id: "handle.no_angle_brackets"
       message: "handle must not contain '<' or '>'"
       expression: "!this.contains('<') && !this.contains('>')"
-    },
-    (google.api.field_behavior) = REQUIRED
+    }
   ];
 }
 
 // Response returned after starting social account verification.
 message StartSocialVerificationResponse {
-  // Challenge code the user must place according to the verification method.
+  // Newly issued challenge code the user must submit according to the
+  // verification method.
   string challenge_code = 1;
   // Time in UTC when the challenge code expires. Social verification challenges
   // expire after 15 minutes.
@@ -190,7 +201,7 @@ service SocialVerificationService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Start Social Verification"
-      description: "Issue a challenge code for the caller to place in the provider account."
+      description: "Issue a challenge code for the caller to submit through the provider-specific verification flow."
       tags: "Auth Service"
     };
   }

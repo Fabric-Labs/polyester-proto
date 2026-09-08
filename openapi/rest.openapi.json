@@ -1184,6 +1184,70 @@
         ],
         "type": "object"
       },
+      "polyester.rest.MarketOverviewService_GetSpotVolumeHistory.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "bucket": {
+            "description": "Sampling interval between points; currently always \"15m\".",
+            "type": "string"
+          },
+          "endTsSec": {
+            "description": "Last sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pairs": {
+            "description": "Pairs ordered by ascending symbol_id; at most 2000, each included once.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "symbolId": {
+                  "description": "Stable pair ID. Pairs are ordered by ascending ID, each included exactly once.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "volumeUsd": {
+                  "description": "Trailing-24h USD volume as decimal strings. Exactly points values aligned with the shared grid, oldest first. Zero means no executed trades.",
+                  "items": {
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "symbolId",
+                "volumeUsd"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "points": {
+            "description": "Number of aligned values in every pair array and the total array; always 97.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "startTsSec": {
+            "description": "First sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "totalVolumeUsd": {
+            "description": "Total trailing-24h USD volume as decimal strings. Exactly points values, oldest first, aligned with every pair. Index i maps to startTsSec + i * 900 seconds. Zero means no trades; unavailable valuations fail the request.",
+            "items": {
+              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pairs",
+          "totalVolumeUsd"
+        ],
+        "type": "object"
+      },
       "polyester.rest.MarketOverviewService_ListMarketOverview.Response": {
         "additionalProperties": false,
         "properties": {
@@ -1282,12 +1346,17 @@
                   "type": "string"
                 },
                 "volume24hBaseScaled": {
-                  "description": "Rolling 24h base volume scaled by the pair's base_quantity_scale from GetSpotConfig.",
+                  "description": "24h base volume; omitted if the scaled amount exceeds int64.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "volume24hQuoteScaled": {
-                  "description": "Rolling 24h quote volume scaled by the pair's quote_quantity_scale from GetSpotConfig.",
+                  "description": "24h executed quote volume; omitted if the scaled amount exceeds int64.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "volume24hUsdScaled": {
+                  "description": "Rolling 24h USD volume, scaled by 1e6 (one unit is 0.000001 USD). Omitted if any contributing volume cannot be valued reliably. Quote volumes use execution prices; USD conversion uses historical quarter-hour marks. Covers the 24 hours ending at the latest completed UTC minute. Refreshed every 15 seconds after completed minutes become available.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 }
@@ -1305,9 +1374,7 @@
                 "listedTsNs",
                 "low24hTicks",
                 "sparklines",
-                "symbol",
-                "volume24hBaseScaled",
-                "volume24hQuoteScaled"
+                "symbol"
               ],
               "type": "object"
             },
@@ -8359,7 +8426,7 @@
       "polyester.rest.enum.marketoverview.v1.MarketOrderBy": {
         "enum": [
           "CHANGE_24H_BPS",
-          "VOLUME_24H_QUOTE",
+          "VOLUME_24H_USD",
           "LAST_PRICE",
           "DATE_ADDED"
         ],
@@ -8368,7 +8435,7 @@
           "CHANGE_24H_BPS": "Sort by absolute 24h change (basis points).",
           "DATE_ADDED": "Sort by listing time (new listings first).",
           "LAST_PRICE": "Sort by last price in quote units scaled by 1e6.",
-          "VOLUME_24H_QUOTE": "Sort by 24h quote volume scaled by the pair's quote_quantity_scale from GetSpotConfig."
+          "VOLUME_24H_USD": "Sort by canonical USD 24h volume. Unvalued markets sort last in either direction."
         }
       },
       "polyester.rest.enum.marketoverview.v1.SortDirection": {
@@ -11030,6 +11097,45 @@
           }
         },
         "summary": "List Market Overviews",
+        "tags": [
+          "Market Overview Service"
+        ],
+        "x-poly-rest": true
+      }
+    },
+    "/v1/spot/markets/volume-history": {
+      "get": {
+        "description": "Get aligned columnar pair-level and total trailing-24h USD volume at 15-minute intervals over the latest day. Exactly 97 values per array and at most 2000 pairs. Unavailable valuations fail the request.",
+        "operationId": "MarketOverviewService_GetSpotVolumeHistory",
+        "parameters": [
+          {
+            "description": "Stable pair IDs; repeat this parameter for multiple pairs. Empty selects all currently listed pairs. At most 2000 distinct positive IDs; unknown IDs are rejected.",
+            "explode": true,
+            "in": "query",
+            "name": "symbolId",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.MarketOverviewService_GetSpotVolumeHistory.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Get Spot Volume History",
         "tags": [
           "Market Overview Service"
         ],

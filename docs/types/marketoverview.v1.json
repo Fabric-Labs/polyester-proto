@@ -46,6 +46,93 @@
       }
     },
     {
+      "name": "marketoverview.v1.GetSpotVolumeHistoryRequest",
+      "kind": "message",
+      "doc": "A finite spot-volume chart request; no pagination or arbitrary time range.",
+      "message": {
+        "fields": [
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 1,
+            "doc": "Pair IDs from GetSpotConfig; empty selects every configured pair separately.\n At most 2000 distinct positive IDs. Unknown IDs are rejected. If the full\n universe exceeds 2000 pairs, specify a filter; results are never truncated.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 2000,
+                "unique": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketoverview.v1.GetSpotVolumeHistoryResponse",
+      "kind": "message",
+      "doc": "Aligned columnar trailing-24h USD series over the most recent 24 hours.\n The grid always contains 97 samples ending at the latest completed UTC\n quarter-hour. Index i maps to start_ts_sec + i * 900 seconds. Each sample\n covers [sample time - 24h, sample time); only the preceding 48 hours contribute.\n USD conversion uses the latest trustworthy quote/USD mark at or before each\n bucket's start. Stablecoin quotes also require historical USD prices.\n If any contributing trade cannot be valued, or a USD amount overflows,\n the RPC fails as unavailable; partial or zero-filled valuations are not returned.\n Intervals without executed trades are zero. Results may be reused for 15 seconds.",
+      "message": {
+        "fields": [
+          {
+            "name": "bucket",
+            "jsonName": "bucket",
+            "number": 1,
+            "doc": "Sampling interval between points; currently always \"15m\".",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "start_ts_sec",
+            "jsonName": "startTsSec",
+            "number": 2,
+            "doc": "First sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "protoScalar": "fixed32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "end_ts_sec",
+            "jsonName": "endTsSec",
+            "number": 3,
+            "doc": "Last sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "protoScalar": "fixed32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "points",
+            "jsonName": "points",
+            "number": 4,
+            "doc": "Number of aligned values in every pair array and the total array; always 97.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "pairs",
+            "jsonName": "pairs",
+            "number": 5,
+            "doc": "Pairs ordered by ascending symbol_id; at most 2000, each included once.",
+            "repeated": true,
+            "protoRef": "marketoverview.v1.SpotPairVolumeSeries"
+          },
+          {
+            "name": "total_volume_usd_scaled",
+            "jsonName": "totalVolumeUsdScaled",
+            "number": 6,
+            "doc": "Sum across selected pairs, USD scaled by 1e6. Exactly points values,\n oldest first. REST renders decimal strings in totalVolumeUsd.\n Do not sum overlapping trailing-24h samples to obtain period traded volume.",
+            "repeated": true,
+            "protoScalar": "sint64",
+            "jsonType": "string",
+            "format": "sint64"
+          }
+        ]
+      }
+    },
+    {
       "name": "marketoverview.v1.ListMarketOverviewRequest",
       "kind": "message",
       "message": {
@@ -97,7 +184,7 @@
             "name": "order_by",
             "jsonName": "orderBy",
             "number": 4,
-            "doc": "Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.",
+            "doc": "Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.",
             "protoRef": "marketoverview.v1.MarketOrderBy",
             "validate": {
               "enum": {
@@ -176,9 +263,9 @@
             "doc": "Sort by absolute 24h change (basis points)."
           },
           {
-            "name": "ORDER_BY_VOLUME_24H_QUOTE",
+            "name": "ORDER_BY_VOLUME_24H_USD",
             "number": 2,
-            "doc": "Sort by 24h quote volume scaled by the pair's quote_quantity_scale from\n GetSpotConfig."
+            "doc": "Sort by canonical USD 24h volume. Unvalued markets sort last in either direction."
           },
           {
             "name": "ORDER_BY_LAST_PRICE",
@@ -256,7 +343,7 @@
             "name": "volume_24h_base_scaled",
             "jsonName": "volume24hBaseScaled",
             "number": 8,
-            "doc": "Rolling 24h base volume scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+            "doc": "Rolling 24h base volume scaled by the pair's base_quantity_scale from\n GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -265,7 +352,16 @@
             "name": "volume_24h_quote_scaled",
             "jsonName": "volume24hQuoteScaled",
             "number": 14,
-            "doc": "Rolling 24h quote volume scaled by the pair's quote_quantity_scale from\n GetSpotConfig.",
+            "doc": "Rolling 24h quote volume scaled by the pair's quote_quantity_scale from\n GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "volume_24h_usd_scaled",
+            "jsonName": "volume24hUsdScaled",
+            "number": 17,
+            "doc": "Rolling 24h USD volume, scaled by 1e6 (one unit is 0.000001 USD).\n Omitted if any contributing volume cannot be valued reliably. Quote volumes\n use execution prices; USD conversion uses historical quarter-hour marks.\n Covers the 24 hours ending at the latest completed UTC minute.\n Refreshed every 15 seconds after completed minutes become available.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -435,6 +531,34 @@
             "name": "SPARKLINE_1M",
             "number": 4,
             "doc": "1 month sparkline. Typically returns up to 180 points (4-hour buckets)."
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketoverview.v1.SpotPairVolumeSeries",
+      "kind": "message",
+      "doc": "One pair appears exactly once, regardless of its base and quote assets.\n REST renders the scaled amounts as decimal strings in volumeUsd.",
+      "message": {
+        "fields": [
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 1,
+            "doc": "Stable numeric pair ID; clients may group these series by base asset.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "volume_usd_scaled",
+            "jsonName": "volumeUsdScaled",
+            "number": 2,
+            "doc": "Trailing-24h USD amounts scaled by 1e6, oldest first. Exactly points values,\n aligned with the shared response grid. Zero means no executed trades in\n the window. USD values round down once per contributing 15-minute bucket.",
+            "repeated": true,
+            "protoScalar": "sint64",
+            "jsonType": "string",
+            "format": "sint64"
           }
         ]
       }

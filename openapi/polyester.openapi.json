@@ -4219,7 +4219,7 @@
             "type": "integer"
           },
           "challengeCode": {
-            "description": "Challenge code the user must place according to the verification method.\n Codes start with \"poly_\" and expire after 15 minutes.",
+            "description": "Challenge code the user must submit according to the verification method.\n Discord codes are returned only when a challenge is issued. Codes expire\n after 15 minutes.",
             "title": "challenge_code",
             "type": "string"
           },
@@ -4249,7 +4249,7 @@
           },
           "method": {
             "$ref": "#/components/schemas/auth.v1.SocialVerificationMethod",
-            "description": "Method used for this verification. If unspecified at start time, profile\n verification is used.",
+            "description": "Method used for this verification. If unspecified at start time, the\n provider default is used.",
             "title": "method"
           },
           "provider": {
@@ -4375,18 +4375,17 @@
       },
       "auth.v1.StartSocialVerificationRequest": {
         "additionalProperties": false,
-        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ntwitter_handle_format // twitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'\n",
+        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ndiscord_channel_method // discord verification uses the channel method\ndiscord_handle_omitted // discord verification does not accept a handle\ntwitter_handle_format // twitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'\n",
         "properties": {
           "handle": {
-            "description": "Provider handle the user claims. A leading \"@\" is accepted and removed.\n X/Twitter handles must be 1 to 15 letters, digits, or underscores.\n Other provider handles can be up to 64 characters.\nhandle.no_angle_brackets // handle must not contain '<' or '>'\n",
+            "description": "Provider handle the user claims. Required for X/Twitter and omitted for\n Discord, where the authenticated bot supplies the provider identity.\n A leading \"@\" is accepted and removed from X/Twitter handles.\nhandle.no_angle_brackets // handle must not contain '<' or '>'\n",
             "maxLength": 64,
-            "minLength": 1,
             "title": "handle",
             "type": "string"
           },
           "method": {
             "$ref": "#/components/schemas/auth.v1.SocialVerificationMethod",
-            "description": "Verification method. If unspecified, profile verification is used.",
+            "description": "Verification method. If unspecified, profile verification is used for\n X/Twitter and channel verification is used for Discord.",
             "title": "method"
           },
           "provider": {
@@ -4401,8 +4400,7 @@
           }
         },
         "required": [
-          "provider",
-          "handle"
+          "provider"
         ],
         "title": "StartSocialVerificationRequest",
         "type": "object"
@@ -4412,7 +4410,7 @@
         "description": "Response returned after starting social account verification.",
         "properties": {
           "challengeCode": {
-            "description": "Challenge code the user must place according to the verification method.",
+            "description": "Newly issued challenge code the user must submit according to the\n verification method.",
             "title": "challenge_code",
             "type": "string"
           },
@@ -11430,7 +11428,7 @@
       },
       "marketdata.v1.CandlePoint": {
         "additionalProperties": false,
-        "description": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume].",
+        "description": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume, quote_volume].",
         "properties": {
           "close": {
             "description": "Closing price in quote units scaled by 1e6.",
@@ -11472,6 +11470,11 @@
               "integer",
               "string"
             ]
+          },
+          "quoteVolume": {
+            "description": "Exact traded quote-asset volume as a human-readable decimal string.\n This is sum(execution price \u00d7 execution quantity), not close \u00d7 base volume.",
+            "title": "quote_volume",
+            "type": "string"
           },
           "tsSec": {
             "description": "Candle bucket start timestamp, in seconds since epoch (UTC).",
@@ -12389,6 +12392,75 @@
         "title": "Timeframe",
         "type": "string"
       },
+      "marketoverview.v1.GetSpotVolumeHistoryRequest": {
+        "additionalProperties": false,
+        "description": "A finite spot-volume chart request; no pagination or arbitrary time range.",
+        "properties": {
+          "symbolId": {
+            "description": "Pair IDs from GetSpotConfig; empty selects every configured pair separately.\n At most 2000 distinct positive IDs. Unknown IDs are rejected. If the full\n universe exceeds 2000 pairs, specify a filter; results are never truncated.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 2000,
+              "type": "integer",
+              "uniqueItems": true
+            },
+            "maxItems": 2000,
+            "title": "symbol_id",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "title": "GetSpotVolumeHistoryRequest",
+        "type": "object"
+      },
+      "marketoverview.v1.GetSpotVolumeHistoryResponse": {
+        "additionalProperties": false,
+        "description": "Aligned columnar trailing-24h USD series over the most recent 24 hours.\n The grid always contains 97 samples ending at the latest completed UTC\n quarter-hour. Index i maps to start_ts_sec + i * 900 seconds. Each sample\n covers [sample time - 24h, sample time); only the preceding 48 hours contribute.\n USD conversion uses the latest trustworthy quote/USD mark at or before each\n bucket's start. Stablecoin quotes also require historical USD prices.\n If any contributing trade cannot be valued, or a USD amount overflows,\n the RPC fails as unavailable; partial or zero-filled valuations are not returned.\n Intervals without executed trades are zero. Results may be reused for 15 seconds.",
+        "properties": {
+          "bucket": {
+            "description": "Sampling interval between points; currently always \"15m\".",
+            "title": "bucket",
+            "type": "string"
+          },
+          "endTsSec": {
+            "description": "Last sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "title": "end_ts_sec",
+            "type": "integer"
+          },
+          "pairs": {
+            "description": "Pairs ordered by ascending symbol_id; at most 2000, each included once.",
+            "items": {
+              "$ref": "#/components/schemas/marketoverview.v1.SpotPairVolumeSeries"
+            },
+            "title": "pairs",
+            "type": "array"
+          },
+          "points": {
+            "description": "Number of aligned values in every pair array and the total array; always 97.",
+            "title": "points",
+            "type": "integer"
+          },
+          "startTsSec": {
+            "description": "First sample timestamp in seconds since Unix epoch (UTC), inclusive.",
+            "title": "start_ts_sec",
+            "type": "integer"
+          },
+          "totalVolumeUsdScaled": {
+            "description": "Sum across selected pairs, USD scaled by 1e6. Exactly points values,\n oldest first. REST renders decimal strings in totalVolumeUsd.\n Do not sum overlapping trailing-24h samples to obtain period traded volume.",
+            "items": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "title": "total_volume_usd_scaled",
+            "type": "array"
+          }
+        },
+        "title": "GetSpotVolumeHistoryResponse",
+        "type": "object"
+      },
       "marketoverview.v1.ListMarketOverviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12405,7 +12477,7 @@
           },
           "orderBy": {
             "$ref": "#/components/schemas/marketoverview.v1.MarketOrderBy",
-            "description": "Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.",
+            "description": "Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.",
             "title": "order_by"
           },
           "pageToken": {
@@ -12469,7 +12541,7 @@
         "enum": [
           "MARKET_ORDER_BY_UNSPECIFIED",
           "ORDER_BY_CHANGE_24H_BPS",
-          "ORDER_BY_VOLUME_24H_QUOTE",
+          "ORDER_BY_VOLUME_24H_USD",
           "ORDER_BY_LAST_PRICE",
           "ORDER_BY_DATE_ADDED"
         ],
@@ -12589,8 +12661,9 @@
             "type": "integer"
           },
           "volume24hBaseScaled": {
-            "description": "Rolling 24h base volume scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+            "description": "Rolling 24h base volume scaled by the pair's base_quantity_scale from\n GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.",
             "format": "int64",
+            "nullable": true,
             "title": "volume_24h_base_scaled",
             "type": [
               "integer",
@@ -12598,9 +12671,20 @@
             ]
           },
           "volume24hQuoteScaled": {
-            "description": "Rolling 24h quote volume scaled by the pair's quote_quantity_scale from\n GetSpotConfig.",
+            "description": "Rolling 24h quote volume scaled by the pair's quote_quantity_scale from\n GetSpotConfig. Omitted if the amount exceeds the signed 64-bit range.",
             "format": "int64",
+            "nullable": true,
             "title": "volume_24h_quote_scaled",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "volume24hUsdScaled": {
+            "description": "Rolling 24h USD volume, scaled by 1e6 (one unit is 0.000001 USD).\n Omitted if any contributing volume cannot be valued reliably. Quote volumes\n use execution prices; USD conversion uses historical quarter-hour marks.\n Covers the 24 hours ending at the latest completed UTC minute.\n Refreshed every 15 seconds after completed minutes become available.",
+            "format": "int64",
+            "nullable": true,
+            "title": "volume_24h_usd_scaled",
             "type": [
               "integer",
               "string"
@@ -12655,6 +12739,31 @@
         ],
         "title": "SparklineInterval",
         "type": "string"
+      },
+      "marketoverview.v1.SpotPairVolumeSeries": {
+        "additionalProperties": false,
+        "description": "One pair appears exactly once, regardless of its base and quote assets.\n REST renders the scaled amounts as decimal strings in volumeUsd.",
+        "properties": {
+          "symbolId": {
+            "description": "Stable numeric pair ID; clients may group these series by base asset.",
+            "title": "symbol_id",
+            "type": "integer"
+          },
+          "volumeUsdScaled": {
+            "description": "Trailing-24h USD amounts scaled by 1e6, oldest first. Exactly points values,\n aligned with the shared response grid. Zero means no executed trades in\n the window. USD values round down once per contributing 15-minute bucket.",
+            "items": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "title": "volume_usd_scaled",
+            "type": "array"
+          }
+        },
+        "title": "SpotPairVolumeSeries",
+        "type": "object"
       },
       "orderbook.v1.Depth": {
         "description": "Depth specifies the number of price levels per side.",
@@ -24111,7 +24220,7 @@
     },
     "/v1/auth/social/verification:start": {
       "post": {
-        "description": "Issue a challenge code for the caller to place in the provider account.",
+        "description": "Issue a challenge code for the caller to submit through the provider-specific verification flow.",
         "operationId": "SocialVerificationService_StartSocialVerification",
         "requestBody": {
           "content": {
@@ -28325,12 +28434,12 @@
             }
           },
           {
-            "description": "Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.",
+            "description": "Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.",
             "in": "query",
             "name": "orderBy",
             "schema": {
               "$ref": "#/components/schemas/marketoverview.v1.MarketOrderBy",
-              "description": "Sort key. When unset/UNSPECIFIED, defaults to 24h quote volume.",
+              "description": "Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.",
               "title": "order_by"
             }
           },
@@ -28381,6 +28490,48 @@
           }
         },
         "summary": "List Market Overviews",
+        "tags": [
+          "Market Overview Service"
+        ]
+      }
+    },
+    "/v1/spot/markets/volume-history": {
+      "get": {
+        "description": "Get aligned columnar pair-level and total trailing-24h USD volume at 15-minute intervals over the latest day. Unavailable valuations fail the request.",
+        "operationId": "MarketOverviewService_GetSpotVolumeHistory",
+        "parameters": [
+          {
+            "description": "Pair IDs from GetSpotConfig; empty selects every configured pair separately.\n At most 2000 distinct positive IDs. Unknown IDs are rejected. If the full\n universe exceeds 2000 pairs, specify a filter; results are never truncated.",
+            "in": "query",
+            "name": "symbolId",
+            "schema": {
+              "description": "Pair IDs from GetSpotConfig; empty selects every configured pair separately.\n At most 2000 distinct positive IDs. Unknown IDs are rejected. If the full\n universe exceeds 2000 pairs, specify a filter; results are never truncated.",
+              "items": {
+                "exclusiveMinimum": 0,
+                "maxItems": 2000,
+                "type": "integer",
+                "uniqueItems": true
+              },
+              "maxItems": 2000,
+              "title": "symbol_id",
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketoverview.v1.GetSpotVolumeHistoryResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Get Spot Volume History",
         "tags": [
           "Market Overview Service"
         ]
