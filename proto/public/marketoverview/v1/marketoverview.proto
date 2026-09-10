@@ -105,10 +105,9 @@ message MarketOverview {
   optional int64 volume_24h_quote_scaled = 14;
 
   // Rolling 24h USD volume, scaled by 1e6 (one unit is 0.000001 USD).
-  // Omitted if any contributing volume cannot be valued reliably. Quote volumes
-  // use execution prices; USD conversion uses historical quarter-hour marks.
-  // Covers the 24 hours ending at the latest completed UTC minute.
-  // Refreshed every 15 seconds after completed minutes become available.
+  // Applies the current quote/USD conversion to the rolling quote volume.
+  // When conversion is unavailable, USDT and USDC are valued at USD parity.
+  // Omitted for other quote assets when a current conversion is unavailable.
   optional int64 volume_24h_usd_scaled = 17;
 
   // Listing timestamp in nanoseconds since epoch.
@@ -206,8 +205,8 @@ message SpotPairVolumeSeries {
 // The grid always contains 97 samples ending at the latest completed UTC
 // quarter-hour. Index i maps to start_ts_sec + i * 900 seconds. Each sample
 // covers [sample time - 24h, sample time); only the preceding 48 hours contribute.
-// USD conversion uses the latest trustworthy quote/USD mark at or before each
-// bucket's start. Stablecoin quotes also require historical USD prices.
+// USD conversion uses historical quote/USD prices at each completed bucket
+// boundary. When conversion is unavailable, USDT and USDC are valued at USD parity.
 // If any contributing trade cannot be valued, or a USD amount overflows,
 // the RPC fails as unavailable; partial or zero-filled valuations are not returned.
 // Intervals without executed trades are zero. Results may be reused for 15 seconds.
@@ -228,9 +227,104 @@ message GetSpotVolumeHistoryResponse {
   repeated sint64 total_volume_usd_scaled = 6;
 }
 
+// CurrencyMetadata supplies stable defaults for display conversion. Clients may
+// localize names, symbols, and number formatting for the user's locale.
+message CurrencyMetadata {
+  // Uppercase currency or stablecoin code, such as EUR or USDT.
+  string code = 1;
+  // Default English display name.
+  string default_english_name = 2;
+  // Default English display symbol; the code is used where no distinct symbol exists.
+  string symbol = 3;
+  // Default display fraction digits, including zero for currencies such as JPY.
+  // This is a formatting default, not rate precision, token decimals, or cash rounding.
+  // Stablecoins use two display fraction digits.
+  uint32 fraction_digits = 4;
+}
+
+// GetCurrencyConversionConfigRequest has no parameters.
+message GetCurrencyConversionConfigRequest {}
+
+// GetCurrencyConversionConfigResponse contains finite, cacheable display metadata.
+// It remains available before any rates have been observed.
+message GetCurrencyConversionConfigResponse {
+  // Supported fiat currencies, including USD, ordered by code.
+  repeated CurrencyMetadata fiat = 1;
+  // Supported stablecoins (USDC and USDT), ordered by code.
+  repeated CurrencyMetadata stablecoins = 2;
+}
+
+// FiatConversionRate states the fiat currency units equal to one US dollar.
+message FiatConversionRate {
+  // Supported fiat currency code.
+  string code = 1;
+  // Fiat currency units per 1 USD, scaled by 1e8. USD has the identity value 1e8.
+  int64 units_per_usd_e8 = 2;
+}
+
+// FiatConversionSnapshot contains all supported fiat rates from one observation.
+message FiatConversionSnapshot {
+  // Complete fiat rates, including USD, ordered by code.
+  repeated FiatConversionRate rates = 1;
+  // Shared source observation time in seconds since the Unix epoch (UTC).
+  uint64 source_ts_sec = 2;
+  // True once the source observation is at least two hours old.
+  bool stale = 3;
+}
+
+// StablecoinConversionRate states the observed USD value of one stablecoin unit.
+message StablecoinConversionRate {
+  // Supported stablecoin code (USDC or USDT).
+  string code = 1;
+  // USD per 1 stablecoin unit, scaled by 1e8. This is an observed price, not a fixed peg.
+  int64 usd_per_unit_e8 = 2;
+  // This stablecoin's source observation time in seconds since the Unix epoch (UTC).
+  uint64 source_ts_sec = 3;
+  // True once this stablecoin's source observation is at least five seconds old.
+  bool stale = 4;
+}
+
+// GetCurrencyConversionRatesRequest has no parameters.
+message GetCurrencyConversionRatesRequest {}
+
+// GetCurrencyConversionRatesResponse groups rates by their USD conversion direction.
+// Last-known observations remain available with staleness indicated. Before any
+// observation is available, the request fails with unavailable (HTTP 503).
+message GetCurrencyConversionRatesResponse {
+  // Complete fiat snapshot; absent until a complete snapshot has been observed.
+  FiatConversionSnapshot fiat = 1;
+  // Observed stablecoin rates ordered by code. Unobserved stablecoins are omitted.
+  repeated StablecoinConversionRate stablecoins = 2;
+  // Response construction time in seconds since the Unix epoch (UTC).
+  uint64 snapshot_ts_sec = 3;
+}
+
 // List ticker-style market overview rows with optional sparklines.
 // Supports symbol filtering, sorting, and pagination controls.
 service MarketOverviewService {
+  // Get supported fiat and stablecoin display metadata with default English names,
+  // symbols, and fraction digits. Clients may localize presentation.
+  rpc GetCurrencyConversionConfig(GetCurrencyConversionConfigRequest) returns (GetCurrencyConversionConfigResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/market/currency-conversion/config"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Currency Conversion Config"
+      description: "Get supported fiat and stablecoin display metadata with default English names, symbols, and fraction digits. Clients may localize presentation."
+      tags: "Market Overview Service"
+    };
+  }
+
+  // Get fiat units per USD and USD per stablecoin unit, grouped with source freshness.
+  rpc GetCurrencyConversionRates(GetCurrencyConversionRatesRequest) returns (GetCurrencyConversionRatesResponse) {
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/market/currency-conversion/rates"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Currency Conversion Rates"
+      description: "Get fiat units per USD and USD per stablecoin unit, grouped with source freshness."
+      tags: "Market Overview Service"
+    };
+  }
+
   // Get aligned pair-level and total trailing-24h USD volume, sampled every
   // 15 minutes over the latest day. Unavailable valuations fail the request.
   rpc GetSpotVolumeHistory(GetSpotVolumeHistoryRequest) returns (GetSpotVolumeHistoryResponse) {

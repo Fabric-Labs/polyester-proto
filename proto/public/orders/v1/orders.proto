@@ -175,7 +175,10 @@ message OrderIntent {
     // Fill-or-kill limit order.
     LimitFok limit_fok = 13;
   }
-  // Optional client order identifier for idempotency.
+  // Optional account-scoped identifier for correlation, lookup, and cancellation.
+  // While this identifier is retained, reuse returns
+  // CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected
+  // request, or a terminal order. CreateOrder does not replay the earlier result.
   string client_order_id = 20 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
@@ -822,17 +825,17 @@ message BatchCreateOrdersRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
   // Required idempotency key for the entire ordered batch. Reusing it with the
-  // same payload returns the original outcome; reusing it with another payload
-  // is rejected.
+  // same payload replays the original per-item results; reusing it with a
+  // different payload returns CONFLICT_IDEMPOTENCY_KEY_REUSE.
   string request_id = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
-  // Orders to create (max 20). Every item uses the same OrderIntent contract as
-  // single create, but client_order_id remains optional because request_id is
-  // the idempotency boundary for the ordered batch.
+  // Orders to create (max 20). client_order_id is optional per item. For a new
+  // request_id, a reused client_order_id rejects only that item with
+  // CONFLICT_DUPLICATE_CLIENT_ORDER_ID; other valid items continue.
   repeated OrderIntent items = 3 [(buf.validate.field).repeated = {
     min_items: 1
     max_items: 20
