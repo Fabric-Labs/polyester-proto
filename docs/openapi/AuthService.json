@@ -13,44 +13,70 @@
         "title": "AcceptTermsResponse",
         "type": "object"
       },
-      "auth.v1.GetNonceRequest": {
+      "auth.v1.CreateWalletChallengeRequest": {
         "additionalProperties": false,
-        "description": "GetNonceRequest requests a short-lived login nonce for a smart-account\n address. The wallet must sign a message containing this nonce before login.",
+        "description": "CreateWalletChallengeRequest requests a short-lived EIP-4361 message whose\n exact UTF-8 bytes must be signed by the wallet.",
         "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/auth.v1.WalletChallengePurpose",
+            "description": "Operation for which the challenge may be consumed.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "purpose"
+          },
+          "signerAddress": {
+            "description": "EVM address selected in the wallet and written into the EIP-4361 message.\n For CREATE_SUBACCOUNT, this must equal smart_account_address.",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "title": "signer_address",
+            "type": "string"
+          },
           "smartAccountAddress": {
-            "description": "Smart-account EVM address, formatted as 0x plus 40 hex characters.",
+            "description": "Smart-account EVM address being authenticated, formatted as 0x plus 40 hex characters.",
             "pattern": "^0x[0-9a-fA-F]{40}$",
             "title": "smart_account_address",
+            "type": "string"
+          },
+          "uri": {
+            "description": "Browser origin URI requesting the signature, including scheme and optional\n port but no path, query, fragment, or user information.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "uri",
             "type": "string"
           }
         },
         "required": [
-          "smartAccountAddress"
+          "smartAccountAddress",
+          "signerAddress",
+          "uri",
+          "purpose"
         ],
-        "title": "GetNonceRequest",
+        "title": "CreateWalletChallengeRequest",
         "type": "object"
       },
-      "auth.v1.GetNonceResponse": {
+      "auth.v1.CreateWalletChallengeResponse": {
         "additionalProperties": false,
-        "description": "GetNonceResponse contains the nonce that must be signed for wallet login.",
+        "description": "CreateWalletChallengeResponse contains the canonical EIP-4361 message.",
         "properties": {
           "expiresAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Time in UTC when the nonce expires. Login nonces expire after 5 minutes.",
+            "description": "Time in UTC when the challenge expires. Wallet challenges expire after 5 minutes.",
             "title": "expires_at"
           },
-          "nonce": {
-            "description": "Random login nonce. The nonce is single-purpose and is replaced by each new\n nonce request for the same smart-account address.",
-            "title": "nonce",
+          "message": {
+            "description": "Canonical EIP-4361 message. Sign these UTF-8 bytes exactly once with\n personal_sign; do not hash, alter, or reconstruct the message.",
+            "title": "message",
             "type": "string"
           }
         },
-        "title": "GetNonceResponse",
+        "title": "CreateWalletChallengeResponse",
         "type": "object"
       },
       "auth.v1.LoginWithWalletRequest": {
         "additionalProperties": false,
-        "description": "LoginWithWalletRequest completes smart-account wallet login using a signed\n nonce.",
+        "description": "LoginWithWalletRequest completes smart-account wallet login using the exact\n server-issued EIP-4361 message and its signature.",
         "properties": {
           "ip": {
             "description": "Optional caller IP address for account security and audit displays. Maximum\n length is 64 characters.",
@@ -58,28 +84,21 @@
             "title": "ip",
             "type": "string"
           },
-          "nonce": {
-            "description": "Nonce returned by GetNonce. The nonce must be unused and not expired.",
-            "maxLength": 256,
+          "message": {
+            "description": "Exact EIP-4361 message returned by CreateWalletChallenge. Maximum length is\n 4096 UTF-8 bytes.\nstring.max_bytes = 4096\n",
             "minLength": 1,
-            "title": "nonce",
-            "type": "string"
-          },
-          "primaryWalletAddress": {
-            "description": "Optional primary wallet address that controls this smart account, formatted\n as 0x plus 40 hex characters. This value is metadata and is not used for\n signature verification.",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
-            "title": "primary_wallet_address",
+            "title": "message",
             "type": "string"
           },
           "signature": {
-            "description": "Signature over the canonical login message containing the nonce. Maximum\n length is 8192 characters to support universal wallet signatures.",
+            "description": "Signature over message using EIP-191 personal_sign semantics. Maximum\n length is 8192 characters to support universal wallet signatures.",
             "maxLength": 8192,
             "minLength": 1,
             "title": "signature",
             "type": "string"
           },
           "smartAccountAddress": {
-            "description": "Smart-account EVM address that produced the signature, formatted as 0x plus\n 40 hex characters.",
+            "description": "Smart-account EVM address bound into the challenge resource, formatted as\n 0x plus 40 hex characters.",
             "pattern": "^0x[0-9a-fA-F]{40}$",
             "title": "smart_account_address",
             "type": "string"
@@ -91,7 +110,7 @@
             "type": "string"
           },
           "walletProvider": {
-            "description": "Optional provider hint for the primary wallet. Maximum length is 32 characters.",
+            "description": "Optional provider hint for the signing wallet. Maximum length is 32 characters.",
             "maxLength": 32,
             "title": "wallet_provider",
             "type": "string"
@@ -99,8 +118,8 @@
         },
         "required": [
           "smartAccountAddress",
-          "nonce",
-          "signature"
+          "signature",
+          "message"
         ],
         "title": "LoginWithWalletRequest",
         "type": "object"
@@ -199,15 +218,14 @@
   "paths": {
     "/v1/auth/login/wallet": {
       "post": {
-        "description": "Verify a signed wallet nonce and issue an access token for the caller account. This does not accept terms.",
+        "description": "Verify a server-issued EIP-4361 wallet message and issue an access token for the caller account. This does not accept terms.",
         "operationId": "AuthService_LoginWithWallet",
         "requestBody": {
           "content": {
             "application/json": {
               "example": {
                 "ip": "203.0.113.42",
-                "nonce": "example-nonce-12345",
-                "primaryWalletAddress": "0x1111111111111111111111111111111111111111",
+                "message": "a",
                 "signature": "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
                 "smartAccountAddress": "0x2222222222222222222222222222222222222222",
                 "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
@@ -303,55 +321,6 @@
         "x-poly-response-type": "auth.v1.MeResponse"
       }
     },
-    "/v1/auth/nonce": {
-      "post": {
-        "description": "Retrieve a short-lived nonce for wallet-signature login.",
-        "operationId": "AuthService_GetNonce",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "example": {
-                "smartAccountAddress": "0x2222222222222222222222222222222222222222"
-              },
-              "schema": {
-                "$ref": "#/components/schemas/auth.v1.GetNonceRequest"
-              }
-            },
-            "application/proto": {
-              "schema": {
-                "$ref": "#/components/schemas/auth.v1.GetNonceRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "example": {
-                  "expiresAt": "2025-01-01T00:00:00Z",
-                  "nonce": "example-nonce-12345"
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/auth.v1.GetNonceResponse"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Get Wallet Login Nonce",
-        "tags": [
-          "Auth Service"
-        ],
-        "x-poly-error-catalog": "core:generic",
-        "x-poly-error-proto-pkg": "auth.v1",
-        "x-poly-mfa-requirement": "none",
-        "x-poly-request-type": "auth.v1.GetNonceRequest",
-        "x-poly-response-type": "auth.v1.GetNonceResponse"
-      }
-    },
     "/v1/auth/terms/accept": {
       "post": {
         "description": "Explicitly accept the currently required terms for the caller's root account. Requires an interactive JWT without MFA. Repeated acceptance succeeds.",
@@ -393,6 +362,58 @@
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "auth.v1.AcceptTermsRequest",
         "x-poly-response-type": "auth.v1.AcceptTermsResponse"
+      }
+    },
+    "/v1/auth/wallet-challenge": {
+      "post": {
+        "description": "Create a short-lived EIP-4361 message for wallet login or smart-account proof.",
+        "operationId": "AuthService_CreateWalletChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "purpose": "LOGIN",
+                "signerAddress": "0x5555555555555555555555555555555555555555",
+                "smartAccountAddress": "0x2222222222222222222222222222222222222222",
+                "uri": "a"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.CreateWalletChallengeRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.CreateWalletChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "expiresAt": "2025-01-01T00:00:00Z",
+                  "message": "value"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.CreateWalletChallengeResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create Wallet Challenge",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "auth.v1.CreateWalletChallengeRequest",
+        "x-poly-response-type": "auth.v1.CreateWalletChallengeResponse"
       }
     }
   },

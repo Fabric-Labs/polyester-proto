@@ -20,41 +20,62 @@ option (gnostic.openapi.v3.document) = {
   ]
 };
 
-// GetNonceRequest requests a short-lived login nonce for a smart-account
-// address. The wallet must sign a message containing this nonce before login.
-message GetNonceRequest {
-  // Smart-account EVM address, formatted as 0x plus 40 hex characters.
+// Purpose for a server-issued wallet challenge.
+enum WalletChallengePurpose {
+  // No wallet challenge purpose was specified.
+  WALLET_PROOF_UNSPECIFIED = 0;
+  // Authenticate the wallet and create a Polyester session.
+  LOGIN = 1;
+  // Prove control of a new smart account before creating a sub-account.
+  CREATE_SUBACCOUNT = 2;
+}
+
+// CreateWalletChallengeRequest requests a short-lived EIP-4361 message whose
+// exact UTF-8 bytes must be signed by the wallet.
+message CreateWalletChallengeRequest {
+  // Smart-account EVM address being authenticated, formatted as 0x plus 40 hex characters.
   string smart_account_address = 1 [
     (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
     (google.api.field_behavior) = REQUIRED
   ];
+  // EVM address selected in the wallet and written into the EIP-4361 message.
+  // For CREATE_SUBACCOUNT, this must equal smart_account_address.
+  string signer_address = 2 [
+    (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Browser origin URI requesting the signature, including scheme and optional
+  // port but no path, query, fragment, or user information.
+  string uri = 3 [
+    (buf.validate.field).string = {min_len: 1, max_len: 2048},
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Operation for which the challenge may be consumed.
+  WalletChallengePurpose purpose = 4 [
+    (buf.validate.field).enum = {defined_only: true, not_in: [0]},
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
-// GetNonceResponse contains the nonce that must be signed for wallet login.
-message GetNonceResponse {
-  // Random login nonce. The nonce is single-purpose and is replaced by each new
-  // nonce request for the same smart-account address.
-  string nonce = 1;
-  // Time in UTC when the nonce expires. Login nonces expire after 5 minutes.
+// CreateWalletChallengeResponse contains the canonical EIP-4361 message.
+message CreateWalletChallengeResponse {
+  // Canonical EIP-4361 message. Sign these UTF-8 bytes exactly once with
+  // personal_sign; do not hash, alter, or reconstruct the message.
+  string message = 1;
+  // Time in UTC when the challenge expires. Wallet challenges expire after 5 minutes.
   google.protobuf.Timestamp expires_at = 2;
 }
 
-// LoginWithWalletRequest completes smart-account wallet login using a signed
-// nonce.
+// LoginWithWalletRequest completes smart-account wallet login using the exact
+// server-issued EIP-4361 message and its signature.
 message LoginWithWalletRequest {
-  // Smart-account EVM address that produced the signature, formatted as 0x plus
-  // 40 hex characters.
+  // Smart-account EVM address bound into the challenge resource, formatted as
+  // 0x plus 40 hex characters.
   string smart_account_address = 1 [
     (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
     (google.api.field_behavior) = REQUIRED
   ];
-  // Nonce returned by GetNonce. The nonce must be unused and not expired.
-  string nonce = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 256,
-    (google.api.field_behavior) = REQUIRED
-  ];
-  // Signature over the canonical login message containing the nonce. Maximum
+  // Signature over message using EIP-191 personal_sign semantics. Maximum
   // length is 8192 characters to support universal wallet signatures.
   string signature = 3 [
     (buf.validate.field).string.min_len = 1,
@@ -71,17 +92,16 @@ message LoginWithWalletRequest {
     (buf.validate.field).string.max_len = 64
   ];
 
-  // Optional primary wallet address that controls this smart account, formatted
-  // as 0x plus 40 hex characters. This value is metadata and is not used for
-  // signature verification.
-  string primary_wallet_address = 6 [
-    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
-    (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"}
-  ];
-  // Optional provider hint for the primary wallet. Maximum length is 32 characters.
+  // Optional provider hint for the signing wallet. Maximum length is 32 characters.
   string wallet_provider = 7 [
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.max_len = 32
+  ];
+  // Exact EIP-4361 message returned by CreateWalletChallenge. Maximum length is
+  // 4096 UTF-8 bytes.
+  string message = 8 [
+    (buf.validate.field).string = {min_len: 1, max_bytes: 4096},
+    (google.api.field_behavior) = REQUIRED
   ];
 }
 
@@ -225,20 +245,20 @@ message AcceptTermsResponse {}
 
 // AuthService manages wallet login, explicit terms consent, and caller authentication context.
 service AuthService {
-  // Get a short-lived login nonce.
-  rpc GetNonce(GetNonceRequest) returns (GetNonceResponse) {
+  // Create a short-lived EIP-4361 wallet challenge.
+  rpc CreateWalletChallenge(CreateWalletChallengeRequest) returns (CreateWalletChallengeResponse) {
     option (google.api.http) = {
-      post: "/v1/auth/nonce"
+      post: "/v1/auth/wallet-challenge"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
-      summary: "Get Wallet Login Nonce"
-      description: "Retrieve a short-lived nonce for wallet-signature login."
+      summary: "Create Wallet Challenge"
+      description: "Create a short-lived EIP-4361 message for wallet login or smart-account proof."
       tags: "Auth Service"
     };
   }
 
-  // Verify a signed nonce and issue an access token. Login and account creation
+  // Verify a signed EIP-4361 message and issue an access token. Login and account creation
   // do not accept terms; explicit consent is recorded only by AcceptTerms.
   rpc LoginWithWallet(LoginWithWalletRequest) returns (LoginWithWalletResponse) {
     option (google.api.http) = {
@@ -247,7 +267,7 @@ service AuthService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Login With Wallet"
-      description: "Verify a signed wallet nonce and issue an access token for the caller account. This does not accept terms."
+      description: "Verify a server-issued EIP-4361 wallet message and issue an access token for the caller account. This does not accept terms."
       tags: "Auth Service"
     };
   }
