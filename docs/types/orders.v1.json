@@ -2409,8 +2409,15 @@
     {
       "name": "orders.v1.GetOrderRequest",
       "kind": "message",
-      "doc": "GetOrderRequest retrieves a single order and related execution context.",
+      "doc": "GetOrderRequest retrieves one physical order and a bounded page of its lineage executions.",
       "message": {
+        "cel": [
+          {
+            "id": "get_order.history_pagination",
+            "message": "execution history must be enabled for pagination",
+            "expression": "!has(this.include_execution_history) || this.include_execution_history || (!has(this.limit) \u0026\u0026 this.page_token == '')"
+          }
+        ],
         "oneofs": [
           {
             "name": "key",
@@ -2482,6 +2489,42 @@
             "doc": "Include attached-risk state details in response.order (defaults to false when unset).",
             "protoScalar": "bool",
             "jsonType": "boolean"
+          },
+          {
+            "name": "include_execution_history",
+            "jsonName": "includeExecutionHistory",
+            "number": 12,
+            "doc": "Include a page of lineage trades and their settlement transfers (default true).\n Set false for state-only polling; limit and page_token must then be omitted.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 13,
+            "doc": "Maximum executions to return (1-1000, default 100).",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "1",
+                "lte": "1000"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 14,
+            "doc": "Execution cursor from this order's previous response. Use order_id rather\n than a reused client_order_id to keep the requested generation stable.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
           }
         ]
       }
@@ -2489,7 +2532,7 @@
     {
       "name": "orders.v1.GetOrderResponse",
       "kind": "message",
-      "doc": "GetOrderResponse returns the order plus related trades and transfer legs.",
+      "doc": "GetOrderResponse returns order details and a bounded execution page.\n Order state, trades and transfers are eventually consistent;\n one page's execution quantities need not equal the order's cumulative quantity.",
       "message": {
         "fields": [
           {
@@ -2503,7 +2546,7 @@
             "name": "trades",
             "jsonName": "trades",
             "number": 2,
-            "doc": "User trade fills for the order, ordered newest-first.",
+            "doc": "Lineage executions through the requested generation, newest first, retaining\n original executing order IDs. Omitted when execution history is disabled.",
             "repeated": true,
             "protoRef": "orders.v1.UserTrade"
           },
@@ -2511,9 +2554,22 @@
             "name": "transfers",
             "jsonName": "transfers",
             "number": 3,
-            "doc": "Transfer legs linked to the order's matches, ordered newest-first.",
+            "doc": "Account settlement legs for matches on this page. Deduplicate by tx_id when\n multiple execution pages contain legs of the same match.",
             "repeated": true,
             "protoRef": "orders.v1.OrderTransfer"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 6,
+            "doc": "Cursor for the next execution page. Empty when no further rows are visible;\n this is not a settlement or order-state reconciliation watermark.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
           }
         ]
       }
@@ -2533,6 +2589,20 @@
             "id": "user_trades_bin.after_match_requires_symbol",
             "message": "symbol_id is required when after_match_id is set",
             "expression": "!has(this.after_match_id) || this.symbol_id \u003e 0"
+          },
+          {
+            "id": "user_trades_bin.generation_requires_lineage",
+            "message": "lineage_id is required with through_generation",
+            "expression": "!has(this.through_generation) || has(this.lineage_id)"
+          }
+        ],
+        "oneofs": [
+          {
+            "name": "execution_scope",
+            "fields": [
+              "order_id",
+              "lineage_id"
+            ]
           }
         ],
         "fields": [
@@ -2635,6 +2705,58 @@
                 "gt": "0"
               }
             }
+          },
+          {
+            "name": "order_id",
+            "jsonName": "orderId",
+            "number": 15,
+            "doc": "Exactly this physical order's executions; never includes predecessors.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "execution_scope"
+          },
+          {
+            "name": "lineage_id",
+            "jsonName": "lineageId",
+            "number": 16,
+            "doc": "Executions across this logical order's accepted generations.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "execution_scope"
+          },
+          {
+            "name": "through_generation",
+            "jsonName": "throughGeneration",
+            "number": 17,
+            "doc": "Inclusive generation ceiling. Does not freeze an actively filling generation.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "include_transfers",
+            "jsonName": "includeTransfers",
+            "number": 18,
+            "doc": "Include account settlement legs linked to matches on this page.\n Legs may repeat across pages when two fills share a match; deduplicate by tx_id.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -2649,7 +2771,7 @@
             "name": "trades",
             "jsonName": "trades",
             "number": 1,
-            "doc": "Trades ordered newest-first.",
+            "doc": "Trades ordered by timestamp, symbol, match and physical order, descending.\n Projection is eventual: an empty page is not proof of order-state reconciliation.",
             "repeated": true,
             "protoRef": "orders.v1.UserTrade"
           },
@@ -2665,6 +2787,14 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "transfers",
+            "jsonName": "transfers",
+            "number": 3,
+            "doc": "Settlement legs for matches represented on this page, when requested.",
+            "repeated": true,
+            "protoRef": "orders.v1.OrderTransfer"
           }
         ]
       }
@@ -3201,7 +3331,7 @@
             "name": "cum_qty_scaled",
             "jsonName": "cumQtyScaled",
             "number": 13,
-            "doc": "Cumulative filled quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig for symbol_id.",
+            "doc": "Cumulative filled quantity across the lineage through this generation,\n scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -3219,7 +3349,7 @@
             "name": "avg_price_ticks",
             "jsonName": "avgPriceTicks",
             "number": 14,
-            "doc": "Average fill price in quote units scaled by 1e6. Zero if no fills.",
+            "doc": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e6. Zero if no fills.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -3341,6 +3471,13 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "lineage",
+            "jsonName": "lineage",
+            "number": 31,
+            "doc": "Logical-order identity and requested generation. Always populated by order reads.",
+            "protoRef": "orders.v1.OrderLineage"
           }
         ]
       }
@@ -3523,6 +3660,43 @@
       }
     },
     {
+      "name": "orders.v1.OrderLineage",
+      "kind": "message",
+      "doc": "OrderLineage identifies a logical order and one of its accepted generations.",
+      "message": {
+        "fields": [
+          {
+            "name": "id",
+            "jsonName": "id",
+            "number": 1,
+            "doc": "Stable logical-order ID: the first generation's public order ID.\n Replace preserves this ID; an independent new order starts a new lineage.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "generation",
+            "jsonName": "generation",
+            "number": 2,
+            "doc": "One-based replacement generation, distinct from per-order state version.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.OrderOrigin",
       "kind": "message",
       "doc": "OrderOrigin explains why an order exists and where it came from.\n\n Population rules:\n - direct/manual orders: scope=DIRECT; trigger fields unset/unspecified.\n - attached children: scope=ATTACHED_RISK; parent_order_id is set.\n - standalone trigger children: scope=STANDALONE_TRIGGER.\n - child_seq is set for multi-child strategies (for example TWAP/LADDER).",
@@ -3660,10 +3834,19 @@
             "name": "match_id",
             "jsonName": "matchId",
             "number": 1,
-            "doc": "Match identifier that linked this transfer to an execution.",
+            "doc": "Match identifier that linked this transfer to an execution, scoped by symbol_id.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 10,
+            "doc": "Market of the execution; together with match_id identifies its match.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           },
           {
             "name": "asset_id",
@@ -4357,6 +4540,13 @@
             "doc": "Whether this fill earned a rebate instead of paying a fee.",
             "protoScalar": "bool",
             "jsonType": "boolean"
+          },
+          {
+            "name": "lineage",
+            "jsonName": "lineage",
+            "number": 17,
+            "doc": "Logical-order identity and the generation that executed this fill.\n Always populated by execution reads; order_id retains its original identity.",
+            "protoRef": "orders.v1.OrderLineage"
           }
         ]
       }

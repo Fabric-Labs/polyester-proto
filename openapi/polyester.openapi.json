@@ -14780,6 +14780,26 @@
                 "title": "include_attached_risk_state",
                 "type": "boolean"
               },
+              "includeExecutionHistory": {
+                "description": "Include a page of lineage trades and their settlement transfers (default true).\n Set false for state-only polling; limit and page_token must then be omitted.",
+                "nullable": true,
+                "title": "include_execution_history",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Maximum executions to return (1-1000, default 100).",
+                "maximum": 1000,
+                "minimum": 1,
+                "nullable": true,
+                "title": "limit",
+                "type": "integer"
+              },
+              "pageToken": {
+                "description": "Execution cursor from this order's previous response. Use order_id rather\n than a reused client_order_id to keep the requested generation stable.",
+                "maxLength": 512,
+                "title": "page_token",
+                "type": "string"
+              },
               "subaccountId": {
                 "description": "Target sub-account numeric ID. When omitted, uses caller's root account.",
                 "exclusiveMinimum": 0,
@@ -14832,21 +14852,27 @@
             ]
           }
         ],
-        "description": "GetOrderRequest retrieves a single order and related execution context.",
+        "description": "GetOrderRequest retrieves one physical order and a bounded page of its lineage executions.\nget_order.history_pagination // execution history must be enabled for pagination\n",
         "title": "GetOrderRequest",
         "type": "object"
       },
       "orders.v1.GetOrderResponse": {
         "additionalProperties": false,
-        "description": "GetOrderResponse returns the order plus related trades and transfer legs.",
+        "description": "GetOrderResponse returns order details and a bounded execution page.\n Order state, trades and transfers are eventually consistent;\n one page's execution quantities need not equal the order's cumulative quantity.",
         "properties": {
+          "nextPageToken": {
+            "description": "Cursor for the next execution page. Empty when no further rows are visible;\n this is not a settlement or order-state reconciliation watermark.",
+            "maxLength": 512,
+            "title": "next_page_token",
+            "type": "string"
+          },
           "order": {
             "$ref": "#/components/schemas/orders.v1.Order",
             "description": "Requested order, if found.",
             "title": "order"
           },
           "trades": {
-            "description": "User trade fills for the order, ordered newest-first.",
+            "description": "Lineage executions through the requested generation, newest first, retaining\n original executing order IDs. Omitted when execution history is disabled.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.UserTrade"
             },
@@ -14854,7 +14880,7 @@
             "type": "array"
           },
           "transfers": {
-            "description": "Transfer legs linked to the order's matches, ordered newest-first.",
+            "description": "Account settlement legs for matches on this page. Deduplicate by tx_id when\n multiple execution pages contain legs of the same match.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.OrderTransfer"
             },
@@ -14867,76 +14893,132 @@
       },
       "orders.v1.GetUserTradesRequest": {
         "additionalProperties": false,
-        "description": "GetUserTradesRequest lists trade fills for an account.\nuser_trades_bin.after_match_requires_symbol // symbol_id is required when after_match_id is set\nuser_trades_bin.ordered_time_range // start_ts_ns must be <= end_ts_ns when both are set\n",
-        "properties": {
-          "afterMatchId": {
-            "description": "Return only durable fills whose per-symbol match ID is greater than this\n value. Subscribe to the execution WebSocket before calling this method and\n de-duplicate overlapping results by (symbol_id, match_id, order_id).",
-            "exclusiveMinimum": 0,
-            "format": "int64",
-            "nullable": true,
-            "title": "after_match_id",
-            "type": [
-              "integer",
-              "string"
+        "allOf": [
+          {
+            "properties": {
+              "afterMatchId": {
+                "description": "Return only durable fills whose per-symbol match ID is greater than this\n value. Subscribe to the execution WebSocket before calling this method and\n de-duplicate overlapping results by (symbol_id, match_id, order_id).",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "nullable": true,
+                "title": "after_match_id",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "endTsNs": {
+                "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).",
+                "format": "int64",
+                "nullable": true,
+                "title": "end_ts_ns",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "includeTransfers": {
+                "description": "Include account settlement legs linked to matches on this page.\n Legs may repeat across pages when two fills share a match; deduplicate by tx_id.",
+                "title": "include_transfers",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Max number of trades to return (1-1000, default 100).",
+                "maximum": 1000,
+                "minimum": 1,
+                "nullable": true,
+                "title": "limit",
+                "type": "integer"
+              },
+              "pageToken": {
+                "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order.",
+                "maxLength": 512,
+                "title": "page_token",
+                "type": "string"
+              },
+              "side": {
+                "$ref": "#/components/schemas/orders.v1.Side",
+                "description": "Optional side filter.",
+                "title": "side"
+              },
+              "startTsNs": {
+                "description": "Inclusive start of the time range, in nanoseconds since epoch (UTC).",
+                "format": "int64",
+                "nullable": true,
+                "title": "start_ts_ns",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "subaccountId": {
+                "description": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "nullable": true,
+                "title": "subaccount_id",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "symbolId": {
+                "description": "Optional filter by symbol_id.",
+                "exclusiveMinimum": 0,
+                "title": "symbol_id",
+                "type": "integer"
+              },
+              "throughGeneration": {
+                "description": "Inclusive generation ceiling. Does not freeze an actively filling generation.",
+                "exclusiveMinimum": 0,
+                "nullable": true,
+                "title": "through_generation",
+                "type": "integer"
+              }
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "lineageId": {
+                    "description": "Executions across this logical order's accepted generations.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "lineage_id",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "lineageId"
+                ],
+                "title": "lineage_id"
+              },
+              {
+                "properties": {
+                  "orderId": {
+                    "description": "Exactly this physical order's executions; never includes predecessors.",
+                    "exclusiveMinimum": 0,
+                    "format": "int64",
+                    "title": "order_id",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "orderId"
+                ],
+                "title": "order_id"
+              }
             ]
-          },
-          "endTsNs": {
-            "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).",
-            "format": "int64",
-            "nullable": true,
-            "title": "end_ts_ns",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
-          "limit": {
-            "description": "Max number of trades to return (1-1000, default 100).",
-            "maximum": 1000,
-            "minimum": 1,
-            "nullable": true,
-            "title": "limit",
-            "type": "integer"
-          },
-          "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order.",
-            "maxLength": 512,
-            "title": "page_token",
-            "type": "string"
-          },
-          "side": {
-            "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Optional side filter.",
-            "title": "side"
-          },
-          "startTsNs": {
-            "description": "Inclusive start of the time range, in nanoseconds since epoch (UTC).",
-            "format": "int64",
-            "nullable": true,
-            "title": "start_ts_ns",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
-          "subaccountId": {
-            "description": "Target sub-account numeric ID. When omitted, uses caller's root account.",
-            "exclusiveMinimum": 0,
-            "format": "int64",
-            "nullable": true,
-            "title": "subaccount_id",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
-          "symbolId": {
-            "description": "Optional filter by symbol_id.",
-            "exclusiveMinimum": 0,
-            "title": "symbol_id",
-            "type": "integer"
           }
-        },
+        ],
+        "description": "GetUserTradesRequest lists trade fills for an account.\nuser_trades_bin.after_match_requires_symbol // symbol_id is required when after_match_id is set\nuser_trades_bin.generation_requires_lineage // lineage_id is required with through_generation\nuser_trades_bin.ordered_time_range // start_ts_ns must be <= end_ts_ns when both are set\n",
         "title": "GetUserTradesRequest",
         "type": "object"
       },
@@ -14951,11 +15033,19 @@
             "type": "string"
           },
           "trades": {
-            "description": "Trades ordered newest-first.",
+            "description": "Trades ordered by timestamp, symbol, match and physical order, descending.\n Projection is eventual: an empty page is not proof of order-state reconciliation.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.UserTrade"
             },
             "title": "trades",
+            "type": "array"
+          },
+          "transfers": {
+            "description": "Settlement legs for matches represented on this page, when requested.",
+            "items": {
+              "$ref": "#/components/schemas/orders.v1.OrderTransfer"
+            },
+            "title": "transfers",
             "type": "array"
           }
         },
@@ -15305,7 +15395,7 @@
             "title": "attached_risk"
           },
           "avgPriceTicks": {
-            "description": "Average fill price in quote units scaled by 1e6. Zero if no fills.",
+            "description": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e6. Zero if no fills.",
             "format": "int64",
             "title": "avg_price_ticks",
             "type": [
@@ -15339,7 +15429,7 @@
             ]
           },
           "cumQtyScaled": {
-            "description": "Cumulative filled quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig for symbol_id.",
+            "description": "Cumulative filled quantity across the lineage through this generation,\n scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
             "format": "int64",
             "title": "cum_qty_scaled",
             "type": [
@@ -15360,6 +15450,11 @@
               "integer",
               "string"
             ]
+          },
+          "lineage": {
+            "$ref": "#/components/schemas/orders.v1.OrderLineage",
+            "description": "Logical-order identity and requested generation. Always populated by order reads.",
+            "title": "lineage"
           },
           "marketClientRefPriceTicks": {
             "description": "Optional client-side reference price used for MARKET slippage protection,\n in quote units scaled by 1e6.",
@@ -15637,6 +15732,30 @@
         "title": "OrderIntent",
         "type": "object"
       },
+      "orders.v1.OrderLineage": {
+        "additionalProperties": false,
+        "description": "OrderLineage identifies a logical order and one of its accepted generations.",
+        "properties": {
+          "generation": {
+            "description": "One-based replacement generation, distinct from per-order state version.",
+            "exclusiveMinimum": 0,
+            "title": "generation",
+            "type": "integer"
+          },
+          "id": {
+            "description": "Stable logical-order ID: the first generation's public order ID.\n Replace preserves this ID; an independent new order starts a new lineage.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "OrderLineage",
+        "type": "object"
+      },
       "orders.v1.OrderOrigin": {
         "additionalProperties": false,
         "description": "OrderOrigin explains why an order exists and where it came from.\n\n Population rules:\n - direct/manual orders: scope=DIRECT; trigger fields unset/unspecified.\n - attached children: scope=ATTACHED_RISK; parent_order_id is set.\n - standalone trigger children: scope=STANDALONE_TRIGGER.\n - child_seq is set for multi-child strategies (for example TWAP/LADDER).",
@@ -15731,13 +15850,18 @@
             "type": "boolean"
           },
           "matchId": {
-            "description": "Match identifier that linked this transfer to an execution.",
+            "description": "Match identifier that linked this transfer to an execution, scoped by symbol_id.",
             "format": "int64",
             "title": "match_id",
             "type": [
               "integer",
               "string"
             ]
+          },
+          "symbolId": {
+            "description": "Market of the execution; together with match_id identifies its match.",
+            "title": "symbol_id",
+            "type": "integer"
           },
           "transferCode": {
             "$ref": "#/components/schemas/ledger.v1.TransferCode",
@@ -16185,6 +16309,11 @@
             "description": "True if this fill was maker-side.",
             "title": "is_maker",
             "type": "boolean"
+          },
+          "lineage": {
+            "$ref": "#/components/schemas/orders.v1.OrderLineage",
+            "description": "Logical-order identity and the generation that executed this fill.\n Always populated by execution reads; order_id retains its original identity.",
+            "title": "lineage"
           },
           "matchId": {
             "description": "Match identifier (monotonic per symbol).",
@@ -20987,7 +21116,7 @@
     },
     "/orders.v1.OrdersReadService/GetOrder": {
       "post": {
-        "description": "Retrieve a single order by order ID or client order ID, including related user trades and ledger transfers.\n Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.",
+        "description": "Retrieve order state and a bounded page of its lineage executions by order or client order ID.\n Use GetUserTrades for paginated execution history and optional settlement legs.\n Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.",
         "operationId": "OrdersReadService_GetOrder",
         "parameters": [
           {
@@ -21053,7 +21182,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve a single order by order ID or client order ID, including related user trades and ledger transfers.  Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.",
+        "summary": "Retrieve order state and a bounded page of its lineage executions by order or client order ID.  Use GetUserTrades for paginated execution history and optional settlement legs.  Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.",
         "tags": [
           "OrdersReadService"
         ]
@@ -21135,7 +21264,7 @@
     },
     "/orders.v1.OrdersReadService/GetUserTrades": {
       "post": {
-        "description": "Retrieve per-user trade fills for an account.\n Supports optional subaccount, symbol, side, and time-range filters with cursor pagination.",
+        "description": "Retrieve per-user trade fills for an account.\n Supports exact physical-order or logical-lineage scope, an inclusive generation\n cutoff, and subaccount, symbol, side and time filters with cursor pagination.",
         "operationId": "OrdersReadService_GetUserTrades",
         "parameters": [
           {
@@ -21201,7 +21330,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve per-user trade fills for an account.  Supports optional subaccount, symbol, side, and time-range filters with cursor pagination.",
+        "summary": "Retrieve per-user trade fills for an account.  Supports exact physical-order or logical-lineage scope, an inclusive generation  cutoff, and subaccount, symbol, side and time filters with cursor pagination.",
         "tags": [
           "OrdersReadService"
         ]
@@ -29740,7 +29869,7 @@
   "servers": [
     {
       "description": "Development",
-      "url": "https://api-devnet.polyester.ai"
+      "url": "https://api.devnet.polyester.com"
     },
     {
       "description": "Testnet",
