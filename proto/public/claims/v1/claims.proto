@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package claims.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "polyester/type/v1/u128.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/claims/v1;claimsv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Daily Claim"
+      description: "Daily campaign rewards for authenticated root accounts."
+    }
+  ]
+};
+
+// ClaimPolicy controls how often a recipient may claim from a campaign.
+enum ClaimPolicy {
+  // No claim policy was specified.
+  POLICY_UNSPECIFIED = 0;
+  // One claim is available to each root account per UTC calendar day.
+  UTC_DAILY = 1;
+}
+
+// DailyClaimState describes today's claim.
+enum DailyClaimState {
+  // No claim state was specified.
+  CLAIM_UNSPECIFIED = 0;
+  // Today's reward is available to claim.
+  CLAIM_AVAILABLE = 1;
+  // Today's claim is being processed. Retrying returns the same claim.
+  CLAIM_PROCESSING = 2;
+  // Today's reward was claimed successfully.
+  CLAIM_CLAIMED = 3;
+  // No reward is active for the current UTC day.
+  CLAIM_UNAVAILABLE = 4;
+}
+
+// ClaimCampaign identifies the campaign associated with a reward or claim.
+message ClaimCampaign {
+  // Stable campaign identifier.
+  string campaign_id = 1;
+  // Campaign name. Existing claims retain the name that applied when they were created.
+  string name = 2;
+  // Campaign description. Existing claims retain the description that applied when they were created.
+  string description = 3;
+  // How frequently each root account may claim from this campaign.
+  ClaimPolicy claim_policy = 4;
+}
+
+// DailyClaimReward describes one asset and amount offered or granted by a claim.
+message DailyClaimReward {
+  // Asset identifier.
+  uint32 asset_id = 1;
+  // Asset code.
+  string asset_code = 2;
+  // Claim amount in 18-decimal unified asset units.
+  polyester.type.v1.U128 amount_e18 = 3;
+}
+
+// GetDailyClaimStatusRequest retrieves today's reward and claim status for the authenticated root account.
+message GetDailyClaimStatusRequest {}
+
+// GetDailyClaimStatusResponse contains the reward and claim status for the current UTC day.
+message GetDailyClaimStatusResponse {
+  // Current state of today's claim.
+  DailyClaimState state = 1;
+  // Start of the next UTC calendar day.
+  google.protobuf.Timestamp reset_at = 2;
+  // Assets and amounts available or already granted for the current UTC day. Future rewards are not returned.
+  repeated DailyClaimReward rewards = 3;
+  // Claim identifier. Empty until a claim has been created.
+  string claim_id = 4;
+  // Campaign associated with the current reward or existing claim. Omitted when no campaign applies.
+  ClaimCampaign campaign = 5;
+}
+
+// ClaimDailyRewardRequest claims today's reward for the authenticated root account.
+message ClaimDailyRewardRequest {}
+
+// DailyClaimTransfer identifies the transfer created for one claimed asset.
+message DailyClaimTransfer {
+  // Asset identifier.
+  uint32 asset_id = 1;
+  // Transfer identifier.
+  string transfer_id = 2;
+}
+
+// ClaimDailyRewardResponse contains the result of claiming today's reward.
+message ClaimDailyRewardResponse {
+  // Claim identifier.
+  string claim_id = 1;
+  // Current claim state.
+  DailyClaimState state = 2;
+  // Time when the claim completed. Omitted while the claim is processing.
+  google.protobuf.Timestamp claimed_at = 3;
+  // Assets and amounts granted by this claim. They do not change after the claim is created.
+  repeated DailyClaimReward rewards = 4;
+  // Transfers created for each reward asset. Empty while the claim is processing.
+  repeated DailyClaimTransfer transfers = 5;
+  // Start of the next UTC calendar day.
+  google.protobuf.Timestamp reset_at = 6;
+  // Campaign associated with this claim, using the name and description that applied when the claim was created.
+  ClaimCampaign campaign = 7;
+}
+
+// ClaimsService provides daily campaign rewards. A session JWT is required; API keys are not accepted.
+service ClaimsService {
+  // Get today's reward and claim status for the authenticated root account. Future reward schedules are not returned.
+  rpc GetDailyClaimStatus(GetDailyClaimStatusRequest) returns (GetDailyClaimStatusResponse) {
+    option (google.api.http) = {get: "/v1/trading/daily-claim"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Daily Claim Status"
+      description: "Get today's reward and claim status for the authenticated root account. Requires a session JWT; API keys are not accepted. Future reward schedules are not returned."
+      tags: "Daily Claim"
+    };
+  }
+  // Claim today's reward once for the authenticated root account. All reward assets are transferred together, and retries return the same claim.
+  rpc ClaimDailyReward(ClaimDailyRewardRequest) returns (ClaimDailyRewardResponse) {
+    option (google.api.http) = {
+      post: "/v1/trading/daily-claim/claim"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Claim Daily Reward"
+      description: "Claim today's reward once for the authenticated root account. Requires a session JWT; API keys are not accepted. All reward assets are transferred together, and retries return the same claim."
+      tags: "Daily Claim"
+    };
+  }
+}

@@ -54,6 +54,8 @@ enum TimeInForce {
   IOC = 2;
   // Fill-or-kill.
   FOK = 3;
+  // Good-til-date; the order may remain active only before its exact expiry time.
+  GTD = 4;
 }
 
 // FeeAsset identifies the asset in which an order fee is charged.
@@ -111,6 +113,35 @@ message LimitGtc {
   // Reject the order instead of taking liquidity. Post-only is available only
   // on this resting limit-order variant.
   bool post_only = 2;
+}
+
+// LimitGtd configures a limit order that may remain active only before an
+// exact expiry time.
+message LimitGtd {
+  option (buf.validate.message).cel = {
+    id: "limit_gtd.expire_at_window"
+    message: "expire_at must be between 1 second and 30 days after validation time"
+    expression: "!has(this.expire_at) || (this.expire_at >= now + duration('1s') && this.expire_at <= now + duration('2592000s'))"
+  };
+
+  // Limit price in quote units scaled by 1e6.
+  int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
+  // Reject the order instead of taking liquidity.
+  bool post_only = 2;
+  // Exact expiry time in UTC. It must be at least 1 second and at most 30 days
+  // after validation time. The order cannot execute when the current time equals
+  // this value.
+  google.protobuf.Timestamp expire_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp = {
+      gt_now: true
+      lte: {
+        seconds: 9223372036
+        nanos: 854775807
+      }
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 // LimitIoc configures an immediate-or-cancel limit order.
@@ -174,6 +205,8 @@ message OrderIntent {
     LimitIoc limit_ioc = 12;
     // Fill-or-kill limit order.
     LimitFok limit_fok = 13;
+    // Limit order with an exact expiry time.
+    LimitGtd limit_gtd = 14;
   }
   // Optional account-scoped identifier for correlation, lookup, and cancellation.
   // While this identifier is retained, reuse returns
