@@ -8,6 +8,7 @@ import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
 // Auth and account APIs for wallet login and caller identity.
@@ -227,7 +228,7 @@ enum AuthErrorCode {
   AUTH_MFA_LAST_FACTOR_REQUIRED = 39;
   // An unexpected internal failure prevented the auth mutation from completing.
   AUTH_INTERNAL_ERROR = 40;
-  // The caller has not explicitly accepted the currently required terms.
+  // The caller has not accepted the terms required for this action.
   AUTH_TERMS_NOT_ACCEPTED = 41;
 }
 
@@ -239,17 +240,18 @@ message AuthErrorDetail {
   string message = 2;
 }
 
-// AcceptTermsRequest records explicit consent to the currently required terms.
+// AcceptTermsRequest records explicit consent to the terms that apply to the caller's root account.
 message AcceptTermsRequest {}
 
-// AcceptTermsResponse confirms acceptance. Repeated acceptance of the current
-// version succeeds and preserves the first acceptance time.
+// AcceptTermsResponse confirms acceptance. Repeated requests succeed and
+// preserve the first acceptance time.
 message AcceptTermsResponse {}
 
 // AuthService manages wallet login, explicit terms consent, and caller authentication context.
 service AuthService {
   // Create a short-lived EIP-4361 wallet challenge.
   rpc CreateWalletChallenge(CreateWalletChallengeRequest) returns (CreateWalletChallengeResponse) {
+    option (polyester.api.public) = true;
     option (google.api.http) = {
       post: "/v1/auth/wallet-challenge"
       body: "*"
@@ -264,6 +266,7 @@ service AuthService {
   // Verify a signed EIP-4361 message and issue an access token. Login and account creation
   // do not accept terms; explicit consent is recorded only by AcceptTerms.
   rpc LoginWithWallet(LoginWithWalletRequest) returns (LoginWithWalletResponse) {
+    option (polyester.api.public) = true;
     option (google.api.http) = {
       post: "/v1/auth/login/wallet"
       body: "*"
@@ -275,12 +278,12 @@ service AuthService {
     };
   }
 
-  // Explicitly accept the currently required terms for the caller's root account.
-  // Requires an interactive JWT session; API keys are not allowed. No MFA is
-  // required. Login, trading, reads, and use of existing resources remain available
-  // without acceptance. Only CreateSubaccount, CreateApiKey, and
-  // CreateDepositAddress require acceptance of the current version.
+  // Explicitly accept the terms that apply to the caller's root account.
+  // Requires an interactive JWT session; API keys are not allowed. Login, trading,
+  // reads, and use of existing resources remain available without acceptance.
+  // Acceptance is required before creating a subaccount, API key, or deposit address.
   rpc AcceptTerms(AcceptTermsRequest) returns (AcceptTermsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option idempotency_level = IDEMPOTENT;
     option (google.api.http) = {
       post: "/v1/auth/terms/accept"
@@ -288,7 +291,7 @@ service AuthService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Accept Terms"
-      description: "Explicitly accept the currently required terms for the caller's root account. Requires an interactive JWT without MFA. Repeated acceptance succeeds."
+      description: "Explicitly accept the terms that apply to the caller's root account. Requires an interactive JWT. Repeated requests succeed."
       tags: "Auth Service"
     };
   }
