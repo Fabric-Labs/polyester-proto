@@ -236,10 +236,42 @@ message ListSubaccountsResponse {
   // Sub-accounts owned by or shared with the caller, ordered by sub-account ID ascending.
   repeated Subaccount subaccounts = 1;
   // Total number of sub-accounts that have ever been created for this root,
-  // including soft-deleted ones. Clients use total_created + 1 only for the
-  // next new Smart Account; existing sub-accounts expose their assigned salt
-  // nonce on Subaccount when direct signing is available.
+  // including soft-deleted ones. Request CreateSubaccountChallenge to obtain
+  // the canonical next smart-account address and salt.
   uint32 total_created = 2;
+}
+
+// Request an authorization for the canonical next sub-account. Requires a
+// session token for the root account and current terms acceptance.
+message CreateSubaccountChallengeRequest {
+  // Selected EOA bound to the authenticated root account.
+  string owner_address = 1 [
+    (buf.validate.field).string = {pattern: "^0x[0-9a-fA-F]{40}$"},
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Requesting browser origin including scheme and optional port, without path,
+  // query, fragment, or user information. Must match the HTTP Origin when present.
+  string uri = 2 [
+    (buf.validate.field).string = {min_len: 1, max_len: 2048},
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Canonical sub-account authorization. Issuing a new challenge replaces the
+// previous challenge for this root. A stale challenge requires reissue.
+message CreateSubaccountChallengeResponse {
+  // Exact UTF-8 EIP-191 personal_sign message. This is an account-control
+  // authorization, not an EIP-4361 sign-in message. Sign through the returned
+  // smart account; do not hash, alter, or reconstruct the message.
+  string message = 1;
+  // Canonical address of the next smart account, derived by the server.
+  string smart_account_address = 2;
+  // Canonical derivation salt nonce for the returned smart account.
+  uint32 smart_account_salt_nonce = 3;
+  // Expiration in UTC, five minutes after issuance.
+  google.protobuf.Timestamp expires_at = 4;
+  // Polyester EIP-155 chain ID used for smart-account derivation and verification.
+  uint64 polyester_chain_id = 5;
 }
 
 // Request to create a new sub-account under the caller's root account.
@@ -269,15 +301,15 @@ message CreateSubaccountRequest {
     (buf.validate.field).string.example = "0x0000000000000000000000000000000000000000",
     (google.api.field_behavior) = REQUIRED
   ];
-  // Exact EIP-4361 message returned by CreateWalletChallenge for the
-  // CREATE_SUBACCOUNT purpose.
+  // Exact EIP-191 authorization returned by CreateSubaccountChallenge.
   string message = 3 [
     (buf.validate.field).string = {min_len: 1, max_bytes: 4096},
     (google.api.field_behavior) = REQUIRED
   ];
-  // Signature over message using EIP-191 personal_sign semantics.
+  // Smart-account signature over message using EIP-191 personal_sign semantics.
+  // Deployed ERC-1271 and counterfactual ERC-6492 signatures are supported.
   string signature = 4 [
-    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string = {min_len: 1, max_len: 8192},
     (google.api.field_behavior) = REQUIRED
   ];
 }
@@ -287,8 +319,7 @@ message CreateSubaccountResponse {
   // Identifier for the created sub-account (opaque ID).
   fixed64 subaccount_id = 1;
   // Total number of sub-accounts that have ever been created for this root,
-  // including soft-deleted ones. Returned here so clients can immediately
-  // derive the next salt/index without requiring a fresh ListSubaccounts call.
+  // including soft-deleted ones. Request a new challenge for the next account.
   uint32 total_created = 2;
   // Smart-account derivation salt nonce assigned to the created sub-account.
   // Today this equals total_created for a successful create.
@@ -776,6 +807,21 @@ service SubaccountService {
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccounts"
       description: "List sub-accounts owned by or shared with the caller, including role and label."
+      tags: "Auth Service"
+    };
+  }
+
+  // Request the canonical next smart account and a short-lived account-control
+  // authorization bound to the authenticated root and selected owner wallet.
+  rpc CreateSubaccountChallenge(CreateSubaccountChallengeRequest) returns (CreateSubaccountChallengeResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {
+      post: "/v1/auth/subaccounts/challenge"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Subaccount Challenge"
+      description: "Request the next smart account and an EIP-191 authorization. Requires current terms acceptance."
       tags: "Auth Service"
     };
   }

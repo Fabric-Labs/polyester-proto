@@ -1423,6 +1423,68 @@
         "title": "CreateApiPolicyResponse",
         "type": "object"
       },
+      "auth.v1.CreateSubaccountChallengeRequest": {
+        "additionalProperties": false,
+        "description": "Request an authorization for the canonical next sub-account. Requires a\n session token for the root account and current terms acceptance.",
+        "properties": {
+          "ownerAddress": {
+            "description": "Selected EOA bound to the authenticated root account.",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "title": "owner_address",
+            "type": "string"
+          },
+          "uri": {
+            "description": "Requesting browser origin including scheme and optional port, without path,\n query, fragment, or user information. Must match the HTTP Origin when present.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ownerAddress",
+          "uri"
+        ],
+        "title": "CreateSubaccountChallengeRequest",
+        "type": "object"
+      },
+      "auth.v1.CreateSubaccountChallengeResponse": {
+        "additionalProperties": false,
+        "description": "Canonical sub-account authorization. Issuing a new challenge replaces the\n previous challenge for this root. A stale challenge requires reissue.",
+        "properties": {
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Expiration in UTC, five minutes after issuance.",
+            "title": "expires_at"
+          },
+          "message": {
+            "description": "Exact UTF-8 EIP-191 personal_sign message. This is an account-control\n authorization, not an EIP-4361 sign-in message. Sign through the returned\n smart account; do not hash, alter, or reconstruct the message.",
+            "title": "message",
+            "type": "string"
+          },
+          "polyesterChainId": {
+            "description": "Polyester EIP-155 chain ID used for smart-account derivation and verification.",
+            "format": "int64",
+            "title": "polyester_chain_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "smartAccountAddress": {
+            "description": "Canonical address of the next smart account, derived by the server.",
+            "title": "smart_account_address",
+            "type": "string"
+          },
+          "smartAccountSaltNonce": {
+            "description": "Canonical derivation salt nonce for the returned smart account.",
+            "title": "smart_account_salt_nonce",
+            "type": "integer"
+          }
+        },
+        "title": "CreateSubaccountChallengeResponse",
+        "type": "object"
+      },
       "auth.v1.CreateSubaccountPolicyRequest": {
         "additionalProperties": false,
         "description": "CreateSubaccountPolicyRequest defines a new sub-account policy template, with\n an optional attach step for one target sub-account.",
@@ -1489,13 +1551,14 @@
             "type": "string"
           },
           "message": {
-            "description": "Exact EIP-4361 message returned by CreateWalletChallenge for the\n CREATE_SUBACCOUNT purpose.\nstring.max_bytes = 4096\n",
+            "description": "Exact EIP-191 authorization returned by CreateSubaccountChallenge.\nstring.max_bytes = 4096\n",
             "minLength": 1,
             "title": "message",
             "type": "string"
           },
           "signature": {
-            "description": "Signature over message using EIP-191 personal_sign semantics.",
+            "description": "Smart-account signature over message using EIP-191 personal_sign semantics.\n Deployed ERC-1271 and counterfactual ERC-6492 signatures are supported.",
+            "maxLength": 8192,
             "minLength": 1,
             "title": "signature",
             "type": "string"
@@ -1548,7 +1611,7 @@
             ]
           },
           "totalCreated": {
-            "description": "Total number of sub-accounts that have ever been created for this root,\n including soft-deleted ones. Returned here so clients can immediately\n derive the next salt/index without requiring a fresh ListSubaccounts call.",
+            "description": "Total number of sub-accounts that have ever been created for this root,\n including soft-deleted ones. Request a new challenge for the next account.",
             "title": "total_created",
             "type": "integer"
           }
@@ -1562,7 +1625,7 @@
         "properties": {
           "purpose": {
             "$ref": "#/components/schemas/auth.v1.WalletChallengePurpose",
-            "description": "Operation for which the challenge may be consumed.",
+            "description": "Operation for which the challenge may be consumed. Must be LOGIN.",
             "not": {
               "enum": [
                 0
@@ -1571,7 +1634,7 @@
             "title": "purpose"
           },
           "signerAddress": {
-            "description": "Address whose signature authorizes the challenge and that is written into\n the EIP-4361 message. For LOGIN, this must be an EOA that controls the\n target smart account. For CREATE_SUBACCOUNT, this must equal\n smart_account_address.",
+            "description": "Address whose signature authorizes the challenge and that is written into\n the EIP-4361 message. This must be an EOA that controls the target smart account.",
             "pattern": "^0x[0-9a-fA-F]{40}$",
             "title": "signer_address",
             "type": "string"
@@ -3403,7 +3466,7 @@
             "type": "array"
           },
           "totalCreated": {
-            "description": "Total number of sub-accounts that have ever been created for this root,\n including soft-deleted ones. Clients use total_created + 1 only for the\n next new Smart Account; existing sub-accounts expose their assigned salt\n nonce on Subaccount when direct signing is available.",
+            "description": "Total number of sub-accounts that have ever been created for this root,\n including soft-deleted ones. Request CreateSubaccountChallenge to obtain\n the canonical next smart-account address and salt.",
             "title": "total_created",
             "type": "integer"
           }
@@ -5886,8 +5949,7 @@
         "description": "Purpose for a server-issued wallet challenge.",
         "enum": [
           "WALLET_PROOF_UNSPECIFIED",
-          "LOGIN",
-          "CREATE_SUBACCOUNT"
+          "LOGIN"
         ],
         "title": "WalletChallengePurpose",
         "type": "string"
@@ -13160,7 +13222,7 @@
       },
       "orderbook.v1.GetOrderBookRequest": {
         "additionalProperties": false,
-        "description": "GetOrderBookRequest describes a snapshot view request.",
+        "description": "GetOrderBookRequest describes a ConnectRPC snapshot request.",
         "properties": {
           "depth": {
             "$ref": "#/components/schemas/orderbook.v1.Depth",
@@ -21213,6 +21275,81 @@
         ]
       }
     },
+    "/orderbook.v1.OrderbookService/GetOrderBook": {
+      "post": {
+        "description": "Retrieve a spot order book depth snapshot for a symbol. Supports selectable depth per side and returns best bid/ask levels.",
+        "operationId": "OrderbookService_GetOrderBook",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/orderbook.v1.GetOrderBookRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/orderbook.v1.GetOrderBookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/orderbook.v1.GetOrderBookResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/orderbook.v1.GetOrderBookResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Order Book",
+        "tags": [
+          "Orderbook Service",
+          "OrderbookService"
+        ]
+      }
+    },
     "/orders.v1.OrdersReadService/GetBatchReplaceStatus": {
       "post": {
         "description": "Retrieve durable execution status for one admitted batch replacement.",
@@ -24711,7 +24848,7 @@
     },
     "/v1/auth/social/verification:ready": {
       "post": {
-        "description": "Mark verification as ready and request a provider account check.",
+        "description": "Mark verification as ready and request a provider account check. AUTH_SOCIAL_VERIFICATION_EXPIRED means start a new challenge. AUTH_SOCIAL_VERIFICATION_INVALID_STATE means Ready is not valid in the current state; use GetSocialVerification for status.",
         "operationId": "SocialVerificationService_SocialVerificationReady",
         "requestBody": {
           "content": {
@@ -24857,6 +24994,43 @@
           }
         },
         "summary": "Create Subaccount",
+        "tags": [
+          "Auth Service"
+        ]
+      }
+    },
+    "/v1/auth/subaccounts/challenge": {
+      "post": {
+        "description": "Request the next smart account and an EIP-191 authorization. Requires current terms acceptance.",
+        "operationId": "SubaccountService_CreateSubaccountChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.CreateSubaccountChallengeRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.CreateSubaccountChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.CreateSubaccountChallengeResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create Subaccount Challenge",
         "tags": [
           "Auth Service"
         ]
@@ -25951,7 +26125,7 @@
     },
     "/v1/auth/wallet-challenge": {
       "post": {
-        "description": "Create a short-lived EIP-4361 message for wallet login or smart-account proof.",
+        "description": "Create a short-lived EIP-4361 message for wallet login.",
         "operationId": "AuthService_CreateWalletChallenge",
         "requestBody": {
           "content": {
@@ -28183,52 +28357,6 @@
         "summary": "Get Currency Conversion Rates",
         "tags": [
           "Market Overview Service"
-        ]
-      }
-    },
-    "/v1/orderbook/{symbol_id}": {
-      "get": {
-        "description": "Retrieve a spot order book depth snapshot for a symbol. Supports selectable depth per side and returns best bid/ask levels.",
-        "operationId": "OrderbookService_GetOrderBook",
-        "parameters": [
-          {
-            "description": "Stable numeric pair ID from GetSpotConfig.",
-            "in": "path",
-            "name": "symbol_id",
-            "required": true,
-            "schema": {
-              "description": "Stable numeric pair ID from GetSpotConfig.",
-              "exclusiveMinimum": 0,
-              "title": "symbol_id",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Requested depth per side (number of price levels). Default is 50.",
-            "in": "query",
-            "name": "depth",
-            "schema": {
-              "$ref": "#/components/schemas/orderbook.v1.Depth",
-              "description": "Requested depth per side (number of price levels). Default is 50.",
-              "title": "depth"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/orderbook.v1.GetOrderBookResponse"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Get Order Book",
-        "tags": [
-          "Orderbook Service"
         ]
       }
     },
