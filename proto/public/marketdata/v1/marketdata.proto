@@ -229,16 +229,17 @@ message GetCandlesColumnsRequest {
 message CandlePoint {
   // Candle bucket start timestamp, in seconds since epoch (UTC).
   uint64 ts_sec = 1;
-  // Opening price in quote units scaled by 1e6.
+  // Opening price in quote units. Primary candles use scale 6; composite
+  // reference candles use the pair's reference_price_scale from GetSpotConfig.
   int64 open = 2;
-  // Highest traded price in quote units scaled by 1e6.
+  // Highest traded price, using the same scale as open.
   int64 high = 3;
-  // Lowest traded price in quote units scaled by 1e6.
+  // Lowest traded price, using the same scale as open.
   int64 low = 4;
-  // Closing price in quote units scaled by 1e6.
+  // Closing price, using the same scale as open.
   int64 close = 5;
-  // Traded base-asset quantity scaled by the market's base asset quantity_scale
-  // from GetSpotConfig.
+  // Traded base-asset quantity scaled by the base asset's
+  // market_data_volume_scale from GetSpotConfig.
   int64 volume = 6;
   // True only for WebSocket terminal updates of a closed bucket.
   // Historical API rows and current open-candle rows set this to false.
@@ -281,31 +282,35 @@ message GetCandlesColumnsResponse {
   // Candle bucket start timestamps (seconds since epoch, UTC).
   repeated uint64 ts_sec = 3;
 
-  // Opening prices in quote units scaled by 1e6.
+  // Opening primary-market prices use scale 6. Reference prices use the pair's
+  // reference_price_scale from GetSpotConfig.
   repeated int64 open = 4;
-  // Highest traded prices in quote units scaled by 1e6.
+  // Highest primary-market prices use scale 6. Reference prices use the pair's
+  // reference_price_scale from GetSpotConfig.
   repeated int64 high = 5;
-  // Lowest traded prices in quote units scaled by 1e6.
+  // Lowest primary-market prices use scale 6. Reference prices use the pair's
+  // reference_price_scale from GetSpotConfig.
   repeated int64 low = 6;
-  // Closing prices in quote units scaled by 1e6.
+  // Closing primary-market prices use scale 6. Reference prices use the pair's
+  // reference_price_scale from GetSpotConfig.
   repeated int64 close = 7;
-  // Traded base-asset quantities scaled by the pair's base_quantity_scale from
-  // GetSpotConfig.
+  // Traded base-asset quantities scaled by the base asset's
+  // market_data_volume_scale from GetSpotConfig.
   repeated int64 volume = 8;
 
   // Reference candle series in columnar form (same ordering as ts_sec: oldest-first).
   // Only populated when request.include_reference=true.
   repeated uint64 reference_ts_sec = 9;
-  // Reference opening prices in quote units scaled by 1e6.
+  // Reference opening prices use the pair's reference_price_scale.
   repeated int64 reference_open = 10;
-  // Reference high prices in quote units scaled by 1e6.
+  // Reference high prices use the pair's reference_price_scale.
   repeated int64 reference_high = 11;
-  // Reference low prices in quote units scaled by 1e6.
+  // Reference low prices use the pair's reference_price_scale.
   repeated int64 reference_low = 12;
-  // Reference closing prices in quote units scaled by 1e6.
+  // Reference closing prices use the pair's reference_price_scale.
   repeated int64 reference_close = 13;
-  // Reference traded base-asset quantities scaled by the pair's
-  // base_quantity_scale from GetSpotConfig.
+  // Reference traded base-asset quantities use the base asset's
+  // market_data_volume_scale from GetSpotConfig.
   repeated int64 reference_volume = 14;
   // Opaque cursor for the next page. Empty when no more results exist.
   string next_page_token = 15 [(buf.validate.field).string.max_len = 512];
@@ -322,12 +327,12 @@ message Candle {
   uint32 symbol_id = 1; // numeric spot market identifier
   Timeframe timeframe = 2; // timeframe of this candle
   uint64 ts_sec = 3; // bucket start timestamp (seconds since epoch, UTC)
-  int64 open = 4; // opening price in quote units scaled by 1e6
-  int64 high = 5; // highest traded price in quote units scaled by 1e6
-  int64 low = 6; // lowest traded price in quote units scaled by 1e6
-  int64 close = 7; // closing price in quote units scaled by 1e6
-  // Traded base-asset quantity scaled by the pair's base_quantity_scale from
-  // GetSpotConfig.
+  int64 open = 4; // opening primary-market price in scale 6
+  int64 high = 5; // highest primary-market price in scale 6
+  int64 low = 6; // lowest primary-market price in scale 6
+  int64 close = 7; // closing primary-market price in scale 6
+  // Traded base-asset quantity scaled by the base asset's
+  // market_data_volume_scale from GetSpotConfig.
   int64 volume = 8;
   // Exact traded quote-asset volume as a human-readable decimal string.
   string quote_volume = 9;
@@ -355,6 +360,9 @@ message AssetConfig {
   // A scale of 8 means one whole asset is represented as 100000000 in scaled
   // integer fields such as qty_scaled.
   uint32 quantity_scale = 5;
+
+  // Integer scale for public candle and market-overview base volume (0..18).
+  uint32 market_data_volume_scale = 6;
 }
 
 // PairMarketdataConfig describes market-data display settings for a spot pair.
@@ -444,6 +452,10 @@ message PairConfig {
   // price for MARKET orders, in basis points (1 bp = 0.01%), when client
   // reference pricing is used.
   int32 max_client_ref_drift_bps = 18;
+
+  // Integer scale for composite reference prices in candle responses (0..18).
+  // Primary market and execution prices continue to use scale 6.
+  uint32 reference_price_scale = 19;
 }
 
 // GetSpotConfigRequest has no parameters.
@@ -481,8 +493,10 @@ service MarketDataService {
   }
 
   // GetCandlesColumns returns OHLCV candles in a columnar representation optimized for charting.
-  // This method is intended for ConnectRPC clients and returns scaled integers:
-  // OHLC prices use 1e6 quote-unit scale, and volumes use base_quantity_scale.
+  // This method is intended for ConnectRPC clients and returns scaled integers.
+  // Primary OHLC prices use scale 6, reference OHLC prices use the pair's
+  // reference_price_scale, and volumes use the base asset's
+  // market_data_volume_scale from GetSpotConfig.
   rpc GetCandlesColumns(GetCandlesColumnsRequest) returns (GetCandlesColumnsResponse) {
     option (polyester.api.public) = true;
     option (polyester.api.hidden) = true;
