@@ -210,8 +210,9 @@ message OrderIntent {
   }
   // Optional account-scoped identifier for correlation, lookup, and cancellation.
   // While this identifier is retained, reuse returns
-  // CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected
-  // request, or a terminal order. CreateOrder does not replay the earlier result.
+  // CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the
+  // same payload. This identifier enables GetOrder reconciliation after a
+  // timeout; it does not provide exact replay.
   string client_order_id = 20 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
@@ -225,7 +226,11 @@ message OrderIntent {
   RiskPolicy attached_risk = 30;
 }
 
-// CreateOrderRequest submits one order intent for admission.
+// CreateOrderRequest submits one independent order intent for admission.
+// Single creates do not provide exact replay and are not automatically retried
+// after an ambiguous transport timeout. Supply client_order_id to reconcile
+// through GetOrder; without it, a lost acknowledgement may leave the outcome
+// unknown. An immediate lookup miss does not prove that admission failed.
 message CreateOrderRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
@@ -234,6 +239,7 @@ message CreateOrderRequest {
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
   ];
+
 }
 
 // CreateOrderResponse acknowledges admission only. It does not report whether
@@ -681,7 +687,7 @@ enum ModifyActionTaken {
 enum BatchReplaceAdmissionStatus {
   // Admission status is unavailable.
   BATCH_REPLACE_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // Every requested replacement was admitted.
+  // Every requested operation was admitted, including cancel-only outcomes.
   BATCH_REPLACE_ADMISSION_STATUS_ADMITTED = 1;
   // Some requested replacements were admitted and others were rejected.
   BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED = 2;
@@ -693,7 +699,7 @@ enum BatchReplaceAdmissionStatus {
 enum BatchReplaceItemAdmissionStatus {
   // Item admission status is unavailable.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // The replacement was admitted and handed to execution.
+  // The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED = 1;
   // The replacement was rejected before execution handoff.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED = 2;
@@ -857,9 +863,10 @@ message BatchCreateResultItem {
 message BatchCreateOrdersRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
-  // Required idempotency key for the entire ordered batch. Reusing it with the
-  // same payload replays the original per-item results; reusing it with a
-  // different payload returns CONFLICT_IDEMPOTENCY_KEY_REUSE.
+  // Required account-scoped idempotency key for the entire ordered batch.
+  // Reusing it with the same payload within 15 minutes replays the original
+  // per-item results and timestamp. Reusing it with a different payload during
+  // that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.
   string request_id = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).string.min_len = 1,
@@ -1016,7 +1023,7 @@ message BatchReplaceAdmissionItem {
   BatchReplaceItemAdmissionStatus status = 2;
   // Original order targeted by the replacement.
   fixed64 old_order_id = 3;
-  // Assigned successor order ID. Zero when rejected before assignment.
+  // Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.
   fixed64 replacement_order_id = 4;
   // Client order ID assigned to the successor when available.
   string client_order_id = 5;
@@ -1024,6 +1031,10 @@ message BatchReplaceAdmissionItem {
   string code = 6;
   // Structured rejection details. Present for rate-limit guidance and other typed failures.
   ErrorDetail error = 7;
+  // REPLACED admits a successor. AMENDED cancels the original order's remaining quantity
+  // without a successor; keep tracking old_order_id until its terminal state is confirmed.
+  // Unspecified for rejected items.
+  ModifyActionTaken action_taken = 8;
 }
 
 // BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.

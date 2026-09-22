@@ -447,7 +447,7 @@
             "name": "request_id",
             "jsonName": "requestId",
             "number": 2,
-            "doc": "Required idempotency key for the entire ordered batch. Reusing it with the\n same payload replays the original per-item results; reusing it with a\n different payload returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "doc": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes replays the original\n per-item results and timestamp. Reusing it with a different payload during\n that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -625,7 +625,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero when rejected before assignment.",
+            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -652,6 +652,13 @@
             "number": 7,
             "doc": "Structured rejection details. Present for rate-limit guidance and other typed failures.",
             "protoRef": "orders.v1.ErrorDetail"
+          },
+          {
+            "name": "action_taken",
+            "jsonName": "actionTaken",
+            "number": 8,
+            "doc": "REPLACED admits a successor. AMENDED cancels the original order's remaining quantity\n without a successor; keep tracking old_order_id until its terminal state is confirmed.\n Unspecified for rejected items.",
+            "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
       }
@@ -665,7 +672,7 @@
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "Every requested replacement was admitted."
+            "doc": "Every requested operation was admitted, including cancel-only outcomes."
           },
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED",
@@ -689,7 +696,7 @@
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "The replacement was admitted and handed to execution."
+            "doc": "The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes."
           },
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED",
@@ -951,7 +958,7 @@
           {
             "name": "BATCH_REPLACE_PHASE_ADMITTED",
             "number": 1,
-            "doc": "The replacement was admitted and handed to execution."
+            "doc": "The operation was admitted and handed to execution, including cancel-only outcomes."
           },
           {
             "name": "BATCH_REPLACE_PHASE_WORKING",
@@ -966,7 +973,7 @@
           {
             "name": "BATCH_REPLACE_PHASE_TERMINAL",
             "number": 4,
-            "doc": "The successor reached a terminal order state."
+            "doc": "The successor, or original order for a cancel-only outcome, reached a terminal state."
           }
         ]
       }
@@ -1006,7 +1013,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero when rejected before assignment.",
+            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1015,7 +1022,7 @@
             "name": "order_status",
             "jsonName": "orderStatus",
             "number": 5,
-            "doc": "Current successor order status when available.",
+            "doc": "Current successor status, or original order status for a cancel-only outcome, when available.",
             "protoRef": "orders.v1.OrderStatus"
           },
           {
@@ -1034,6 +1041,13 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "action_taken",
+            "jsonName": "actionTaken",
+            "number": 8,
+            "doc": "REPLACED admits a successor. AMENDED is cancel-only: no successor exists and\n order_status describes old_order_id. Unspecified for rejected items.",
+            "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
       }
@@ -1429,7 +1443,7 @@
     {
       "name": "orders.v1.CreateOrderRequest",
       "kind": "message",
-      "doc": "CreateOrderRequest submits one order intent for admission.",
+      "doc": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.",
       "message": {
         "fields": [
           {
@@ -3696,7 +3710,7 @@
             "name": "client_order_id",
             "jsonName": "clientOrderId",
             "number": 20,
-            "doc": "Optional account-scoped identifier for correlation, lookup, and cancellation.\n While this identifier is retained, reuse returns\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected\n request, or a terminal order. CreateOrder does not replay the earlier result.",
+            "doc": "Optional account-scoped identifier for correlation, lookup, and cancellation.\n While this identifier is retained, reuse returns\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the\n same payload. This identifier enables GetOrder reconciliation after a\n timeout; it does not provide exact replay.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {

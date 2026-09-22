@@ -372,7 +372,7 @@
                   "type": "string"
                 },
                 "clientOrderId": {
-                  "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected request, or a terminal order. CreateOrder does not replay the earlier result.",
+                  "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the same payload. This identifier enables GetOrder reconciliation after a timeout; it does not provide exact replay.",
                   "type": "string"
                 },
                 "feeAsset": {
@@ -517,7 +517,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Required idempotency key for the entire ordered batch. Reusing it with the same payload replays the original per-item results; reusing it with a different payload returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "description": "Required account-scoped idempotency key for the entire ordered batch. Reusing it with the same payload within 15 minutes replays the original per-item results and timestamp. Reusing it with a different payload during that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
             "type": "string"
           },
           "subaccountId": {
@@ -975,6 +975,14 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "actionTaken": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.ModifyActionTaken"
+                    }
+                  ],
+                  "description": "REPLACED admits a successor. AMENDED cancels the original order's remaining quantity without a successor; keep tracking old_order_id until its terminal state is confirmed. Unspecified for rejected items."
+                },
                 "clientOrderId": {
                   "description": "Client order ID assigned to the successor when available.",
                   "type": "string"
@@ -1110,7 +1118,7 @@
                   "type": "string"
                 },
                 "replacementOrderId": {
-                  "description": "Assigned successor order ID. Zero when rejected before assignment.",
+                  "description": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
                   "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                   "type": "string"
                 },
@@ -1124,6 +1132,7 @@
                 }
               },
               "required": [
+                "actionTaken",
                 "clientOrderId",
                 "code",
                 "itemIndex",
@@ -1505,7 +1514,7 @@
                 "type": "string"
               },
               "clientOrderId": {
-                "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected request, or a terminal order. CreateOrder does not replay the earlier result.",
+                "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the same payload. This identifier enables GetOrder reconciliation after a timeout; it does not provide exact replay.",
                 "type": "string"
               },
               "feeAsset": {
@@ -2114,7 +2123,7 @@
                 "type": "string"
               },
               "clientOrderId": {
-                "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID, even for identical input, a rejected request, or a terminal order. CreateOrder does not replay the earlier result.",
+                "description": "Optional account-scoped identifier for correlation, lookup, and cancellation. While this identifier is retained, reuse returns CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the same payload. This identifier enables GetOrder reconciliation after a timeout; it does not provide exact replay.",
                 "type": "string"
               },
               "feeAsset": {
@@ -2430,7 +2439,7 @@
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
-          "ADMITTED": "Every requested replacement was admitted.",
+          "ADMITTED": "Every requested operation was admitted, including cancel-only outcomes.",
           "PARTIALLY_ADMITTED": "Some requested replacements were admitted and others were rejected.",
           "REJECTED": "No requested replacement was admitted."
         }
@@ -2442,7 +2451,7 @@
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
-          "ADMITTED": "The replacement was admitted and handed to execution.",
+          "ADMITTED": "The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes.",
           "REJECTED": "The replacement was rejected before execution handoff."
         }
       },
@@ -2783,7 +2792,7 @@
   "paths": {
     "/v1/orders": {
       "post": {
-        "description": "Create a single order with side, type, quantity, and optional price fields. Supports optional client order IDs and attached risk instructions (take-profit, stop-loss, trailing stop).",
+        "description": "Create a single order with side, type, quantity, and optional price fields. Supports optional client order IDs and attached risk instructions (take-profit, stop-loss, trailing stop). Each submission is independent and has no exact-replay guarantee. Reusing a retained client order ID conflicts, even with identical payload. Do not automatically retry an ambiguous timeout: reconcile through GetOrder by client order ID if supplied; otherwise accept ambiguity. An immediate lookup miss does not prove rejection.",
         "operationId": "OrdersService_CreateOrder",
         "requestBody": {
           "content": {
@@ -3412,6 +3421,7 @@
                   "rejectedCount": 1,
                   "results": [
                     {
+                      "actionTaken": "AMENDED",
                       "clientOrderId": "cli-ord-20250101-001",
                       "code": "value",
                       "error": {
