@@ -28,7 +28,7 @@ enum RewardFulfillmentState {
   CANCELED = 5;
 }
 
-// RewardAward is a published immutable award for the authenticated root account.
+// RewardAward contains immutable published terms and current delivery details for the authenticated root account.
 message RewardAward {
   // Stable opaque award identifier.
   string award_id = 1;
@@ -46,6 +46,32 @@ message RewardAward {
   RewardFulfillmentState fulfillment_state = 7;
   // Publication time.
   google.protobuf.Timestamp published_at = 8;
+  // Campaign payout network. Interpret destination_address in this network.
+  string network = 9;
+  // Current fulfillment revision for optimistic concurrency.
+  uint64 fulfillment_revision = 10;
+  // Recipient payout destination once submitted. Empty until provided.
+  string destination_address = 11;
+  // External transaction identifier once staff records delivery. Empty until delivered.
+  string transaction_id = 12;
+}
+
+// SetMyRewardDestinationRequest records the authenticated recipient's payout destination.
+message SetMyRewardDestinationRequest {
+  // Award owned by the authenticated root account.
+  string award_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  // Destination address interpreted according to the award campaign's network.
+  string destination_address = 2 [(buf.validate.field).string = {min_len: 1, max_len: 512}];
+  // Fulfillment revision observed by the recipient.
+  uint64 expected_revision = 3 [(buf.validate.field).uint64.gt = 0];
+  // Client-generated idempotency identifier. Maximum 128 characters.
+  string request_id = 4 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+}
+
+// SetMyRewardDestinationResponse returns the updated award.
+message SetMyRewardDestinationResponse {
+  // Award with the persisted destination and updated fulfillment state.
+  RewardAward award = 1;
 }
 
 // ListMyRewardAwardsRequest requests a page of awards for the authenticated root account.
@@ -73,6 +99,20 @@ service RewardCampaignService {
     option (gnostic.openapi.v3.operation) = {
       summary: "List My Reward Awards"
       description: "List published campaign awards for the authenticated root account. Requires a session token."
+      tags: "Rewards"
+    };
+  }
+
+  // Record a write-once external payout destination for an award owned by the authenticated root account.
+  rpc SetMyRewardDestination(SetMyRewardDestinationRequest) returns (SetMyRewardDestinationResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {
+      put: "/v1/rewards/awards/{award_id}/destination"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set My Reward Destination"
+      description: "Record a write-once payout destination for the authenticated recipient's award. Requires a session token and fresh step-up proof. This does not execute a transfer or mark the award delivered."
       tags: "Rewards"
     };
   }
