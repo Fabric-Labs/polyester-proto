@@ -370,7 +370,11 @@ enum ErrorCode {
   ERROR_CODE_MIN_NOTIONAL = 7;
   // Quantity does not align with the pair step size.
   ERROR_CODE_QTY_STEP_SIZE = 8;
-  // Client order ID is already in use for a different active order.
+  // Client order ID is already in use on this account, by an open order or by
+  // an order that ended recently; an ended order keeps its client order ID
+  // reserved for at least 15 minutes. Reuse returns this code even with the
+  // same payload. Use GetOrder to reconcile, then retry with a new client
+  // order ID.
   ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID = 9;
   // Service is temporarily unavailable.
   ERROR_CODE_UNAVAILABLE = 10;
@@ -481,9 +485,15 @@ enum ErrorCode {
   ERROR_CODE_TRIGGER_STATUS_INVALID = 45;
   // Trigger type/state does not support requested lifecycle operation.
   ERROR_CODE_TRIGGER_NOT_MODIFIABLE = 46;
-  // Duplicate client trigger ID was reused with a different trigger payload.
+  // Client trigger ID is already used, either by a trigger with a different
+  // payload or by an earlier create that failed or was rolled back. List
+  // triggers to reconcile by client trigger ID, then retry with a new client
+  // trigger ID.
   ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID = 47;
-  // Trailing-stop max slippage (ticks or bps) is invalid.
+  // Max slippage (ticks or bps) is out of range or leaves no valid execution
+  // price bound. Applies to market orders and to standalone and attached
+  // trailing stops, on create and on modify; for example, a 10000 bps cap on a
+  // market order or trailing stop that sells.
   ERROR_CODE_MAX_SLIPPAGE_INVALID = 48;
   // Client reference price is stale compared to server-side BBO/drift policy.
   ERROR_CODE_STALE_QUOTE = 65;
@@ -620,7 +630,9 @@ message TrailingStopPolicy {
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 6 [(buf.validate.field).int64.gt = 0];
-    // Maximum allowed slippage in basis points (1 bp = 0.01%).
+    // Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop
+    // that sells, which is the case when the parent order buys, accepts values
+    // below 10000; a 100% cap would leave it no positive price to sell at.
     int32 max_slippage_bps = 7 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -747,11 +759,19 @@ message CancelAllOrdersResponse {
 
   // Cancel-all submission outcome.
   Status status = 1 [(buf.validate.field).enum.defined_only = true];
-  // Number of orders that matched the filter.
+  // Number of open orders that matched the filter when the request was
+  // accepted, including orders whose cancellation was already in progress.
+  // Orders placed after acceptance are not counted. Unless `dry_run` is set,
+  // equals `submitted_cancels` plus `failed_cancels`.
   uint32 matched_orders = 2;
-  // Number of cancel requests submitted for processing.
+  // Number of matched orders submitted for cancellation, including orders
+  // whose cancellation was already in progress. Each moves to `CANCELED`
+  // asynchronously after the response. Zero when `dry_run` is set.
   uint32 submitted_cancels = 3;
-  // Number of cancels that could not be submitted (already canceled, etc.).
+  // Number of matched orders that could not be submitted for cancellation
+  // because the cancel-all could not be recorded for their symbol. This
+  // request does not cancel them; send a new cancel-all with a new
+  // `request_id` if they are still open. Zero when `dry_run` is set.
   uint32 failed_cancels = 4;
   // Server timestamp.
   google.protobuf.Timestamp ts = 5;
@@ -1021,9 +1041,11 @@ message BatchReplaceAdmissionItem {
   uint32 item_index = 1;
   // Admission result for this item.
   BatchReplaceItemAdmissionStatus status = 2;
-  // Original order targeted by the replacement.
+  // Original order targeted by the replacement: the requested order ID, or the
+  // order the requested client order ID names. Rejected items keep it too. Unset
+  // only when the requested client order ID names no order.
   fixed64 old_order_id = 3;
-  // Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.
+  // Assigned successor order ID. Unset for cancel-only outcomes and rejected items.
   fixed64 replacement_order_id = 4;
   // Client order ID assigned to the successor when available.
   string client_order_id = 5;

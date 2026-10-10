@@ -52,9 +52,13 @@ enum TriggerStatus {
   STATUS_ARMED = 2;
   // Trigger is actively executing (for example, TWAP slices in progress).
   STATUS_RUNNING = 3;
-  // Trigger completed successfully (all child orders placed/filled).
+  // Trigger completed successfully. A ladder completes only when every child
+  // order filled; a ladder whose child orders were canceled or rejected ends
+  // canceled or failed instead.
   STATUS_COMPLETED = 4;
-  // Trigger was canceled by user.
+  // Trigger was canceled. The cancel reason states why, for example a user
+  // request, a linked one-cancels-the-other trigger, self-trade prevention, or,
+  // for a ladder, the cancellation of its child orders.
   STATUS_CANCELED = 5;
   // Trigger failed (for example, reservation failure, child order rejection).
   STATUS_FAILED = 6;
@@ -88,6 +92,10 @@ enum TriggerCancelReason {
   TRIGGER_CANCEL_REASON_OCO = 2;
   // The parent order ended without a fill, so its attached trigger was canceled.
   TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL = 3;
+  // Self-trade prevention canceled the trigger's child orders. For a ladder,
+  // no child order was canceled by the user, and the first child order to be
+  // canceled was canceled by self-trade prevention.
+  TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION = 4;
   // The terminal state did not contain a cancellation reason.
   TRIGGER_CANCEL_REASON_MISSING_REASON_CODE = 998;
   // An internal invariant or processing failure canceled the trigger.
@@ -280,7 +288,9 @@ message TrailingStopTrigger {
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 4 [(buf.validate.field).int64.gt = 0];
-    // Maximum slippage in basis points (1 bp = 0.01%).
+    // Maximum slippage in basis points (1 bp = 0.01%). A trailing stop that
+    // sells accepts values below 10000; a 100% cap would leave it no positive
+    // price to sell at.
     int32 max_slippage_bps = 5 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -393,7 +403,10 @@ message TriggerIntent {
   orders.v1.FeeAsset fee_asset = 3 [(buf.validate.field).enum.defined_only = true];
   // Child self-trade prevention mode. Defaults to EXPIRE_MAKER.
   orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 4 [(buf.validate.field).enum.defined_only = true];
-  // Client-provided trigger ID for idempotency.
+  // Client-provided trigger ID for idempotency. Retrying an accepted create
+  // with the identical intent returns the same trigger. After a create fails
+  // with INTERNAL_ERROR, the ID may already be used: a retry then returns
+  // CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.
   string client_trigger_id = 5 [
     (buf.validate.field).string.min_len = 1,
     (google.api.field_behavior) = REQUIRED
@@ -552,6 +565,22 @@ message TriggerEvent {
   }
 }
 
+// TriggerEventBatch is one realtime publication on an account's trigger event
+// stream: every event queued for the stream when it was sent, at most 256 and
+// at most 64 KiB. Events of one trading symbol arrive in the order they
+// happened; events of different symbols have no defined order relative to each
+// other.
+//
+// (trigger_id, event_type, child_seq, ts_ns) identifies an event. Apply events
+// in array order and in publication order; an event whose identity was
+// already received replaces the earlier copy. When the subscription reports
+// that missed publications could not be recovered, reload recent events over
+// REST.
+message TriggerEventBatch {
+  // Trigger events, oldest first per trading symbol. At least one event.
+  repeated TriggerEvent events = 1;
+}
+
 // ListTriggerEventsResponse returns historical events ordered newest-first.
 message ListTriggerEventsResponse {
   // Events ordered by event time descending, child sequence descending, and
@@ -629,7 +658,8 @@ message ModifyTriggerRequest {
     // (1 tick = 1e-9 quote units). Set to zero to clear the cap.
     int64 max_slippage_ticks = 15 [(buf.validate.field).int64.gte = 0];
     // Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to
-    // zero to clear the cap.
+    // zero to clear the cap. A trailing stop that sells accepts values below
+    // 10000; a 100% cap would leave it no positive price to sell at.
     int32 max_slippage_bps = 16 [(buf.validate.field).int32 = {
       gte: 0
       lte: 10000
@@ -766,8 +796,9 @@ message LadderDetails {
   // Quantity distribution across ladder levels.
   LadderDistribution ladder_distribution = 4;
   // Cumulative filled child-order base quantity scaled by the pair's
-  // base_quantity_scale from GetSpotConfig. Zero means no quantity executed,
-  // including when the parent completed because all children were canceled.
+  // base_quantity_scale from GetSpotConfig. Zero means no quantity executed.
+  // The total is kept when the ladder ends, whether it is completed, canceled
+  // or failed.
   int64 executed_qty_scaled = 5;
   // Number of distinct ladder levels with at least one fill. A partially
   // filled level counts once, including across replacement child orders.

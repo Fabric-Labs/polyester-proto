@@ -1,0 +1,1003 @@
+syntax = "proto3";
+
+package swap.quickswap.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "QuickSwap"
+      description: "Broker-only swaps of an external deposit into external withdrawals."
+    }
+  ]
+};
+
+// TokenAmount is an exact token amount in the token's smallest unit.
+message TokenAmount {
+  // Unsigned integer amount in the token's smallest unit (for example
+  // satoshis or wei), as a decimal string without sign, exponent, separators or
+  // leading zeros; at most 78 digits.
+  string base_units = 1 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,77})$"];
+  // Token decimals: the display amount is base_units / 10^decimals. Required in
+  // requests, where it must equal AssetChainVariant.source_decimals (the
+  // token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the
+  // asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the
+  // destination asset for a DESTINATION_AMOUNT amount and for
+  // Protection.min_amount_out.
+  uint32 decimals = 2 [(buf.validate.field).uint32.lte = 36];
+}
+
+// QuoteBasis states which side of the swap the request amount denominates.
+enum QuoteBasis {
+  // No basis selected; rejected.
+  BASIS_UNSPECIFIED = 0;
+  // amount is the source amount the end user intends to deposit, in source
+  // token units.
+  SOURCE_AMOUNT = 1;
+  // amount is the destination amount the end user wants to receive after fees,
+  // in destination token units. The quote reports the deposit amount needed at
+  // the quoted price. The delivered amount still follows the actual deposit
+  // and execution, bounded below by the protection.
+  DESTINATION_AMOUNT = 2;
+}
+
+// Protection bounds the worst execution the end user accepts. It is fixed when
+// the QuickSwap is created and is enforced on every execution, however long
+// after the quote the deposit arrives.
+message Protection {
+  // Exactly one bound.
+  oneof bound {
+    option (buf.validate.oneof).required = true;
+    // Maximum shortfall from the quoted expected output in basis points
+    // (1 bp = 0.01%), from 1 to 1000. Converted at creation into the quote's
+    // min_amount_out and min_rate.
+    uint32 max_slippage_bps = 1 [(buf.validate.field).uint32 = {
+      gte: 1
+      lte: 1000
+    }];
+    // Positive minimum destination amount after fees for the quoted deposit
+    // amount, in destination token units. Converted at creation into the
+    // quote's min_rate.
+    TokenAmount min_amount_out = 2 [(buf.validate.field).cel = {
+      id: "protection.min_amount_out.positive"
+      message: "min_amount_out must be positive"
+      expression: "this.base_units != '0'"
+    }];
+  }
+}
+
+// MarketExecution executes the credited deposit as soon as possible, in one or
+// more immediate orders, within the service's market execution window.
+message MarketExecution {}
+
+// TwapExecution spreads execution evenly over a duration.
+message TwapExecution {
+  option (buf.validate.message).cel = {
+    id: "twap_execution.interval_within_duration"
+    message: "slice_interval_ms must not exceed duration_ms"
+    expression: "this.slice_interval_ms <= this.duration_ms"
+  };
+
+  // Total execution duration in milliseconds, from 60000 (1 minute) to
+  // 86400000 (24 hours). The duration starts when execution starts, not when
+  // the QuickSwap is created.
+  uint64 duration_ms = 1 [(buf.validate.field).uint64 = {
+    gte: 60000
+    lte: 86400000
+  }];
+  // Interval between slices in milliseconds, from 10000 (10 seconds) up to
+  // duration_ms. The slice count is duration_ms / slice_interval_ms, rounded
+  // up.
+  uint64 slice_interval_ms = 2 [(buf.validate.field).uint64.gte = 10000];
+}
+
+// Execution selects how the credited deposit is traded.
+message Execution {
+  // Exactly one strategy.
+  oneof strategy {
+    option (buf.validate.oneof).required = true;
+    // Execute immediately.
+    MarketExecution market = 1;
+    // Execute in equal time slices.
+    TwapExecution twap = 2;
+  }
+}
+
+// QuickSwapTerms are the economic terms of one QuickSwap. The same terms are
+// used to quote and to create, and are echoed unchanged on the QuickSwap.
+// Source and destination are either two assets, which are traded, or one asset
+// on two networks, a bridge: the deposit is credited and withdrawn to the
+// destination network without a trade. Any two zipped_asset_ids from the
+// config may be quoted; QuoteQuickSwap is authoritative for whether the route
+// is offered.
+message QuickSwapTerms {
+  option (buf.validate.message).cel = {
+    id: "quickswap_terms.distinct_assets"
+    message: "source and destination must differ"
+    expression: "this.source_zipped_asset_id != this.destination_zipped_asset_id"
+  };
+
+  // Source asset and network: an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config. The end user deposits this asset on
+  // this network.
+  uint32 source_zipped_asset_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Destination asset and network: an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config. The end user receives this asset on
+  // this network.
+  uint32 destination_zipped_asset_id = 2 [(buf.validate.field).uint32.gt = 0];
+  // Side of the swap that amount denominates.
+  QuoteBasis basis = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Positive amount in the token units of the route selected by basis: source
+  // route for SOURCE_AMOUNT, destination route for DESTINATION_AMOUNT.
+  TokenAmount amount = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).cel = {
+      id: "quickswap_terms.amount.positive"
+      message: "amount must be positive"
+      expression: "this.base_units != '0'"
+    }
+  ];
+  // Worst execution the end user accepts.
+  Protection protection = 5 [(buf.validate.field).required = true];
+  // Market or TWAP execution. A bridge trades nothing and takes market only;
+  // TWAP on a bridge is ROUTE_UNSUPPORTED.
+  Execution execution = 6 [(buf.validate.field).required = true];
+}
+
+// FeeKind identifies one component of the quoted fees.
+enum FeeKind {
+  // No kind; never returned.
+  FEE_UNSPECIFIED = 0;
+  // Polyester fee of one trading leg: the leg's pair fee in basis points of
+  // what the leg receives. A two-leg route has one per leg. On a bridge, the
+  // one bridge fee in basis points of the credited amount, charged at payout.
+  SERVICE = 1;
+  // Broker fee of one trading leg: the broker's fee on the leg's pair in basis
+  // points of what the leg receives, including any affiliate shares paid from
+  // it. A two-leg route has one per leg. On a bridge, the broker's one bridge
+  // fee in basis points of the credited amount, charged at payout.
+  INTEGRATOR = 2;
+  // Network fee withheld from the deposit before it is credited.
+  DEPOSIT_NETWORK = 3;
+  // Estimated network fee for a withdrawal. The actual fee is charged at
+  // withdrawal time and reported on the withdrawal.
+  WITHDRAWAL_NETWORK = 4;
+}
+
+// QuoteFee is one fee component of a quote. Trading fees (SERVICE and
+// INTEGRATOR) are charged when each leg settles, in the asset that leg
+// receives: the base asset on a buy, the quote asset on a sell. A bridge has
+// no settlement; its fees are charged at payout, in the destination asset.
+message QuoteFee {
+  // Fee component.
+  FeeKind kind = 1;
+  // Asset and network the fee is charged in, as a zipped_asset_id. Zero for a
+  // trading fee of the first leg of a two-leg route, which is charged in the
+  // intermediate asset (intermediate_asset_id).
+  uint32 zipped_asset_id = 2;
+  // Fee in zipped_asset_id's token units; for a fee charged in the
+  // intermediate asset, in the intermediate asset at its trading precision
+  // (amount.decimals). Trading fees are rounded up, so the charged fee never
+  // exceeds the quoted one.
+  TokenAmount amount = 3;
+}
+
+// QuickSwapQuote is the priced view of a QuickSwap's terms. Price fields are
+// estimates at quoted_at; only the protection fields are guarantees.
+//
+// The end user may deposit any amount from min_deposit_amount to
+// max_deposit_amount. min_amount_out applies only to a deposit of exactly
+// deposit_amount that fully converts; for any other deposit the guarantee is
+// min_rate on the converted part.
+//
+// The credit is the deposit less the deposit network fee. Every amount below
+// is in token units of its route.
+message QuickSwapQuote {
+  // Source amount the quote was computed for, in source token units. Equals
+  // the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.
+  TokenAmount deposit_amount = 1;
+  // Expected destination amount for deposit_amount at quoted_at, after
+  // trading fees and both quoted network fees, in destination token units. An
+  // estimate, not a guarantee.
+  TokenAmount expected_amount_out = 2;
+  // Guaranteed minimum delivered amount, in destination token units, at the
+  // quoted network fees, for a deposit of exactly deposit_amount that fully
+  // converts to the destination asset. For any other deposit, and for a
+  // deposit only partly converted, the guarantee is min_rate on the converted
+  // part.
+  TokenAmount min_amount_out = 3;
+  // Guaranteed minimum execution rate: destination display units per source
+  // display unit, as a decimal string with at most 18 fractional digits,
+  // rounded up when quoted. Guarantee: for the source amount converted all the
+  // way to the destination asset, the destination output before the
+  // withdrawal network fee is at least that amount × min_rate, rounded down to
+  // destination token units. On a two-leg route, the source amount converted
+  // is the first leg's input in proportion to the intermediate funds the
+  // second leg converted. Source that is not traded is returned to
+  // return_address, and intermediate funds that the second leg does not
+  // convert are refunded in the intermediate asset to refund_address; those
+  // parts are outside the destination guarantee. The amount delivered is the
+  // output less the actual withdrawal network fee, which can differ from the
+  // quote.
+  string min_rate = 4;
+  // Published minimum deposit, in source token units, compared with the
+  // deposit before its network fee. A smaller deposit is held
+  // (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum
+  // (AssetChainVariant.deposit_min_amount in the config), and differs from
+  // ErrorDetail.min_deposit_amount, the smallest deposit that currently
+  // quotes.
+  TokenAmount min_deposit_amount = 5;
+  // Largest deposit that is eligible to execute, in source token units,
+  // compared with the deposit before its network fee. Fixed when the
+  // QuickSwap is created. A larger deposit is returned to return_address
+  // (DEPOSIT_ABOVE_MAXIMUM). Unset for a bridge, whose deposit no order book
+  // bounds.
+  TokenAmount max_deposit_amount = 6;
+  // Unified asset ID of the intermediate asset of a two-leg route (for
+  // example USDT for BTC to SOL): the AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config. Zero for a direct route or a
+  // bridge. When non-zero, CreateQuickSwap requires a refund address for that
+  // asset. The route is fixed at creation.
+  uint32 intermediate_asset_id = 7;
+  // Quoted fee components for deposit_amount: service and integrator fees in
+  // route order (a bridge has one pair, charged at payout), then network fees.
+  // Zero fees are omitted.
+  repeated QuoteFee fees = 8;
+  // When the quote was priced.
+  google.protobuf.Timestamp quoted_at = 9;
+  // End of the short quote validity, typically seconds to minutes after
+  // quoted_at. Display the quote until expires_at. CreateQuickSwap prices the
+  // terms again and never fails because a quote expired. After it the price
+  // fields are stale; the protection of a created QuickSwap still applies.
+  // Independent of the funding window and the execution deadline.
+  google.protobuf.Timestamp expires_at = 10;
+}
+
+// Screening is the risk screening of a QuickSwap. Deposits are screened on
+// arrival; the outcome shows in the status, its reason and each deposit's
+// disposition and reason.
+message Screening {
+  reserved 1, 3 to 7;
+  reserved "mode", "wallet_state", "deposit_state", "observed_source_addresses", "source_mismatch", "screened_at";
+
+  // Source wallet supplied in the request; empty when none was supplied.
+  // Recorded and shown; not used to accept or reject a deposit.
+  string source_wallet = 2;
+}
+
+// DepositAddressState is the lifecycle state of a QuickSwap deposit address.
+enum DepositAddressState {
+  // No address yet.
+  ADDRESS_UNSPECIFIED = 0;
+  // The address accepts the first eligible deposit.
+  ACTIVE = 1;
+  // Entered on the first confirmed deposit. Any further deposit is returned
+  // or held and never executes. Ends at address_retires_at. An address that
+  // expires unfunded goes from ACTIVE straight to RETIRED.
+  REFUND_MODE = 2;
+  // The address is retired. A deposit sent to it is not processed
+  // automatically; it is handled only through support-assisted recovery, and
+  // recovery is not guaranteed.
+  RETIRED = 3;
+}
+
+// DepositInstructions tell the end user where and until when to deposit.
+message DepositInstructions {
+  // Deposit address in the source network's native text form, without memo.
+  string address = 1;
+  // Destination tag or memo the deposit must carry; empty when the source
+  // network uses none. A deposit without it cannot be attributed.
+  string memo = 2;
+  // Asset and network to deposit; equal to terms.source_zipped_asset_id.
+  uint32 zipped_asset_id = 3;
+  // When the address was issued to this QuickSwap; the funding window starts
+  // here. After ADDRESS_UNAVAILABLE it can be long after created_at.
+  google.protobuf.Timestamp issued_at = 4;
+  // End of the funding window, fixed when the address is issued (currently 7
+  // days after issued_at). A deposit can execute only if Polyester detects it
+  // before this time; detection time counts, not block time, and
+  // confirmations may finish later. A deposit detected at or after this time,
+  // even one broadcast earlier, is returned to return_address. Send deposits
+  // well before this time. Never changes.
+  google.protobuf.Timestamp funding_expires_at = 5;
+  // After this time the deposit address is retired and funds sent to it may
+  // not be recoverable. For an unfunded address it equals funding_expires_at.
+  // After a deposit is accepted it is provisional, a lower bound, until
+  // Polyester releases the deposit address, which can be shortly after the
+  // QuickSwap becomes terminal; from then on it is at least 7 days after all
+  // payouts finish. It only moves later, never earlier, and never before
+  // funding_expires_at.
+  google.protobuf.Timestamp address_retires_at = 6;
+  // Current lifecycle state of the address.
+  DepositAddressState address_state = 7;
+  // A native-coin deposit (for example ETH) needs at least this gas limit, in
+  // gas units; a plain 21000-gas transfer is not enough and fails without
+  // depositing. Unused gas is refunded, so a higher limit is safe. Zero for
+  // token deposits and non-EVM networks.
+  uint64 min_native_gas_limit = 8;
+}
+
+// DepositDisposition is what a detected deposit is allowed to do.
+enum DepositDisposition {
+  // Not yet decided.
+  DISPOSITION_UNSPECIFIED = 0;
+  // Detected; eligibility is being evaluated. A deposit can already be
+  // credited (credited_at) while it is evaluated.
+  EVALUATING = 1;
+  // The eligible deposit that confirmed first. It consumed the QuickSwap and
+  // is the only deposit that can execute.
+  ELIGIBLE = 2;
+  // Not accepted: it is returned to return_address and never executes. A
+  // deposit found ineligible after it was credited, such as a late deposit
+  // (LATE_DEPOSIT) or one above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM),
+  // keeps credited_at and is returned from its credit.
+  RETURN_ONLY = 3;
+  // Held for review; it neither executes nor returns until released.
+  ON_HOLD = 4;
+  // Arrived after address_retires_at. It is handled only through
+  // support-assisted recovery; recovery is not guaranteed. The broker
+  // contacts Polyester broker support with the swap_id.
+  MANUAL_RECOVERY = 5;
+}
+
+// QuickSwapReason explains a notable status or deposit disposition.
+enum QuickSwapReason {
+  reserved 2, 3, 5, 6, 10, 14, 18, 19;
+  reserved "SOURCE_MISMATCH", "SOURCE_AMBIGUOUS", "CAPACITY_WAIT_EXPIRED", "PREPARATION_RETRYING", "ADDITIONAL_DEPOSIT", "CANCELLED_BY_BROKER", "RETURN_BLOCKED", "AFTER_DELETION";
+
+  // No notable reason. On a HELD QuickSwap or an ON_HOLD deposit: held for
+  // review without a more specific reason; the broker contacts Polyester
+  // broker support with the swap_id.
+  REASON_UNSPECIFIED = 0;
+  // The deposit's risk screen failed with a return verdict; the deposit is
+  // not accepted and is returned to return_address.
+  SOURCE_SCREENING_FAILED = 1;
+  // The deposit arrived and is safe, but processing capacity is temporarily
+  // unavailable. Processing resumes automatically when capacity frees up; no
+  // action is needed.
+  CAPACITY_UNAVAILABLE = 4;
+  // Execution could not meet the protection. On a HELD QuickSwap nothing was
+  // traded and the funds are held for review; otherwise untraded funds are
+  // refunded or returned.
+  PROTECTION_NOT_MET = 7;
+  // The execution deadline passed before all input executed; untraded funds
+  // are refunded or returned. Shown while EXECUTING once the deadline ended
+  // trading, and on the payout statuses that follow.
+  EXECUTION_DEADLINE_REACHED = 8;
+  // The deposit was first seen after funding_expires_at.
+  LATE_DEPOSIT = 9;
+  // The deposit is below the published min_deposit_amount. It is held, not
+  // executed or returned automatically. The broker contacts Polyester broker
+  // support with the swap_id.
+  DEPOSIT_BELOW_MINIMUM = 11;
+  // The deposit is above max_deposit_amount; it is returned to
+  // return_address.
+  DEPOSIT_ABOVE_MAXIMUM = 12;
+  // The deposit is not the quoted source asset. It is held, not executed or
+  // returned automatically. The broker contacts Polyester broker support
+  // with the swap_id.
+  WRONG_ASSET = 13;
+  // The funding window ended without an eligible deposit.
+  FUNDING_WINDOW_ENDED = 15;
+  // A withdrawal cannot be completed and is held for review. The broker
+  // contacts Polyester broker support with the swap_id.
+  WITHDRAWAL_FAILED = 16;
+  // A processing step is being confirmed. Processing resumes automatically; no
+  // action is needed.
+  OUTCOME_RECONCILING = 17;
+  // Polyester's deposit screening blocked the deposit. It is held for
+  // compliance review; it is never executed or returned automatically. The
+  // broker contacts Polyester broker support with the swap_id.
+  SOURCE_SCREENING_BLOCKED = 20;
+  // Refund not possible: an amount left to refund or return was below the
+  // withdrawal minimum of its asset and network, so no withdrawal was made
+  // for it. Its withdrawal is NOT_SENT with the amount in unsent_amount.
+  // Other withdrawals are unaffected.
+  REFUND_BELOW_MINIMUM = 21;
+}
+
+// Deposit is one deposit detected on the QuickSwap's deposit address.
+message Deposit {
+  reserved 6, 7;
+  reserved "source_addresses", "screening_state";
+
+  // Zero-based position in detection order; stable for the QuickSwap's life.
+  uint32 index = 1;
+  // Source-network transaction identifier in the network's native text form.
+  string tx_hash = 2;
+  // Output or log index of the deposit within tx_hash; zero is valid.
+  uint64 tx_occurrence_index = 3;
+  // Asset and network actually received, as a zipped_asset_id. Zero until
+  // Polyester has identified the deposit's asset, shortly after detection,
+  // and when the asset is not a supported route.
+  uint32 zipped_asset_id = 4;
+  // Received amount, before the deposit network fee, in zipped_asset_id's
+  // token units; unset while zipped_asset_id is zero.
+  TokenAmount amount = 5;
+  // What this deposit may do.
+  DepositDisposition disposition = 8;
+  // Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY;
+  // REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review
+  // without a more specific reason.
+  QuickSwapReason reason = 9;
+  // Current source-network confirmations; zero until the source network
+  // reports any. Never decreases.
+  uint32 confirmations = 10;
+  // Source-network confirmations required before credit; zero until known.
+  uint32 required_confirmations = 11;
+  // When the deposit was first seen. Eligibility compares this time with
+  // funding_expires_at.
+  google.protobuf.Timestamp detected_at = 12;
+  // When the deposit was credited; unset until credited. Credit does not
+  // decide eligibility: a credited deposit can still be EVALUATING, and one
+  // then found ineligible, such as a late deposit, stays credited and is
+  // returned (RETURN_ONLY).
+  google.protobuf.Timestamp credited_at = 13;
+  // Public, URL-safe lifecycle flow identifier of this deposit, usable with
+  // GET /v1/chain/flows/{flow_id}; empty until the flow exists. Lifecycle flow
+  // amounts are 18-decimal unified units (amount_e18), not token base units.
+  string flow_id = 14;
+}
+
+// ExecutionProgress is the trading progress of a QuickSwap.
+message ExecutionProgress {
+  // Credited amount committed to execution, in source token units.
+  TokenAmount input_amount = 1;
+  // Source amount traded so far, in source token units. On a two-leg route
+  // this counts the first leg. Zero for a bridge, which trades nothing.
+  TokenAmount executed_input = 2;
+  // Destination amount acquired so far after service and integrator fees and
+  // before withdrawal network fees, in destination token units. Zero for a
+  // bridge: its destination withdrawal pays the credit less its fees.
+  TokenAmount output_amount = 3;
+  // On a two-leg route, intermediate asset acquired but not yet converted, in
+  // the refund route's token units; unset for a direct route and a bridge.
+  TokenAmount intermediate_remainder = 4;
+  // Completed slices: a market execution's one slice completes when
+  // execution finishes. Zero for a bridge.
+  uint32 completed_slices = 5;
+  // Planned slices: a market execution has one once it is planned. Zero
+  // until then, and for a bridge, which trades nothing.
+  uint32 total_slices = 6;
+  // When execution started.
+  google.protobuf.Timestamp started_at = 7;
+  // Execution deadline: started_at plus the TWAP duration, or plus the market
+  // execution window. Funds not converted by then are refunded or returned.
+  // Independent of the quote validity and the funding window. Unset until
+  // the execution is planned, and for a bridge, which trades nothing.
+  google.protobuf.Timestamp deadline = 8;
+  // When execution finished; unset while executing.
+  google.protobuf.Timestamp finished_at = 9;
+}
+
+// WithdrawalRole is why a withdrawal pays its recipient.
+enum WithdrawalRole {
+  // No role; never returned.
+  ROLE_UNSPECIFIED = 0;
+  // Swap output to destination_address on the destination network.
+  DESTINATION = 1;
+  // Untraded intermediate asset of a two-leg route, including a partial
+  // refund, to refund_address on the refund route's network.
+  REFUND = 2;
+  // Source funds that were not accepted or not traded, to return_address on
+  // the source network.
+  RETURN = 3;
+}
+
+// WithdrawalState is the progress of one withdrawal. FINALIZED and NOT_SENT
+// are final: they never change. A FAILED withdrawal never changes either, but
+// it does not end the QuickSwap: while any withdrawal is FAILED, the
+// QuickSwap is HELD with reason WITHDRAWAL_FAILED and the funds stay
+// attributed to it until support resolves it.
+enum WithdrawalState {
+  // No state; never returned.
+  WITHDRAWAL_UNSPECIFIED = 0;
+  // Approved and waiting to be submitted.
+  QUEUED = 1;
+  // Submitted to the recipient's network; not yet final.
+  SUBMITTED = 2;
+  // Final on the recipient's network.
+  FINALIZED = 3;
+  // Definitively failed. The QuickSwap is HELD (WITHDRAWAL_FAILED); the
+  // broker contacts Polyester broker support with the swap_id.
+  FAILED = 4;
+  // Final: no transaction was or will be made for this withdrawal, because
+  // its amount was below the withdrawal minimum of its asset and network
+  // (REFUND_BELOW_MINIMUM); unsent_amount is that amount.
+  NOT_SENT = 5;
+}
+
+// Withdrawal is one outgoing payment. A QuickSwap can end with several, for
+// example a partial refund plus the destination payout; the best case is a
+// single destination withdrawal.
+message Withdrawal {
+  // Zero-based position in the withdrawals list. Not stable: a withdrawal's
+  // position can change between reads, so do not use it as an identifier.
+  uint32 index = 1;
+  // Why this withdrawal pays its recipient.
+  WithdrawalRole role = 2;
+  // Deposit whose funds this withdrawal moves.
+  uint32 deposit_index = 3;
+  // Asset and network paid, as a zipped_asset_id.
+  uint32 zipped_asset_id = 4;
+  // Recipient address in the network's native text form.
+  string address = 5;
+  // Recipient destination tag or memo; empty when the network uses none.
+  string memo = 6;
+  // Amount delivered to address after the network fee, in zipped_asset_id's
+  // token units; set once FINALIZED. Like tx_hash, it is the amount recorded
+  // for this withdrawal and can be corrected for up to 24 hours after the
+  // QuickSwap ends (terminal_at).
+  TokenAmount amount = 7;
+  // Actual network fee withheld from this withdrawal, in the same units; set
+  // once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap
+  // ends, like amount.
+  TokenAmount network_fee = 8;
+  // Withdrawal progress.
+  WithdrawalState state = 9;
+  // Recipient-network transaction recorded for this withdrawal; empty until
+  // the transaction is committed on the recipient network. It can be
+  // corrected for up to 24 hours after the QuickSwap ends (terminal_at) and is
+  // not updated after that. For the authoritative, latest state of the
+  // transfer, read flow_id.
+  string tx_hash = 10;
+  // When the withdrawal was submitted; unset until submitted.
+  google.protobuf.Timestamp submitted_at = 11;
+  // When the withdrawal became final; unset until FINALIZED.
+  google.protobuf.Timestamp finalized_at = 12;
+  // Public, URL-safe lifecycle flow identifier of this withdrawal, usable with
+  // GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is
+  // the authoritative, latest state of the transfer, including a correction
+  // made after tx_hash, amount and network_fee stop being updated. Lifecycle
+  // flow amounts are 18-decimal unified units (amount_e18), not token base
+  // units.
+  string flow_id = 13;
+  // Set only when state is NOT_SENT: the amount for which no withdrawal was
+  // made because it was below the withdrawal minimum of its asset and
+  // network. In zipped_asset_id's token units, rounded down to the token's
+  // smallest unit.
+  TokenAmount unsent_amount = 14;
+}
+
+// QuickSwapStatus is the current state of a QuickSwap. While funds progress,
+// the status names the earliest gate still outstanding; gates that complete
+// concurrently are not reported separately.
+//
+// Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |
+// PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a
+// bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. HELD can
+// be entered from any non-terminal status and is not terminal. The terminal
+// statuses are COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status
+// never changes. Accept status values added later; is_terminal is
+// authoritative.
+enum QuickSwapStatus {
+  reserved 1, 17;
+  reserved "SCREENING", "CANCELLED";
+
+  // No status; never returned.
+  STATUS_UNSPECIFIED = 0;
+  // The quote is fixed and the deposit address is being allocated. After
+  // ADDRESS_UNAVAILABLE, allocation continues automatically until an address
+  // frees up; the wait has no fixed bound.
+  ALLOCATING = 2;
+  // Quote and deposit address allocated; waiting for the first eligible
+  // deposit before funding_expires_at.
+  AWAITING_DEPOSIT = 3;
+  // An eligible deposit arrived and is safe; waiting for processing capacity.
+  // Processing resumes automatically when capacity frees up; the wait has no
+  // fixed bound.
+  WAITING_FOR_CAPACITY = 4;
+  // The deposit is being prepared for credit. Retries keep this status.
+  PREPARING_DEPOSIT = 5;
+  // Waiting for source confirmations and deposit validation before credit.
+  CONFIRMING = 6;
+  // The deposit is credited; execution is starting.
+  CREDITED = 7;
+  // The credited deposit is being traded.
+  EXECUTING = 8;
+  // Execution finished with destination output; withdrawals, including any
+  // partial refund or return, are in progress.
+  PAYING_OUT = 9;
+  // A two-leg route produced no destination output; the intermediate asset is
+  // being refunded to refund_address.
+  REFUNDING = 10;
+  // Nothing was traded or the deposit was not accepted; the source funds are
+  // being returned to return_address.
+  RETURNING = 11;
+  // Funds are held for review. Not terminal: review resumes the QuickSwap or
+  // returns the funds. reason says why when a specific reason applies, else
+  // it is REASON_UNSPECIFIED. The broker contacts Polyester broker support
+  // with the swap_id.
+  HELD = 12;
+  // Terminal: every withdrawal is final (FINALIZED or NOT_SENT) and at least
+  // one is a DESTINATION withdrawal. A DESTINATION withdrawal is never
+  // NOT_SENT.
+  COMPLETED = 13;
+  // Terminal: every withdrawal is final, none is DESTINATION, and at least one
+  // is REFUND (FINALIZED or NOT_SENT).
+  REFUNDED = 14;
+  // Terminal: every withdrawal is final and all are RETURN (FINALIZED or
+  // NOT_SENT).
+  RETURNED = 15;
+  // Terminal: the funding window ended without an eligible deposit.
+  EXPIRED = 16;
+}
+
+// QuickSwap is one broker-owned swap of an external deposit into external
+// withdrawals. The end user needs no account.
+message QuickSwap {
+  reserved 19;
+  reserved "capacity_wait_expires_at";
+
+  // Public QuickSwap identifier.
+  fixed64 swap_id = 1;
+  // The broker's idempotency key that created this QuickSwap.
+  string idempotency_key = 2;
+  // Current status.
+  QuickSwapStatus status = 3;
+  // Why the status is notable (held, returning, delayed, terminal without
+  // destination output); REASON_UNSPECIFIED otherwise. When a payout
+  // completes but a refund or return was NOT_SENT, the status follows the
+  // paid withdrawals (for example COMPLETED) and the reason is
+  // REFUND_BELOW_MINIMUM. A FAILED withdrawal takes precedence: the status is
+  // HELD and the reason WITHDRAWAL_FAILED.
+  QuickSwapReason reason = 4;
+  // True when status is terminal; authoritative, including for status values
+  // added later. Polling can stop at a terminal status. A terminal status
+  // never changes. Shortly after it, address_retires_at can still move later,
+  // and withdrawal details can be corrected as documented on Withdrawal;
+  // another deposit reaching the address also shows. Read it again if the end
+  // user reports such a deposit or needs the final retirement time.
+  bool is_terminal = 5;
+  // Accepted economic terms.
+  QuickSwapTerms terms = 6;
+  // Recipient of the swap output on the destination network. Addresses and
+  // memos are in their network's canonical form (for example lowercase EVM
+  // hex), which can differ in case or encoding from the create request; that
+  // form is the one paid.
+  string destination_address = 7;
+  // Destination tag or memo for destination_address; empty when none.
+  string destination_memo = 8;
+  // Recipient of returned source funds on the source network.
+  string return_address = 9;
+  // Destination tag or memo for return_address; empty when none.
+  string return_memo = 10;
+  // Refund route (asset and network) of the intermediate asset; zero when
+  // none was supplied.
+  uint32 refund_zipped_asset_id = 11;
+  // Recipient of refunded intermediate asset; empty when none was supplied.
+  string refund_address = 12;
+  // Destination tag or memo for refund_address; empty when none.
+  string refund_memo = 13;
+  // Quote and protection fixed at creation. Not refreshed on retries.
+  QuickSwapQuote quote = 14;
+  // Where and until when to deposit; absent while ALLOCATING.
+  DepositInstructions deposit_instructions = 15;
+  // Risk screening.
+  Screening screening = 16;
+  // Detected deposits, oldest first, at most 50.
+  repeated Deposit deposits = 17;
+  // True when more than 50 deposits were detected; only the first 50 are
+  // listed.
+  bool deposits_truncated = 18;
+  // Execution progress; absent before execution starts.
+  ExecutionProgress execution = 20;
+  // Withdrawals, oldest first, at most 50.
+  repeated Withdrawal withdrawals = 21;
+  // True when more than 50 withdrawals exist; only the first 50 are listed.
+  bool withdrawals_truncated = 22;
+  // When the QuickSwap was created.
+  google.protobuf.Timestamp created_at = 23;
+  // When the QuickSwap last changed.
+  google.protobuf.Timestamp updated_at = 24;
+  // When status became terminal; unset while not terminal.
+  google.protobuf.Timestamp terminal_at = 25;
+  // Monotonic state version: a snapshot with a lower version is older. Zero
+  // while ALLOCATING; 1 once the deposit address is issued
+  // (AWAITING_DEPOSIT); every later change increments it.
+  uint64 version = 26;
+  // Affiliate shares of the broker fee, as requested.
+  repeated AffiliateShare affiliates = 27;
+  // Fee schedule version fixed at creation. Every execution or bridge payout
+  // of this QuickSwap is charged that version's service and integrator fees,
+  // whatever later versions change.
+  uint64 fee_schedule_version = 28;
+}
+
+// QuoteQuickSwapRequest prices terms without reserving anything.
+message QuoteQuickSwapRequest {
+  // Terms to price.
+  QuickSwapTerms terms = 1 [(buf.validate.field).required = true];
+}
+
+// QuoteQuickSwapResponse is an indicative quote.
+message QuoteQuickSwapResponse {
+  // Indicative quote, including whether the route needs a refund address.
+  // Creating a QuickSwap prices the terms again.
+  QuickSwapQuote quote = 1;
+}
+
+// AffiliateShare pays one affiliate a fraction of the broker's integrator fee.
+// The broker keeps whatever the shares leave.
+message AffiliateShare {
+  // Public account ID of the affiliate's account, credited with the share. It
+  // must not be the broker's own payout account.
+  fixed64 account_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Share of the integrator fee in parts per million, from 1 to 1000000.
+  uint32 share_ppm = 2 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 1000000
+  }];
+}
+
+// CreateQuickSwapRequest creates, or returns, the QuickSwap for one
+// idempotency key.
+message CreateQuickSwapRequest {
+  option (buf.validate.message).cel = {
+    id: "create_quickswap_request.refund_target"
+    message: "refund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address"
+    expression: "(this.refund_address == '') == (this.refund_zipped_asset_id == 0u) && (this.refund_memo == '' || this.refund_address != '')"
+  };
+
+  // Broker-chosen idempotency key, 1 to 128 characters of letters, digits,
+  // '.', '_', ':' or '-'. Scoped to the authenticated broker and retained
+  // permanently. The same key with the same request returns the same QuickSwap
+  // and deposit address; with a different request it fails with
+  // IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and
+  // memo is put in its network's canonical form, so the same address in
+  // another case or encoding is the same request; affiliate order is
+  // ignored; every other field must be equal.
+  string idempotency_key = 1 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  // Economic terms.
+  QuickSwapTerms terms = 2 [(buf.validate.field).required = true];
+  // Recipient of the swap output on the destination network, in its native
+  // text form without memo.
+  string destination_address = 3 [(buf.validate.field).string = {
+    min_bytes: 1
+    max_bytes: 256
+  }];
+  // Destination tag or memo for destination_address. Required when the
+  // destination network needs one; must be empty otherwise.
+  string destination_memo = 4 [(buf.validate.field).string.max_bytes = 128];
+  // Recipient of returned source funds on the source network, in its native
+  // text form without memo. Deposits that are not accepted, and source funds
+  // that are not traded, go here; never to an observed sender.
+  string return_address = 5 [(buf.validate.field).string = {
+    min_bytes: 1
+    max_bytes: 256
+  }];
+  // Destination tag or memo for return_address. Required when the source
+  // network needs one; must be empty otherwise.
+  string return_memo = 6 [(buf.validate.field).string.max_bytes = 128];
+  // Refund route for the intermediate asset of a two-leg route: an
+  // AssetChainVariant.zipped_asset_id of the asset whose AssetConfig.ledger_id
+  // is the quote's intermediate_asset_id in GET
+  // /v1/chain/deposit-withdraw/config, for example USDT on Ethereum. Required
+  // with refund_address when the route has an intermediate asset; optional
+  // and unused otherwise.
+  uint32 refund_zipped_asset_id = 7;
+  // Recipient of refunded intermediate asset on the refund route's network,
+  // in its native text form without memo.
+  string refund_address = 8 [(buf.validate.field).string.max_bytes = 256];
+  // Destination tag or memo for refund_address. Required when the refund
+  // network needs one; must be empty otherwise.
+  string refund_memo = 9 [(buf.validate.field).string.max_bytes = 128];
+  // Optional source wallet the end user will deposit from, for brokers that
+  // know it in advance. It must be a valid address on the source network and
+  // is shown on the QuickSwap.
+  string source_wallet = 10 [(buf.validate.field).string.max_bytes = 256];
+  // Optional affiliates paid from the broker's integrator fee: at most four
+  // distinct accounts whose shares total at most 1000000 ppm. Empty means the
+  // broker keeps the whole integrator fee. The quote shows the total fee only.
+  repeated AffiliateShare affiliates = 11 [(buf.validate.field).repeated.max_items = 4];
+}
+
+// CreateQuickSwapResponse returns the QuickSwap bound to the idempotency key.
+message CreateQuickSwapResponse {
+  // The QuickSwap, normally AWAITING_DEPOSIT with deposit_instructions. A
+  // retry returns its current state with the original quote and address.
+  QuickSwap quick_swap = 1;
+}
+
+// GetQuickSwapRequest selects one of the broker's QuickSwaps.
+message GetQuickSwapRequest {
+  // Exactly one selector.
+  oneof selector {
+    option (buf.validate.oneof).required = true;
+    // Public QuickSwap identifier.
+    fixed64 swap_id = 1 [(buf.validate.field).fixed64.gt = 0];
+    // Idempotency key used to create it; resolves a QuickSwap whose create
+    // outcome was unknown.
+    string idempotency_key = 2 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  }
+}
+
+// GetQuickSwapResponse returns one QuickSwap.
+message GetQuickSwapResponse {
+  // Current state.
+  QuickSwap quick_swap = 1;
+}
+
+// ErrorCode is the stable machine-readable QuickSwap error code.
+enum ErrorCode {
+  reserved 9, 10, 16;
+  reserved "SOURCE_SCREENING_REJECTED", "SCREENING_UNAVAILABLE", "NOT_CANCELLABLE";
+
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // The source and destination route is not offered, or a bridge was
+  // requested with TWAP execution.
+  ROUTE_UNSUPPORTED = 1;
+  // The amount is outside the route's current limits. The error carries the
+  // limits (min_deposit_amount, max_deposit_amount) when known.
+  AMOUNT_OUT_OF_RANGE = 2;
+  // An amount's decimals do not match its route's token decimals.
+  DECIMALS_MISMATCH = 3;
+  // destination_address or destination_memo is not valid on the destination
+  // network.
+  DESTINATION_ADDRESS_INVALID = 4;
+  // return_address or return_memo is not valid on the source network.
+  RETURN_ADDRESS_INVALID = 5;
+  // The route has an intermediate asset and no refund address was supplied.
+  REFUND_ADDRESS_REQUIRED = 6;
+  // refund_zipped_asset_id is not a withdraw route of the intermediate asset,
+  // or refund_address or refund_memo is not valid on its network.
+  REFUND_ADDRESS_INVALID = 7;
+  // source_wallet is not valid on the source network.
+  SOURCE_WALLET_INVALID = 8;
+  // No price is currently available for the route; retry later.
+  QUOTE_UNAVAILABLE = 11;
+  // The protection cannot be met at the current price: a min_amount_out above
+  // the expected output, or an order book that cannot fill the protected
+  // execution at the quoted prices.
+  PROTECTION_UNACHIEVABLE = 12;
+  // No deposit address is available right now. The QuickSwap (swap_id in the
+  // error) is kept, and its address is allocated automatically when one frees
+  // up. Follow it with GetQuickSwap or by repeating the request unchanged. Its
+  // quote stays the one priced at creation, and its funding window starts
+  // when the address is issued (issued_at).
+  ADDRESS_UNAVAILABLE = 13;
+  // The idempotency key was already used with a different request.
+  IDEMPOTENCY_CONFLICT = 14;
+  // No QuickSwap of this broker matches the selector.
+  SWAP_NOT_FOUND = 15;
+  // affiliates are not valid: an account named twice, shares totalling more
+  // than 1000000 ppm, an unknown account or the broker's own payout account;
+  // or affiliates are not enabled for the broker.
+  AFFILIATES_INVALID = 17;
+}
+
+// ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it
+// as an error detail of type swap.quickswap.v1.ErrorDetail. REST clients
+// receive an application/problem+json body {type, title, status, detail,
+// code, swapId, minDepositAmount, maxDepositAmount} whose code is the
+// ErrorCode name, or the status name (for example INVALID_ARGUMENT) when no
+// ErrorCode applies; swapId and the limits appear only when set.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+  // QuickSwap bound to the request's idempotency key, when one exists: for
+  // example the original QuickSwap on IDEMPOTENCY_CONFLICT, or the QuickSwap
+  // whose deposit address could not be allocated.
+  fixed64 swap_id = 2;
+  // AMOUNT_OUT_OF_RANGE only: the smallest deposit that currently quotes on
+  // the route with the requested protection, in source token units, whatever
+  // the request's basis. It moves with prices and network fees; show it as
+  // guidance, not a guarantee. A deposit below QuickSwapQuote.min_deposit_amount
+  // is held. Unset for other codes and when no deposit currently quotes.
+  TokenAmount min_deposit_amount = 3;
+  // AMOUNT_OUT_OF_RANGE only: the largest deposit that quotes, in source token
+  // units. Unset for other codes, when no deposit currently quotes, and for a
+  // bridge, whose deposit no order book bounds.
+  TokenAmount max_deposit_amount = 4;
+}
+
+// QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC
+// and REST. Every RPC requires the broker's API key, sent as a bearer token
+// in the Authorization header; the broker is derived from it, never from the
+// request. End users need no account. Brokers see only their
+// own QuickSwaps.
+//
+// The broker API key is a server credential. Call this API from the broker's
+// backend, never from a browser or mobile app. Polyester issues keys at
+// broker onboarding; contact Polyester to obtain or rotate one.
+//
+// A QuickSwap's status advances as the deposit and execution progress; poll
+// GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while
+// it is not terminal. Polling can stop once is_terminal is true.
+//
+// REST errors are application/problem+json (see ErrorDetail) with these HTTP
+// statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for
+// UNAUTHENTICATED, 404 for NOT_FOUND, 409 for IDEMPOTENCY_CONFLICT, 413 when
+// a request body is too large, 429 when the caller is rate limited, 500 for
+// an internal error, 503 for UNAVAILABLE and 504 for DEADLINE_EXCEEDED.
+service QuickSwapService {
+  // QuoteQuickSwap prices terms without creating a QuickSwap or reserving a
+  // deposit address. The quote states whether the route needs a refund
+  // address.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE or
+  //   DECIMALS_MISMATCH.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED or PROTECTION_UNACHIEVABLE.
+  // - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid broker API key.
+  rpc QuoteQuickSwap(QuoteQuickSwapRequest) returns (QuoteQuickSwapResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Quote QuickSwap"
+      description: "Price QuickSwap terms without reserving a deposit address."
+      tags: "QuickSwap"
+      security: {
+        additional_properties: {
+          name: "BrokerApiKeyAuth"
+          value: {}
+        }
+      }
+    };
+  }
+
+  // CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and
+  // allocates its deposit address. It is idempotent per broker and key: a
+  // repeated or concurrent request with the same body returns the same
+  // QuickSwap, quote and address, so every unknown outcome is resolved by
+  // repeating the request unchanged.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,
+  //   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,
+  //   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or AFFILIATES_INVALID.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,
+  //   REFUND_ADDRESS_REQUIRED, or AFFILIATES_INVALID when affiliates are not
+  //   enabled for the broker; nothing is bound to the key.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.
+  // - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its
+  //   address automatically; follow it with GetQuickSwap or the same request.
+  // - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;
+  //   retry the same request.
+  // - UNAUTHENTICATED: missing or invalid broker API key.
+  rpc CreateQuickSwap(CreateQuickSwapRequest) returns (CreateQuickSwapResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create QuickSwap"
+      description: "Create or return the QuickSwap and deposit address for an idempotency key."
+      tags: "QuickSwap"
+      security: {
+        additional_properties: {
+          name: "BrokerApiKeyAuth"
+          value: {}
+        }
+      }
+    };
+  }
+
+  // GetQuickSwap returns the current state of one QuickSwap by swap_id or by
+  // idempotency key.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed selector.
+  // - NOT_FOUND: SWAP_NOT_FOUND.
+  // - UNAUTHENTICATED: missing or invalid broker API key.
+  rpc GetQuickSwap(GetQuickSwapRequest) returns (GetQuickSwapResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get QuickSwap"
+      description: "Get one QuickSwap by identifier or by idempotency key."
+      tags: "QuickSwap"
+      security: {
+        additional_properties: {
+          name: "BrokerApiKeyAuth"
+          value: {}
+        }
+      }
+    };
+  }
+}

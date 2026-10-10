@@ -347,7 +347,7 @@
             "name": "executed_qty_scaled",
             "jsonName": "executedQtyScaled",
             "number": 5,
-            "doc": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed,\n including when the parent completed because all children were canceled.",
+            "doc": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed.\n The total is kept when the ladder ends, whether it is completed, canceled\n or failed.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -835,7 +835,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 16,
-            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap.",
+            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -1276,7 +1276,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 5,
-            "doc": "Maximum slippage in basis points (1 bp = 0.01%).",
+            "doc": "Maximum slippage in basis points (1 bp = 0.01%). A trailing stop that\n sells accepts values below 10000; a 100% cap would leave it no positive\n price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -1563,6 +1563,11 @@
             "doc": "The parent order ended without a fill, so its attached trigger was canceled."
           },
           {
+            "name": "TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION",
+            "number": 4,
+            "doc": "Self-trade prevention canceled the trigger's child orders. For a ladder,\n no child order was canceled by the user, and the first child order to be\n canceled was canceled by self-trade prevention."
+          },
+          {
             "name": "TRIGGER_CANCEL_REASON_MISSING_REASON_CODE",
             "number": 998,
             "doc": "The terminal state did not contain a cancellation reason."
@@ -1687,6 +1692,23 @@
             "doc": "Why an admitted trigger failed.",
             "protoRef": "triggers.v1.TriggerFailureReason",
             "oneof": "terminal_reason"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerEventBatch",
+      "kind": "message",
+      "doc": "TriggerEventBatch is one realtime publication on an account's trigger event\n stream: every event queued for the stream when it was sent, at most 256 and\n at most 64 KiB. Events of one trading symbol arrive in the order they\n happened; events of different symbols have no defined order relative to each\n other.\n\n (trigger_id, event_type, child_seq, ts_ns) identifies an event. Apply events\n in array order and in publication order; an event whose identity was\n already received replaces the earlier copy. When the subscription reports\n that missed publications could not be recovered, reload recent events over\n REST.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Trigger events, oldest first per trading symbol. At least one event.",
+            "repeated": true,
+            "protoRef": "triggers.v1.TriggerEvent"
           }
         ]
       }
@@ -2009,7 +2031,7 @@
             "name": "client_trigger_id",
             "jsonName": "clientTriggerId",
             "number": 5,
-            "doc": "Client-provided trigger ID for idempotency.",
+            "doc": "Client-provided trigger ID for idempotency. Retrying an accepted create\n with the identical intent returns the same trigger. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2170,12 +2192,12 @@
           {
             "name": "STATUS_COMPLETED",
             "number": 4,
-            "doc": "Trigger completed successfully (all child orders placed/filled)."
+            "doc": "Trigger completed successfully. A ladder completes only when every child\n order filled; a ladder whose child orders were canceled or rejected ends\n canceled or failed instead."
           },
           {
             "name": "STATUS_CANCELED",
             "number": 5,
-            "doc": "Trigger was canceled by user."
+            "doc": "Trigger was canceled. The cancel reason states why, for example a user\n request, a linked one-cancels-the-other trigger, self-trade prevention, or,\n for a ladder, the cancellation of its child orders."
           },
           {
             "name": "STATUS_FAILED",

@@ -616,7 +616,7 @@
             "name": "old_order_id",
             "jsonName": "oldOrderId",
             "number": 3,
-            "doc": "Original order targeted by the replacement.",
+            "doc": "Original order targeted by the replacement: the requested order ID, or the\n order the requested client order ID names. Rejected items keep it too. Unset\n only when the requested client order ID names no order.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -625,7 +625,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "doc": "Assigned successor order ID. Unset for cancel-only outcomes and rejected items.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1274,7 +1274,7 @@
             "name": "matched_orders",
             "jsonName": "matchedOrders",
             "number": 2,
-            "doc": "Number of orders that matched the filter.",
+            "doc": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress.\n Orders placed after acceptance are not counted. Unless `dry_run` is set,\n equals `submitted_cancels` plus `failed_cancels`.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1283,7 +1283,7 @@
             "name": "submitted_cancels",
             "jsonName": "submittedCancels",
             "number": 3,
-            "doc": "Number of cancel requests submitted for processing.",
+            "doc": "Number of matched orders submitted for cancellation, including orders\n whose cancellation was already in progress. Each moves to `CANCELED`\n asynchronously after the response. Zero when `dry_run` is set.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1292,7 +1292,7 @@
             "name": "failed_cancels",
             "jsonName": "failedCancels",
             "number": 4,
-            "doc": "Number of cancels that could not be submitted (already canceled, etc.).",
+            "doc": "Number of matched orders that could not be submitted for cancellation\n because the cancel-all could not be recorded for their symbol. This\n request does not cancel them; send a new cancel-all with a new\n `request_id` if they are still open. Zero when `dry_run` is set.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1606,7 +1606,7 @@
           {
             "name": "ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID",
             "number": 9,
-            "doc": "Client order ID is already in use for a different active order."
+            "doc": "Client order ID is already in use on this account, by an open order or by\n an order that ended recently; an ended order keeps its client order ID\n reserved for at least 15 minutes. Reuse returns this code even with the\n same payload. Use GetOrder to reconcile, then retry with a new client\n order ID."
           },
           {
             "name": "ERROR_CODE_UNAVAILABLE",
@@ -1861,12 +1861,12 @@
           {
             "name": "ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID",
             "number": 47,
-            "doc": "Duplicate client trigger ID was reused with a different trigger payload."
+            "doc": "Client trigger ID is already used, either by a trigger with a different\n payload or by an earlier create that failed or was rolled back. List\n triggers to reconcile by client trigger ID, then retry with a new client\n trigger ID."
           },
           {
             "name": "ERROR_CODE_MAX_SLIPPAGE_INVALID",
             "number": 48,
-            "doc": "Trailing-stop max slippage (ticks or bps) is invalid."
+            "doc": "Max slippage (ticks or bps) is out of range or leaves no valid execution\n price bound. Applies to market orders and to standalone and attached\n trailing stops, on create and on modify; for example, a 10000 bps cap on a\n market order or trailing stop that sells."
           },
           {
             "name": "ERROR_CODE_STALE_QUOTE",
@@ -2408,7 +2408,7 @@
             "name": "next_page_token",
             "jsonName": "nextPageToken",
             "number": 2,
-            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "doc": "Opaque cursor for the next page. A page may hold fewer orders than\n requested, or none; continue while this token is non-empty. Empty when no\n more results exist.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -4465,7 +4465,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 7,
-            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop\n that sells, which is the case when the parent order buys, accepts values\n below 10000; a 100% cap would leave it no positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -4647,6 +4647,23 @@
             "number": 17,
             "doc": "Logical-order identity and the generation that executed this fill.\n Always populated by execution reads; order_id retains its original identity.",
             "protoRef": "orders.v1.OrderLineage"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.UserTradeBatch",
+      "kind": "message",
+      "doc": "UserTradeBatch is one realtime publication on an account's trade stream:\n every fill queued for the stream when it was sent, at most 256 and at most\n 64 KiB. Fills of one trading symbol arrive in execution order; fills of\n different symbols have no defined order relative to each other.\n\n (match_id, order_id) identifies a fill; order_id tells apart the two fills\n of a trade between two orders of the same account. Apply fills in array\n order and in publication order; a fill whose identity was already received\n replaces the earlier copy. When the subscription reports that missed\n publications could not be recovered, reload recent fills over REST.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Fills, oldest first per trading symbol. At least one fill.",
+            "repeated": true,
+            "protoRef": "orders.v1.UserTrade"
           }
         ]
       }

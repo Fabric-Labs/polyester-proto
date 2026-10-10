@@ -8497,6 +8497,8 @@
               "XRP_WITHDRAWAL_DESTINATION_TAG_INVALID",
               "WITHDRAWAL_LIQUIDITY_INSUFFICIENT",
               "COMPLIANCE_HIGH_RISK_ADDRESS",
+              "COMPLIANCE_ADDRESS_BLOCKED",
+              "COMPLIANCE_ADDRESS_RETURN",
               "REQUEST_VERIFICATION_REJECTED",
               "REJECTED",
               "ERROR_UNMAPPED",
@@ -11614,6 +11616,11 @@
             "description": "Product reason for this transfer.",
             "title": "transfer_code"
           },
+          "transferId": {
+            "description": "Stable transfer identifier, an unsigned 128-bit integer as a decimal\n string. Both legs of a transfer share it; with account_code and is_debit\n it identifies this row.",
+            "title": "transfer_id",
+            "type": "string"
+          },
           "tsUs": {
             "description": "Transfer timestamp in microseconds since epoch (UTC).",
             "format": "int64",
@@ -13914,7 +13921,7 @@
             "type": "integer"
           },
           "oldOrderId": {
-            "description": "Original order targeted by the replacement.",
+            "description": "Original order targeted by the replacement: the requested order ID, or the\n order the requested client order ID names. Rejected items keep it too. Unset\n only when the requested client order ID names no order.",
             "format": "int64",
             "title": "old_order_id",
             "type": [
@@ -13923,7 +13930,7 @@
             ]
           },
           "replacementOrderId": {
-            "description": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "description": "Assigned successor order ID. Unset for cancel-only outcomes and rejected items.",
             "format": "int64",
             "title": "replacement_order_id",
             "type": [
@@ -14358,12 +14365,12 @@
         "description": "CancelAllOrdersResponse returns the result of a cancel-all operation.",
         "properties": {
           "failedCancels": {
-            "description": "Number of cancels that could not be submitted (already canceled, etc.).",
+            "description": "Number of matched orders that could not be submitted for cancellation\n because the cancel-all could not be recorded for their symbol. This\n request does not cancel them; send a new cancel-all with a new\n `request_id` if they are still open. Zero when `dry_run` is set.",
             "title": "failed_cancels",
             "type": "integer"
           },
           "matchedOrders": {
-            "description": "Number of orders that matched the filter.",
+            "description": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress.\n Orders placed after acceptance are not counted. Unless `dry_run` is set,\n equals `submitted_cancels` plus `failed_cancels`.",
             "title": "matched_orders",
             "type": "integer"
           },
@@ -14373,7 +14380,7 @@
             "title": "status"
           },
           "submittedCancels": {
-            "description": "Number of cancel requests submitted for processing.",
+            "description": "Number of matched orders submitted for cancellation, including orders\n whose cancellation was already in progress. Each moves to `CANCELED`\n asynchronously after the response. Zero when `dry_run` is set.",
             "title": "submitted_cancels",
             "type": "integer"
           },
@@ -15073,7 +15080,7 @@
         "description": "GetOrderHistoryResponse returns historical orders and an optional next-page cursor.",
         "properties": {
           "nextPageToken": {
-            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "description": "Opaque cursor for the next page. A page may hold fewer orders than\n requested, or none; continue while this token is non-empty. Empty when no\n more results exist.",
             "maxLength": 512,
             "title": "next_page_token",
             "type": "string"
@@ -16573,7 +16580,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+                    "description": "Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop\n that sells, which is the case when the parent order buys, accepts values\n below 10000; a 100% cap would leave it no positive price to sell at.",
                     "exclusiveMinimum": 0,
                     "format": "int32",
                     "maximum": 10000,
@@ -18231,6 +18238,1002 @@
         "title": "SetMyRewardDestinationResponse",
         "type": "object"
       },
+      "swap.quickswap.v1.AffiliateShare": {
+        "additionalProperties": false,
+        "description": "AffiliateShare pays one affiliate a fraction of the broker's integrator fee.\n The broker keeps whatever the shares leave.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the affiliate's account, credited with the share. It\n must not be the broker's own payout account.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "sharePpm": {
+            "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "title": "share_ppm",
+            "type": "integer"
+          }
+        },
+        "title": "AffiliateShare",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateQuickSwapRequest": {
+        "additionalProperties": false,
+        "description": "CreateQuickSwapRequest creates, or returns, the QuickSwap for one\n idempotency key.\ncreate_quickswap_request.refund_target // refund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address\n",
+        "properties": {
+          "affiliates": {
+            "description": "Optional affiliates paid from the broker's integrator fee: at most four\n distinct accounts whose shares total at most 1000000 ppm. Empty means the\n broker keeps the whole integrator fee. The quote shows the total fee only.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
+            },
+            "maxItems": 4,
+            "title": "affiliates",
+            "type": "array"
+          },
+          "destinationAddress": {
+            "description": "Recipient of the swap output on the destination network, in its native\n text form without memo.\nstring.max_bytes = 256\nstring.min_bytes = 1\n",
+            "title": "destination_address",
+            "type": "string"
+          },
+          "destinationMemo": {
+            "description": "Destination tag or memo for destination_address. Required when the\n destination network needs one; must be empty otherwise.\nstring.max_bytes = 128\n",
+            "title": "destination_memo",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits,\n '.', '_', ':' or '-'. Scoped to the authenticated broker and retained\n permanently. The same key with the same request returns the same QuickSwap\n and deposit address; with a different request it fails with\n IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and\n memo is put in its network's canonical form, so the same address in\n another case or encoding is the same request; affiliate order is\n ignored; every other field must be equal.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "refundAddress": {
+            "description": "Recipient of refunded intermediate asset on the refund route's network,\n in its native text form without memo.\nstring.max_bytes = 256\n",
+            "title": "refund_address",
+            "type": "string"
+          },
+          "refundMemo": {
+            "description": "Destination tag or memo for refund_address. Required when the refund\n network needs one; must be empty otherwise.\nstring.max_bytes = 128\n",
+            "title": "refund_memo",
+            "type": "string"
+          },
+          "refundZippedAssetId": {
+            "description": "Refund route for the intermediate asset of a two-leg route: an\n AssetChainVariant.zipped_asset_id of the asset whose AssetConfig.ledger_id\n is the quote's intermediate_asset_id in GET\n /v1/chain/deposit-withdraw/config, for example USDT on Ethereum. Required\n with refund_address when the route has an intermediate asset; optional\n and unused otherwise.",
+            "title": "refund_zipped_asset_id",
+            "type": "integer"
+          },
+          "returnAddress": {
+            "description": "Recipient of returned source funds on the source network, in its native\n text form without memo. Deposits that are not accepted, and source funds\n that are not traded, go here; never to an observed sender.\nstring.max_bytes = 256\nstring.min_bytes = 1\n",
+            "title": "return_address",
+            "type": "string"
+          },
+          "returnMemo": {
+            "description": "Destination tag or memo for return_address. Required when the source\n network needs one; must be empty otherwise.\nstring.max_bytes = 128\n",
+            "title": "return_memo",
+            "type": "string"
+          },
+          "sourceWallet": {
+            "description": "Optional source wallet the end user will deposit from, for brokers that\n know it in advance. It must be a valid address on the source network and\n is shown on the QuickSwap.\nstring.max_bytes = 256\n",
+            "title": "source_wallet",
+            "type": "string"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapTerms",
+            "description": "Economic terms.",
+            "title": "terms"
+          }
+        },
+        "required": [
+          "terms"
+        ],
+        "title": "CreateQuickSwapRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateQuickSwapResponse": {
+        "additionalProperties": false,
+        "description": "CreateQuickSwapResponse returns the QuickSwap bound to the idempotency key.",
+        "properties": {
+          "quickSwap": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwap",
+            "description": "The QuickSwap, normally AWAITING_DEPOSIT with deposit_instructions. A\n retry returns its current state with the original quote and address.",
+            "title": "quick_swap"
+          }
+        },
+        "title": "CreateQuickSwapResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Deposit": {
+        "additionalProperties": false,
+        "description": "Deposit is one deposit detected on the QuickSwap's deposit address.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Received amount, before the deposit network fee, in zipped_asset_id's\n token units; unset while zipped_asset_id is zero.",
+            "title": "amount"
+          },
+          "confirmations": {
+            "description": "Current source-network confirmations; zero until the source network\n reports any. Never decreases.",
+            "title": "confirmations",
+            "type": "integer"
+          },
+          "creditedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the deposit was credited; unset until credited. Credit does not\n decide eligibility: a credited deposit can still be EVALUATING, and one\n then found ineligible, such as a late deposit, stays credited and is\n returned (RETURN_ONLY).",
+            "title": "credited_at"
+          },
+          "detectedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the deposit was first seen. Eligibility compares this time with\n funding_expires_at.",
+            "title": "detected_at"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.DepositDisposition",
+            "description": "What this deposit may do.",
+            "title": "disposition"
+          },
+          "flowId": {
+            "description": "Public, URL-safe lifecycle flow identifier of this deposit, usable with\n GET /v1/chain/flows/{flow_id}; empty until the flow exists. Lifecycle flow\n amounts are 18-decimal unified units (amount_e18), not token base units.",
+            "title": "flow_id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Zero-based position in detection order; stable for the QuickSwap's life.",
+            "title": "index",
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapReason",
+            "description": "Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY;\n REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review\n without a more specific reason.",
+            "title": "reason"
+          },
+          "requiredConfirmations": {
+            "description": "Source-network confirmations required before credit; zero until known.",
+            "title": "required_confirmations",
+            "type": "integer"
+          },
+          "txHash": {
+            "description": "Source-network transaction identifier in the network's native text form.",
+            "title": "tx_hash",
+            "type": "string"
+          },
+          "txOccurrenceIndex": {
+            "description": "Output or log index of the deposit within tx_hash; zero is valid.",
+            "format": "int64",
+            "title": "tx_occurrence_index",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "zippedAssetId": {
+            "description": "Asset and network actually received, as a zipped_asset_id. Zero until\n Polyester has identified the deposit's asset, shortly after detection,\n and when the asset is not a supported route.",
+            "title": "zipped_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "Deposit",
+        "type": "object"
+      },
+      "swap.quickswap.v1.DepositAddressState": {
+        "description": "DepositAddressState is the lifecycle state of a QuickSwap deposit address.",
+        "enum": [
+          "ADDRESS_UNSPECIFIED",
+          "ACTIVE",
+          "REFUND_MODE",
+          "RETIRED"
+        ],
+        "title": "DepositAddressState",
+        "type": "string"
+      },
+      "swap.quickswap.v1.DepositDisposition": {
+        "description": "DepositDisposition is what a detected deposit is allowed to do.",
+        "enum": [
+          "DISPOSITION_UNSPECIFIED",
+          "EVALUATING",
+          "ELIGIBLE",
+          "RETURN_ONLY",
+          "ON_HOLD",
+          "MANUAL_RECOVERY"
+        ],
+        "title": "DepositDisposition",
+        "type": "string"
+      },
+      "swap.quickswap.v1.DepositInstructions": {
+        "additionalProperties": false,
+        "description": "DepositInstructions tell the end user where and until when to deposit.",
+        "properties": {
+          "address": {
+            "description": "Deposit address in the source network's native text form, without memo.",
+            "title": "address",
+            "type": "string"
+          },
+          "addressRetiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "After this time the deposit address is retired and funds sent to it may\n not be recoverable. For an unfunded address it equals funding_expires_at.\n After a deposit is accepted it is provisional, a lower bound, until\n Polyester releases the deposit address, which can be shortly after the\n QuickSwap becomes terminal; from then on it is at least 7 days after all\n payouts finish. It only moves later, never earlier, and never before\n funding_expires_at.",
+            "title": "address_retires_at"
+          },
+          "addressState": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.DepositAddressState",
+            "description": "Current lifecycle state of the address.",
+            "title": "address_state"
+          },
+          "fundingExpiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the funding window, fixed when the address is issued (currently 7\n days after issued_at). A deposit can execute only if Polyester detects it\n before this time; detection time counts, not block time, and\n confirmations may finish later. A deposit detected at or after this time,\n even one broadcast earlier, is returned to return_address. Send deposits\n well before this time. Never changes.",
+            "title": "funding_expires_at"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the address was issued to this QuickSwap; the funding window starts\n here. After ADDRESS_UNAVAILABLE it can be long after created_at.",
+            "title": "issued_at"
+          },
+          "memo": {
+            "description": "Destination tag or memo the deposit must carry; empty when the source\n network uses none. A deposit without it cannot be attributed.",
+            "title": "memo",
+            "type": "string"
+          },
+          "minNativeGasLimit": {
+            "description": "A native-coin deposit (for example ETH) needs at least this gas limit, in\n gas units; a plain 21000-gas transfer is not enough and fails without\n depositing. Unused gas is refunded, so a higher limit is safe. Zero for\n token deposits and non-EVM networks.",
+            "format": "int64",
+            "title": "min_native_gas_limit",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "zippedAssetId": {
+            "description": "Asset and network to deposit; equal to terms.source_zipped_asset_id.",
+            "title": "zipped_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "DepositInstructions",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Execution": {
+        "additionalProperties": false,
+        "description": "Execution selects how the credited deposit is traded.",
+        "oneOf": [
+          {
+            "properties": {
+              "market": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.MarketExecution",
+                "description": "Execute immediately.",
+                "title": "market"
+              }
+            },
+            "required": [
+              "market"
+            ],
+            "title": "market"
+          },
+          {
+            "properties": {
+              "twap": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.TwapExecution",
+                "description": "Execute in equal time slices.",
+                "title": "twap"
+              }
+            },
+            "required": [
+              "twap"
+            ],
+            "title": "twap"
+          }
+        ],
+        "title": "Execution",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ExecutionProgress": {
+        "additionalProperties": false,
+        "description": "ExecutionProgress is the trading progress of a QuickSwap.",
+        "properties": {
+          "completedSlices": {
+            "description": "Completed slices: a market execution's one slice completes when\n execution finishes. Zero for a bridge.",
+            "title": "completed_slices",
+            "type": "integer"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Execution deadline: started_at plus the TWAP duration, or plus the market\n execution window. Funds not converted by then are refunded or returned.\n Independent of the quote validity and the funding window. Unset until\n the execution is planned, and for a bridge, which trades nothing.",
+            "title": "deadline"
+          },
+          "executedInput": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Source amount traded so far, in source token units. On a two-leg route\n this counts the first leg. Zero for a bridge, which trades nothing.",
+            "title": "executed_input"
+          },
+          "finishedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When execution finished; unset while executing.",
+            "title": "finished_at"
+          },
+          "inputAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Credited amount committed to execution, in source token units.",
+            "title": "input_amount"
+          },
+          "intermediateRemainder": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "On a two-leg route, intermediate asset acquired but not yet converted, in\n the refund route's token units; unset for a direct route and a bridge.",
+            "title": "intermediate_remainder"
+          },
+          "outputAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Destination amount acquired so far after service and integrator fees and\n before withdrawal network fees, in destination token units. Zero for a\n bridge: its destination withdrawal pays the credit less its fees.",
+            "title": "output_amount"
+          },
+          "startedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When execution started.",
+            "title": "started_at"
+          },
+          "totalSlices": {
+            "description": "Planned slices: a market execution has one once it is planned. Zero\n until then, and for a bridge, which trades nothing.",
+            "title": "total_slices",
+            "type": "integer"
+          }
+        },
+        "title": "ExecutionProgress",
+        "type": "object"
+      },
+      "swap.quickswap.v1.FeeKind": {
+        "description": "FeeKind identifies one component of the quoted fees.",
+        "enum": [
+          "FEE_UNSPECIFIED",
+          "SERVICE",
+          "INTEGRATOR",
+          "DEPOSIT_NETWORK",
+          "WITHDRAWAL_NETWORK"
+        ],
+        "title": "FeeKind",
+        "type": "string"
+      },
+      "swap.quickswap.v1.GetQuickSwapRequest": {
+        "additionalProperties": false,
+        "description": "GetQuickSwapRequest selects one of the broker's QuickSwaps.",
+        "oneOf": [
+          {
+            "properties": {
+              "idempotencyKey": {
+                "description": "Idempotency key used to create it; resolves a QuickSwap whose create\n outcome was unknown.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "title": "idempotency_key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "idempotencyKey"
+            ],
+            "title": "idempotency_key"
+          },
+          {
+            "properties": {
+              "swapId": {
+                "description": "Public QuickSwap identifier.",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "title": "swap_id",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "swapId"
+            ],
+            "title": "swap_id"
+          }
+        ],
+        "title": "GetQuickSwapRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetQuickSwapResponse": {
+        "additionalProperties": false,
+        "description": "GetQuickSwapResponse returns one QuickSwap.",
+        "properties": {
+          "quickSwap": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwap",
+            "description": "Current state.",
+            "title": "quick_swap"
+          }
+        },
+        "title": "GetQuickSwapResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.MarketExecution": {
+        "additionalProperties": false,
+        "description": "MarketExecution executes the credited deposit as soon as possible, in one or\n more immediate orders, within the service's market execution window.",
+        "title": "MarketExecution",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Protection": {
+        "additionalProperties": false,
+        "description": "Protection bounds the worst execution the end user accepts. It is fixed when\n the QuickSwap is created and is enforced on every execution, however long\n after the quote the deposit arrives.",
+        "oneOf": [
+          {
+            "properties": {
+              "maxSlippageBps": {
+                "description": "Maximum shortfall from the quoted expected output in basis points\n (1 bp = 0.01%), from 1 to 1000. Converted at creation into the quote's\n min_amount_out and min_rate.",
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "max_slippage_bps",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "maxSlippageBps"
+            ],
+            "title": "max_slippage_bps"
+          },
+          {
+            "properties": {
+              "minAmountOut": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+                "description": "Positive minimum destination amount after fees for the quoted deposit\n amount, in destination token units. Converted at creation into the\n quote's min_rate.\nprotection.min_amount_out.positive // min_amount_out must be positive\n",
+                "title": "min_amount_out"
+              }
+            },
+            "required": [
+              "minAmountOut"
+            ],
+            "title": "min_amount_out"
+          }
+        ],
+        "title": "Protection",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuickSwap": {
+        "additionalProperties": false,
+        "description": "QuickSwap is one broker-owned swap of an external deposit into external\n withdrawals. The end user needs no account.",
+        "properties": {
+          "affiliates": {
+            "description": "Affiliate shares of the broker fee, as requested.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
+            },
+            "title": "affiliates",
+            "type": "array"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the QuickSwap was created.",
+            "title": "created_at"
+          },
+          "depositInstructions": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.DepositInstructions",
+            "description": "Where and until when to deposit; absent while ALLOCATING.",
+            "title": "deposit_instructions"
+          },
+          "deposits": {
+            "description": "Detected deposits, oldest first, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Deposit"
+            },
+            "title": "deposits",
+            "type": "array"
+          },
+          "depositsTruncated": {
+            "description": "True when more than 50 deposits were detected; only the first 50 are\n listed.",
+            "title": "deposits_truncated",
+            "type": "boolean"
+          },
+          "destinationAddress": {
+            "description": "Recipient of the swap output on the destination network. Addresses and\n memos are in their network's canonical form (for example lowercase EVM\n hex), which can differ in case or encoding from the create request; that\n form is the one paid.",
+            "title": "destination_address",
+            "type": "string"
+          },
+          "destinationMemo": {
+            "description": "Destination tag or memo for destination_address; empty when none.",
+            "title": "destination_memo",
+            "type": "string"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.ExecutionProgress",
+            "description": "Execution progress; absent before execution starts.",
+            "title": "execution"
+          },
+          "feeScheduleVersion": {
+            "description": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service and integrator fees,\n whatever later versions change.",
+            "format": "int64",
+            "title": "fee_schedule_version",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "idempotencyKey": {
+            "description": "The broker's idempotency key that created this QuickSwap.",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "isTerminal": {
+            "description": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows. Read it again if the end\n user reports such a deposit or needs the final retirement time.",
+            "title": "is_terminal",
+            "type": "boolean"
+          },
+          "quote": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapQuote",
+            "description": "Quote and protection fixed at creation. Not refreshed on retries.",
+            "title": "quote"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapReason",
+            "description": "Why the status is notable (held, returning, delayed, terminal without\n destination output); REASON_UNSPECIFIED otherwise. When a payout\n completes but a refund or return was NOT_SENT, the status follows the\n paid withdrawals (for example COMPLETED) and the reason is\n REFUND_BELOW_MINIMUM. A FAILED withdrawal takes precedence: the status is\n HELD and the reason WITHDRAWAL_FAILED.",
+            "title": "reason"
+          },
+          "refundAddress": {
+            "description": "Recipient of refunded intermediate asset; empty when none was supplied.",
+            "title": "refund_address",
+            "type": "string"
+          },
+          "refundMemo": {
+            "description": "Destination tag or memo for refund_address; empty when none.",
+            "title": "refund_memo",
+            "type": "string"
+          },
+          "refundZippedAssetId": {
+            "description": "Refund route (asset and network) of the intermediate asset; zero when\n none was supplied.",
+            "title": "refund_zipped_asset_id",
+            "type": "integer"
+          },
+          "returnAddress": {
+            "description": "Recipient of returned source funds on the source network.",
+            "title": "return_address",
+            "type": "string"
+          },
+          "returnMemo": {
+            "description": "Destination tag or memo for return_address; empty when none.",
+            "title": "return_memo",
+            "type": "string"
+          },
+          "screening": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Screening",
+            "description": "Risk screening.",
+            "title": "screening"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapStatus",
+            "description": "Current status.",
+            "title": "status"
+          },
+          "swapId": {
+            "description": "Public QuickSwap identifier.",
+            "format": "int64",
+            "title": "swap_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "terminalAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When status became terminal; unset while not terminal.",
+            "title": "terminal_at"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapTerms",
+            "description": "Accepted economic terms.",
+            "title": "terms"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the QuickSwap last changed.",
+            "title": "updated_at"
+          },
+          "version": {
+            "description": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued\n (AWAITING_DEPOSIT); every later change increments it.",
+            "format": "int64",
+            "title": "version",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "withdrawals": {
+            "description": "Withdrawals, oldest first, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Withdrawal"
+            },
+            "title": "withdrawals",
+            "type": "array"
+          },
+          "withdrawalsTruncated": {
+            "description": "True when more than 50 withdrawals exist; only the first 50 are listed.",
+            "title": "withdrawals_truncated",
+            "type": "boolean"
+          }
+        },
+        "title": "QuickSwap",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuickSwapQuote": {
+        "additionalProperties": false,
+        "description": "QuickSwapQuote is the priced view of a QuickSwap's terms. Price fields are\n estimates at quoted_at; only the protection fields are guarantees.\n\n The end user may deposit any amount from min_deposit_amount to\n max_deposit_amount. min_amount_out applies only to a deposit of exactly\n deposit_amount that fully converts; for any other deposit the guarantee is\n min_rate on the converted part.\n\n The credit is the deposit less the deposit network fee. Every amount below\n is in token units of its route.",
+        "properties": {
+          "depositAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Source amount the quote was computed for, in source token units. Equals\n the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
+            "title": "deposit_amount"
+          },
+          "expectedAmountOut": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Expected destination amount for deposit_amount at quoted_at, after\n trading fees and both quoted network fees, in destination token units. An\n estimate, not a guarantee.",
+            "title": "expected_amount_out"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the short quote validity, typically seconds to minutes after\n quoted_at. Display the quote until expires_at. CreateQuickSwap prices the\n terms again and never fails because a quote expired. After it the price\n fields are stale; the protection of a created QuickSwap still applies.\n Independent of the funding window and the execution deadline.",
+            "title": "expires_at"
+          },
+          "fees": {
+            "description": "Quoted fee components for deposit_amount: service and integrator fees in\n route order (a bridge has one pair, charged at payout), then network fees.\n Zero fees are omitted.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.QuoteFee"
+            },
+            "title": "fees",
+            "type": "array"
+          },
+          "intermediateAssetId": {
+            "description": "Unified asset ID of the intermediate asset of a two-leg route (for\n example USDT for BTC to SOL): the AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config. Zero for a direct route or a\n bridge. When non-zero, CreateQuickSwap requires a refund address for that\n asset. The route is fixed at creation.",
+            "title": "intermediate_asset_id",
+            "type": "integer"
+          },
+          "maxDepositAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Largest deposit that is eligible to execute, in source token units,\n compared with the deposit before its network fee. Fixed when the\n QuickSwap is created. A larger deposit is returned to return_address\n (DEPOSIT_ABOVE_MAXIMUM). Unset for a bridge, whose deposit no order book\n bounds.",
+            "title": "max_deposit_amount"
+          },
+          "minAmountOut": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Guaranteed minimum delivered amount, in destination token units, at the\n quoted network fees, for a deposit of exactly deposit_amount that fully\n converts to the destination asset. For any other deposit, and for a\n deposit only partly converted, the guarantee is min_rate on the converted\n part.",
+            "title": "min_amount_out"
+          },
+          "minDepositAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is held\n (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
+            "title": "min_deposit_amount"
+          },
+          "minRate": {
+            "description": "Guaranteed minimum execution rate: destination display units per source\n display unit, as a decimal string with at most 18 fractional digits,\n rounded up when quoted. Guarantee: for the source amount converted all the\n way to the destination asset, the destination output before the\n withdrawal network fee is at least that amount \u00d7 min_rate, rounded down to\n destination token units. On a two-leg route, the source amount converted\n is the first leg's input in proportion to the intermediate funds the\n second leg converted. Source that is not traded is returned to\n return_address, and intermediate funds that the second leg does not\n convert are refunded in the intermediate asset to refund_address; those\n parts are outside the destination guarantee. The amount delivered is the\n output less the actual withdrawal network fee, which can differ from the\n quote.",
+            "title": "min_rate",
+            "type": "string"
+          },
+          "quotedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the quote was priced.",
+            "title": "quoted_at"
+          }
+        },
+        "title": "QuickSwapQuote",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuickSwapReason": {
+        "description": "QuickSwapReason explains a notable status or deposit disposition.",
+        "enum": [
+          "REASON_UNSPECIFIED",
+          "SOURCE_SCREENING_FAILED",
+          "CAPACITY_UNAVAILABLE",
+          "PROTECTION_NOT_MET",
+          "EXECUTION_DEADLINE_REACHED",
+          "LATE_DEPOSIT",
+          "DEPOSIT_BELOW_MINIMUM",
+          "DEPOSIT_ABOVE_MAXIMUM",
+          "WRONG_ASSET",
+          "FUNDING_WINDOW_ENDED",
+          "WITHDRAWAL_FAILED",
+          "OUTCOME_RECONCILING",
+          "SOURCE_SCREENING_BLOCKED",
+          "REFUND_BELOW_MINIMUM"
+        ],
+        "title": "QuickSwapReason",
+        "type": "string"
+      },
+      "swap.quickswap.v1.QuickSwapStatus": {
+        "description": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING \u2192 AWAITING_DEPOSIT \u2192 (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) \u2192 CREDITED \u2192 EXECUTING (skipped for a\n bridge) \u2192 PAYING_OUT | REFUNDING | RETURNING \u2192 a terminal status. HELD can\n be entered from any non-terminal status and is not terminal. The terminal\n statuses are COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status\n never changes. Accept status values added later; is_terminal is\n authoritative.",
+        "enum": [
+          "STATUS_UNSPECIFIED",
+          "ALLOCATING",
+          "AWAITING_DEPOSIT",
+          "WAITING_FOR_CAPACITY",
+          "PREPARING_DEPOSIT",
+          "CONFIRMING",
+          "CREDITED",
+          "EXECUTING",
+          "PAYING_OUT",
+          "REFUNDING",
+          "RETURNING",
+          "HELD",
+          "COMPLETED",
+          "REFUNDED",
+          "RETURNED",
+          "EXPIRED"
+        ],
+        "title": "QuickSwapStatus",
+        "type": "string"
+      },
+      "swap.quickswap.v1.QuickSwapTerms": {
+        "additionalProperties": false,
+        "description": "QuickSwapTerms are the economic terms of one QuickSwap. The same terms are\n used to quote and to create, and are echoed unchanged on the QuickSwap.\n Source and destination are either two assets, which are traded, or one asset\n on two networks, a bridge: the deposit is credited and withdrawn to the\n destination network without a trade. Any two zipped_asset_ids from the\n config may be quoted; QuoteQuickSwap is authoritative for whether the route\n is offered.\nquickswap_terms.distinct_assets // source and destination must differ\n",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Positive amount in the token units of the route selected by basis: source\n route for SOURCE_AMOUNT, destination route for DESTINATION_AMOUNT.\nquickswap_terms.amount.positive // amount must be positive\n",
+            "title": "amount"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuoteBasis",
+            "description": "Side of the swap that amount denominates.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "basis"
+          },
+          "destinationZippedAssetId": {
+            "description": "Destination asset and network: an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config. The end user receives this asset on\n this network.",
+            "exclusiveMinimum": 0,
+            "title": "destination_zipped_asset_id",
+            "type": "integer"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Execution",
+            "description": "Market or TWAP execution. A bridge trades nothing and takes market only;\n TWAP on a bridge is ROUTE_UNSUPPORTED.",
+            "title": "execution"
+          },
+          "protection": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Protection",
+            "description": "Worst execution the end user accepts.",
+            "title": "protection"
+          },
+          "sourceZippedAssetId": {
+            "description": "Source asset and network: an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config. The end user deposits this asset on\n this network.",
+            "exclusiveMinimum": 0,
+            "title": "source_zipped_asset_id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amount",
+          "protection",
+          "execution"
+        ],
+        "title": "QuickSwapTerms",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuoteBasis": {
+        "description": "QuoteBasis states which side of the swap the request amount denominates.",
+        "enum": [
+          "BASIS_UNSPECIFIED",
+          "SOURCE_AMOUNT",
+          "DESTINATION_AMOUNT"
+        ],
+        "title": "QuoteBasis",
+        "type": "string"
+      },
+      "swap.quickswap.v1.QuoteFee": {
+        "additionalProperties": false,
+        "description": "QuoteFee is one fee component of a quote. Trading fees (SERVICE and\n INTEGRATOR) are charged when each leg settles, in the asset that leg\n receives: the base asset on a buy, the quote asset on a sell. A bridge has\n no settlement; its fees are charged at payout, in the destination asset.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Fee in zipped_asset_id's token units; for a fee charged in the\n intermediate asset, in the intermediate asset at its trading precision\n (amount.decimals). Trading fees are rounded up, so the charged fee never\n exceeds the quoted one.",
+            "title": "amount"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.FeeKind",
+            "description": "Fee component.",
+            "title": "kind"
+          },
+          "zippedAssetId": {
+            "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a\n trading fee of the first leg of a two-leg route, which is charged in the\n intermediate asset (intermediate_asset_id).",
+            "title": "zipped_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "QuoteFee",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuoteQuickSwapRequest": {
+        "additionalProperties": false,
+        "description": "QuoteQuickSwapRequest prices terms without reserving anything.",
+        "properties": {
+          "terms": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapTerms",
+            "description": "Terms to price.",
+            "title": "terms"
+          }
+        },
+        "required": [
+          "terms"
+        ],
+        "title": "QuoteQuickSwapRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuoteQuickSwapResponse": {
+        "additionalProperties": false,
+        "description": "QuoteQuickSwapResponse is an indicative quote.",
+        "properties": {
+          "quote": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapQuote",
+            "description": "Indicative quote, including whether the route needs a refund address.\n Creating a QuickSwap prices the terms again.",
+            "title": "quote"
+          }
+        },
+        "title": "QuoteQuickSwapResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Screening": {
+        "additionalProperties": false,
+        "description": "Screening is the risk screening of a QuickSwap. Deposits are screened on\n arrival; the outcome shows in the status, its reason and each deposit's\n disposition and reason.",
+        "properties": {
+          "sourceWallet": {
+            "description": "Source wallet supplied in the request; empty when none was supplied.\n Recorded and shown; not used to accept or reject a deposit.",
+            "title": "source_wallet",
+            "type": "string"
+          }
+        },
+        "title": "Screening",
+        "type": "object"
+      },
+      "swap.quickswap.v1.TokenAmount": {
+        "additionalProperties": false,
+        "description": "TokenAmount is an exact token amount in the token's smallest unit.",
+        "properties": {
+          "baseUnits": {
+            "description": "Unsigned integer amount in the token's smallest unit (for example\n satoshis or wei), as a decimal string without sign, exponent, separators or\n leading zeros; at most 78 digits.",
+            "pattern": "^(0|[1-9][0-9]{0,77})$",
+            "title": "base_units",
+            "type": "string"
+          },
+          "decimals": {
+            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in\n requests, where it must equal AssetChainVariant.source_decimals (the\n token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the\n asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the\n destination asset for a DESTINATION_AMOUNT amount and for\n Protection.min_amount_out.",
+            "maximum": 36,
+            "title": "decimals",
+            "type": "integer"
+          }
+        },
+        "title": "TokenAmount",
+        "type": "object"
+      },
+      "swap.quickswap.v1.TwapExecution": {
+        "additionalProperties": false,
+        "description": "TwapExecution spreads execution evenly over a duration.\ntwap_execution.interval_within_duration // slice_interval_ms must not exceed duration_ms\n",
+        "properties": {
+          "durationMs": {
+            "description": "Total execution duration in milliseconds, from 60000 (1 minute) to\n 86400000 (24 hours). The duration starts when execution starts, not when\n the QuickSwap is created.",
+            "format": "int64",
+            "maximum": 86400000,
+            "minimum": 60000,
+            "title": "duration_ms",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "sliceIntervalMs": {
+            "description": "Interval between slices in milliseconds, from 10000 (10 seconds) up to\n duration_ms. The slice count is duration_ms / slice_interval_ms, rounded\n up.",
+            "format": "int64",
+            "minimum": 10000,
+            "title": "slice_interval_ms",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "TwapExecution",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Withdrawal": {
+        "additionalProperties": false,
+        "description": "Withdrawal is one outgoing payment. A QuickSwap can end with several, for\n example a partial refund plus the destination payout; the best case is a\n single destination withdrawal.",
+        "properties": {
+          "address": {
+            "description": "Recipient address in the network's native text form.",
+            "title": "address",
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Amount delivered to address after the network fee, in zipped_asset_id's\n token units; set once FINALIZED. Like tx_hash, it is the amount recorded\n for this withdrawal and can be corrected for up to 24 hours after the\n QuickSwap ends (terminal_at).",
+            "title": "amount"
+          },
+          "depositIndex": {
+            "description": "Deposit whose funds this withdrawal moves.",
+            "title": "deposit_index",
+            "type": "integer"
+          },
+          "finalizedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the withdrawal became final; unset until FINALIZED.",
+            "title": "finalized_at"
+          },
+          "flowId": {
+            "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with\n GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is\n the authoritative, latest state of the transfer, including a correction\n made after tx_hash, amount and network_fee stop being updated. Lifecycle\n flow amounts are 18-decimal unified units (amount_e18), not token base\n units.",
+            "title": "flow_id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Zero-based position in the withdrawals list. Not stable: a withdrawal's\n position can change between reads, so do not use it as an identifier.",
+            "title": "index",
+            "type": "integer"
+          },
+          "memo": {
+            "description": "Recipient destination tag or memo; empty when the network uses none.",
+            "title": "memo",
+            "type": "string"
+          },
+          "networkFee": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Actual network fee withheld from this withdrawal, in the same units; set\n once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap\n ends, like amount.",
+            "title": "network_fee"
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.WithdrawalRole",
+            "description": "Why this withdrawal pays its recipient.",
+            "title": "role"
+          },
+          "state": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.WithdrawalState",
+            "description": "Withdrawal progress.",
+            "title": "state"
+          },
+          "submittedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the withdrawal was submitted; unset until submitted.",
+            "title": "submitted_at"
+          },
+          "txHash": {
+            "description": "Recipient-network transaction recorded for this withdrawal; empty until\n the transaction is committed on the recipient network. It can be\n corrected for up to 24 hours after the QuickSwap ends (terminal_at) and is\n not updated after that. For the authoritative, latest state of the\n transfer, read flow_id.",
+            "title": "tx_hash",
+            "type": "string"
+          },
+          "unsentAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Set only when state is NOT_SENT: the amount for which no withdrawal was\n made because it was below the withdrawal minimum of its asset and\n network. In zipped_asset_id's token units, rounded down to the token's\n smallest unit.",
+            "title": "unsent_amount"
+          },
+          "zippedAssetId": {
+            "description": "Asset and network paid, as a zipped_asset_id.",
+            "title": "zipped_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "Withdrawal",
+        "type": "object"
+      },
+      "swap.quickswap.v1.WithdrawalRole": {
+        "description": "WithdrawalRole is why a withdrawal pays its recipient.",
+        "enum": [
+          "ROLE_UNSPECIFIED",
+          "DESTINATION",
+          "REFUND",
+          "RETURN"
+        ],
+        "title": "WithdrawalRole",
+        "type": "string"
+      },
+      "swap.quickswap.v1.WithdrawalState": {
+        "description": "WithdrawalState is the progress of one withdrawal. FINALIZED and NOT_SENT\n are final: they never change. A FAILED withdrawal never changes either, but\n it does not end the QuickSwap: while any withdrawal is FAILED, the\n QuickSwap is HELD with reason WITHDRAWAL_FAILED and the funds stay\n attributed to it until support resolves it.",
+        "enum": [
+          "WITHDRAWAL_UNSPECIFIED",
+          "QUEUED",
+          "SUBMITTED",
+          "FINALIZED",
+          "FAILED",
+          "NOT_SENT"
+        ],
+        "title": "WithdrawalState",
+        "type": "string"
+      },
       "transfer.v1.CreateInternalTransferRequest": {
         "additionalProperties": false,
         "allOf": [
@@ -18694,7 +19697,7 @@
             "type": "integer"
           },
           "executedQtyScaled": {
-            "description": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed,\n including when the parent completed because all children were canceled.",
+            "description": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed.\n The total is kept when the ladder ends, whether it is completed, canceled\n or failed.",
             "format": "int64",
             "title": "executed_qty_scaled",
             "type": [
@@ -18953,7 +19956,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap.",
+                    "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
                     "format": "int32",
                     "maximum": 10000,
                     "minimum": 0,
@@ -19386,7 +20389,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Maximum slippage in basis points (1 bp = 0.01%).",
+                    "description": "Maximum slippage in basis points (1 bp = 0.01%). A trailing stop that\n sells accepts values below 10000; a 100% cap would leave it no positive\n price to sell at.",
                     "exclusiveMinimum": 0,
                     "format": "int32",
                     "maximum": 10000,
@@ -19738,6 +20741,7 @@
           "TRIGGER_CANCEL_REASON_USER_REQUEST",
           "TRIGGER_CANCEL_REASON_OCO",
           "TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL",
+          "TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION",
           "TRIGGER_CANCEL_REASON_MISSING_REASON_CODE",
           "TRIGGER_CANCEL_REASON_INTERNAL_ERROR"
         ],
@@ -19921,7 +20925,7 @@
           {
             "properties": {
               "clientTriggerId": {
-                "description": "Client-provided trigger ID for idempotency.",
+                "description": "Client-provided trigger ID for idempotency. Retrying an accepted create\n with the identical intent returns the same trigger. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.",
                 "minLength": 1,
                 "title": "client_trigger_id",
                 "type": "string"
@@ -20526,6 +21530,11 @@
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "BrokerApiKeyAuth": {
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. Polyester issues keys at broker onboarding; contact Polyester to obtain or rotate one.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -22691,6 +23700,246 @@
         "tags": [
           "Orders Service",
           "OrdersService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapService/CreateQuickSwap": {
+      "post": {
+        "description": "Create or return the QuickSwap and deposit address for an idempotency key.",
+        "operationId": "QuickSwapService_CreateQuickSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateQuickSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateQuickSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateQuickSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateQuickSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          }
+        ],
+        "summary": "Create QuickSwap",
+        "tags": [
+          "QuickSwap",
+          "QuickSwapService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapService/GetQuickSwap": {
+      "post": {
+        "description": "Get one QuickSwap by identifier or by idempotency key.",
+        "operationId": "QuickSwapService_GetQuickSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetQuickSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetQuickSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetQuickSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetQuickSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          }
+        ],
+        "summary": "Get QuickSwap",
+        "tags": [
+          "QuickSwap",
+          "QuickSwapService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapService/QuoteQuickSwap": {
+      "post": {
+        "description": "Price QuickSwap terms without reserving a deposit address.",
+        "operationId": "QuickSwapService_QuoteQuickSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.QuoteQuickSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.QuoteQuickSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.QuoteQuickSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.QuoteQuickSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          }
+        ],
+        "summary": "Quote QuickSwap",
+        "tags": [
+          "QuickSwap",
+          "QuickSwapService"
         ]
       }
     },
@@ -30144,7 +31393,7 @@
                       {
                         "properties": {
                           "maxSlippageBps": {
-                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap.",
+                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
                             "format": "int32",
                             "maximum": 10000,
                             "minimum": 0,
@@ -30283,7 +31532,7 @@
                       {
                         "properties": {
                           "maxSlippageBps": {
-                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap.",
+                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
                             "format": "int32",
                             "maximum": 10000,
                             "minimum": 0,
@@ -30966,6 +32215,14 @@
     {
       "description": "RewardCampaignService exposes published rewards to authenticated recipients.",
       "name": "RewardCampaignService"
+    },
+    {
+      "description": "Broker-only swaps of an external deposit into external withdrawals.",
+      "name": "QuickSwap"
+    },
+    {
+      "description": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. Polyester issues keys at\n broker onboarding; contact Polyester to obtain or rotate one.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 404 for NOT_FOUND, 409 for IDEMPOTENCY_CONFLICT, 413 when\n a request body is too large, 429 when the caller is rate limited, 500 for\n an internal error, 503 for UNAVAILABLE and 504 for DEADLINE_EXCEEDED.",
+      "name": "QuickSwapService"
     },
     {
       "description": "Authenticated Trading to Trading internal transfer intake.",
