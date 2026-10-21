@@ -3880,7 +3880,10 @@
           "READ_SPOT",
           "READ_INTERNAL_TRANSFERS",
           "READ_ADDRESS_BOOK",
-          "MANAGE_ADDRESS_BOOK"
+          "MANAGE_ADDRESS_BOOK",
+          "READ_AUTO_WITHDRAW",
+          "MANAGE_AUTO_WITHDRAW",
+          "SWAP"
         ],
         "title": "PolicyAction",
         "type": "string"
@@ -4856,7 +4859,10 @@
           "SUBACCOUNT_PERMISSION_CREATE_DEPOSIT_ADDRESS",
           "SUBACCOUNT_PERMISSION_READ_DEPOSIT_ADDRESSES",
           "SUBACCOUNT_PERMISSION_READ_GUARD_SIGNER_STATUS",
-          "SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER"
+          "SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER",
+          "SUBACCOUNT_PERMISSION_READ_AUTO_WITHDRAW",
+          "SUBACCOUNT_PERMISSION_MANAGE_AUTO_WITHDRAW",
+          "SUBACCOUNT_PERMISSION_SWAP"
         ],
         "title": "SubaccountPermission",
         "type": "string"
@@ -7956,6 +7962,350 @@
         "title": "TxLookupKind",
         "type": "string"
       },
+      "chain.withdraw.v1.AutoWithdrawCadence": {
+        "description": "AutoWithdrawCadence is how often an auto-withdraw rule runs. Every slot\n is a UTC time, with no daylight-saving shift.",
+        "enum": [
+          "CADENCE_UNSPECIFIED",
+          "DAILY",
+          "WEEKLY",
+          "HOURLY",
+          "BIWEEKLY",
+          "MONTHLY"
+        ],
+        "title": "AutoWithdrawCadence",
+        "type": "string"
+      },
+      "chain.withdraw.v1.AutoWithdrawDestination": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawDestination pays one asset, in kind, to one external-chain\n address.",
+        "properties": {
+          "assetId": {
+            "description": "Ledger asset paid. At most one destination per asset.",
+            "exclusiveMinimum": 0,
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "destinationAddress": {
+            "description": "Destination address on destination_chain_id. It must be on the\n account's external withdraw whitelist when the rule is written and\n whenever a run pays it. Responses carry its canonical form.",
+            "maxLength": 385,
+            "minLength": 1,
+            "title": "destination_address",
+            "type": "string"
+          },
+          "destinationChainId": {
+            "description": "External destination chain identifier.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "destination_chain_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "maxAmountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The most one run pays this asset, in 18-decimal asset units; at least\n min_amount_e18. A larger balance pays this ceiling and the rest stays on\n the account.",
+            "title": "max_amount_e18"
+          },
+          "minAmountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "A run pays this asset only when the payable amount reaches this\n minimum, in 18-decimal asset units, and the rule's min_usd_value_e18;\n otherwise the balance stays on the account for a later run. Must be at\n least the route's withdrawal minimum.",
+            "title": "min_amount_e18"
+          }
+        },
+        "required": [
+          "minAmountE18",
+          "maxAmountE18"
+        ],
+        "title": "AutoWithdrawDestination",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawPause": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawPause reports why a rule stopped running on its own.",
+        "properties": {
+          "assetId": {
+            "description": "Asset whose payout paused the rule.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "pausedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the rule was paused.",
+            "title": "paused_at"
+          },
+          "reason": {
+            "description": "Machine-readable reason: destination_not_whitelisted when the\n destination left the account's external withdraw whitelist,\n destination_invalid when it is no longer a valid destination, or\n authority_revoked when the person who set the rule may no longer change\n it or withdraw from the account.",
+            "title": "reason",
+            "type": "string"
+          }
+        },
+        "title": "AutoWithdrawPause",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawRule": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawRule is one version of an account's auto-withdraw rule. Each\n change or disable creates the next version; only the latest version runs,\n and a run in progress keeps the version it started with but pays nothing\n further once that version is no longer the latest.",
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When this version was created.",
+            "title": "created_at"
+          },
+          "destinations": {
+            "description": "One destination per paid asset, ordered by asset_id.",
+            "items": {
+              "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawDestination"
+            },
+            "title": "destinations",
+            "type": "array"
+          },
+          "enabled": {
+            "description": "Whether the rule runs. A disabled version has no destinations.",
+            "title": "enabled",
+            "type": "boolean"
+          },
+          "minUsdValueE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Least USD value one payout of the rule pays, in 18-decimal USD units;\n zero means no USD minimum.",
+            "title": "min_usd_value_e18"
+          },
+          "pause": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawPause",
+            "description": "Set when the rule paused itself; a new version resumes it.",
+            "title": "pause"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawSchedule",
+            "description": "When the rule runs.",
+            "title": "schedule"
+          },
+          "subaccountId": {
+            "description": "Public subaccount ID the rule belongs to; zero for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "version": {
+            "description": "Rule version, starting at 1.",
+            "title": "version",
+            "type": "integer"
+          }
+        },
+        "title": "AutoWithdrawRule",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawRun": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawRun is one scheduled run of an account's rule.",
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the run started.",
+            "title": "created_at"
+          },
+          "finishedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the run ended; unset while it is in progress.",
+            "title": "finished_at"
+          },
+          "reason": {
+            "description": "Machine-readable reason for a skipped run: nothing_to_pay,\n price_unavailable (an asset was not paid because no current price valued\n it) or rule_superseded; empty otherwise.",
+            "title": "reason",
+            "type": "string"
+          },
+          "ruleVersion": {
+            "description": "The rule version the run executes.",
+            "title": "rule_version",
+            "type": "integer"
+          },
+          "runSeq": {
+            "description": "The account's run number, increasing by one per run.",
+            "format": "int64",
+            "title": "run_seq",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "scheduledFor": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "The scheduled slot the run belongs to.",
+            "title": "scheduled_for"
+          },
+          "state": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawRunState",
+            "description": "Where the run stands.",
+            "title": "state"
+          },
+          "steps": {
+            "description": "One step per destination of the rule version, ordered by asset_id.\n Empty while the run is planned.",
+            "items": {
+              "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawStep"
+            },
+            "title": "steps",
+            "type": "array"
+          }
+        },
+        "title": "AutoWithdrawRun",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawRunState": {
+        "description": "AutoWithdrawRunState is where one auto-withdraw run stands.",
+        "enum": [
+          "RUN_STATE_UNSPECIFIED",
+          "RUN_PLANNED",
+          "RUN_PAYING",
+          "RUN_COMPLETED",
+          "RUN_PARTIALLY_FAILED",
+          "RUN_FAILED",
+          "RUN_SKIPPED"
+        ],
+        "title": "AutoWithdrawRunState",
+        "type": "string"
+      },
+      "chain.withdraw.v1.AutoWithdrawSchedule": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawSchedule is a rule's UTC run slot. Only the fields of its\n cadence may be set; the others must be zero or empty.",
+        "properties": {
+          "anchorDate": {
+            "description": "A UTC date (YYYY-MM-DD) in a week a BIWEEKLY rule runs; weeks start on\n Monday. Responses return the Monday that starts that week.",
+            "maxLength": 10,
+            "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+            "title": "anchor_date",
+            "type": "string"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawCadence",
+            "description": "How often the rule runs.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "cadence"
+          },
+          "dayOfMonth": {
+            "description": "Run day of a MONTHLY rule, 1 to 31; see MONTHLY for shorter months.",
+            "maximum": 31,
+            "title": "day_of_month",
+            "type": "integer"
+          },
+          "minuteOfDay": {
+            "description": "Minute after 00:00 UTC the run starts, 0 to 1439, for every cadence but\n HOURLY; must be 0 for an hourly rule.",
+            "maximum": 1439,
+            "title": "minute_of_day",
+            "type": "integer"
+          },
+          "minuteOfHour": {
+            "description": "Minute past every hour an HOURLY rule is checked, 0 to 59.",
+            "maximum": 59,
+            "title": "minute_of_hour",
+            "type": "integer"
+          },
+          "weekday": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawWeekday",
+            "description": "Run day of a weekly or biweekly rule.",
+            "title": "weekday"
+          }
+        },
+        "title": "AutoWithdrawSchedule",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawStep": {
+        "additionalProperties": false,
+        "description": "AutoWithdrawStep is one asset's payout in a run.",
+        "properties": {
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "What the step pays, in 18-decimal asset units: the available balance\n up to the ceiling, rounded down to whole on-chain units. Zero when\n skipped. The remainder stays on the account.",
+            "title": "amount_e18"
+          },
+          "assetId": {
+            "description": "Ledger asset paid.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "availableE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The account's available balance of the asset when the run started, in\n 18-decimal asset units.",
+            "title": "available_e18"
+          },
+          "destinationAddress": {
+            "description": "Canonical destination address.",
+            "title": "destination_address",
+            "type": "string"
+          },
+          "destinationChainId": {
+            "description": "External destination chain identifier.",
+            "format": "int64",
+            "title": "destination_chain_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "intentId": {
+            "description": "Withdraw intent identifier once the withdrawal is accepted; follows the\n same lifecycle as a user withdrawal.",
+            "title": "intent_id",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
+            "title": "reason",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawStepState",
+            "description": "Where the payout stands.",
+            "title": "state"
+          },
+          "txHash": {
+            "description": "Destination-network transaction hash once the withdrawal completed.",
+            "title": "tx_hash",
+            "type": "string"
+          },
+          "valueUsdE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "USD value of the payable amount when the run started, in 18-decimal USD\n units, checked against the rule's min_usd_value_e18. Unset when the rule\n has no USD minimum or no current price was available.",
+            "title": "value_usd_e18"
+          }
+        },
+        "title": "AutoWithdrawStep",
+        "type": "object"
+      },
+      "chain.withdraw.v1.AutoWithdrawStepState": {
+        "description": "AutoWithdrawStepState is where one asset's payout of a run stands.",
+        "enum": [
+          "STEP_STATE_UNSPECIFIED",
+          "STEP_PENDING",
+          "STEP_SUBMITTING",
+          "STEP_SUBMITTED",
+          "STEP_COMPLETED",
+          "STEP_FAILED",
+          "STEP_SKIPPED"
+        ],
+        "title": "AutoWithdrawStepState",
+        "type": "string"
+      },
+      "chain.withdraw.v1.AutoWithdrawWeekday": {
+        "description": "AutoWithdrawWeekday is the run day of a weekly or biweekly rule.",
+        "enum": [
+          "WEEKDAY_UNSPECIFIED",
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY",
+          "SATURDAY",
+          "SUNDAY"
+        ],
+        "title": "AutoWithdrawWeekday",
+        "type": "string"
+      },
       "chain.withdraw.v1.CreateTradingWithdrawRequest": {
         "additionalProperties": false,
         "description": "CreateTradingWithdrawRequest creates or returns one durable backend-authorized\n Trading withdraw intent from typed protobuf fields and an API-key signature.",
@@ -8041,6 +8391,180 @@
           }
         },
         "title": "CreateWalletTradingWithdrawResponse",
+        "type": "object"
+      },
+      "chain.withdraw.v1.DisableAutoWithdrawRuleRequest": {
+        "additionalProperties": false,
+        "description": "DisableAutoWithdrawRuleRequest stops the rule of the root account or one\n subaccount.",
+        "properties": {
+          "expectedVersion": {
+            "description": "The account's latest rule version.",
+            "exclusiveMinimum": 0,
+            "title": "expected_version",
+            "type": "integer"
+          },
+          "subaccountId": {
+            "description": "Public subaccount ID; omit for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "DisableAutoWithdrawRuleRequest",
+        "type": "object"
+      },
+      "chain.withdraw.v1.DisableAutoWithdrawRuleResponse": {
+        "additionalProperties": false,
+        "description": "DisableAutoWithdrawRuleResponse returns the disabled version.",
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawRule",
+            "description": "The created, disabled version.",
+            "title": "rule"
+          }
+        },
+        "title": "DisableAutoWithdrawRuleResponse",
+        "type": "object"
+      },
+      "chain.withdraw.v1.GetAutoWithdrawRuleRequest": {
+        "additionalProperties": false,
+        "description": "GetAutoWithdrawRuleRequest reads the latest rule version.",
+        "properties": {
+          "subaccountId": {
+            "description": "Public subaccount ID; omit for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetAutoWithdrawRuleRequest",
+        "type": "object"
+      },
+      "chain.withdraw.v1.GetAutoWithdrawRuleResponse": {
+        "additionalProperties": false,
+        "description": "GetAutoWithdrawRuleResponse returns the latest rule version.",
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawRule",
+            "description": "The latest version; unset when the account never had a rule.",
+            "title": "rule"
+          }
+        },
+        "title": "GetAutoWithdrawRuleResponse",
+        "type": "object"
+      },
+      "chain.withdraw.v1.ListAutoWithdrawRunsRequest": {
+        "additionalProperties": false,
+        "description": "ListAutoWithdrawRunsRequest pages through an account's runs, newest first.",
+        "properties": {
+          "limit": {
+            "description": "Maximum number of runs to return: 0 means 20, at most 100.",
+            "maximum": 100,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque, exclusive, keyset-backed cursor from a previous response,\n bound to the caller's account or subaccount and the newest-first\n run_seq order. Empty for the first page.",
+            "maxLength": 256,
+            "title": "page_token",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Public subaccount ID; omit for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "ListAutoWithdrawRunsRequest",
+        "type": "object"
+      },
+      "chain.withdraw.v1.ListAutoWithdrawRunsResponse": {
+        "additionalProperties": false,
+        "description": "ListAutoWithdrawRunsResponse returns one page of runs, newest first.",
+        "properties": {
+          "nextPageToken": {
+            "description": "Cursor for the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          },
+          "runs": {
+            "description": "Runs ordered by run_seq, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawRun"
+            },
+            "title": "runs",
+            "type": "array"
+          }
+        },
+        "title": "ListAutoWithdrawRunsResponse",
+        "type": "object"
+      },
+      "chain.withdraw.v1.SetAutoWithdrawRuleRequest": {
+        "additionalProperties": false,
+        "description": "SetAutoWithdrawRuleRequest creates or replaces the rule of the root\n account or one subaccount.",
+        "properties": {
+          "destinations": {
+            "description": "Destinations, one per asset, 1 to 32.",
+            "items": {
+              "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawDestination"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "destinations",
+            "type": "array"
+          },
+          "expectedVersion": {
+            "description": "The version the change replaces: 0 when the account has no rule yet,\n otherwise its latest version. A mismatch is rejected so concurrent\n changes never overwrite each other.",
+            "title": "expected_version",
+            "type": "integer"
+          },
+          "minUsdValueE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Least USD value one payout pays, in 18-decimal USD units; unset or zero\n for no USD minimum. Each run values each asset's payable amount at the\n current index price. A smaller amount stays on the account for a later\n run, and the asset is skipped with reason price_unavailable when no\n current price is available. A payout never goes below its destination's\n min_amount_e18 or the route's withdrawal minimum.",
+            "title": "min_usd_value_e18"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawSchedule",
+            "description": "When the rule runs.",
+            "title": "schedule"
+          },
+          "subaccountId": {
+            "description": "Public subaccount ID; omit for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "schedule"
+        ],
+        "title": "SetAutoWithdrawRuleRequest",
+        "type": "object"
+      },
+      "chain.withdraw.v1.SetAutoWithdrawRuleResponse": {
+        "additionalProperties": false,
+        "description": "SetAutoWithdrawRuleResponse returns the new rule version.",
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawRule",
+            "description": "The created version.",
+            "title": "rule"
+          }
+        },
+        "title": "SetAutoWithdrawRuleResponse",
         "type": "object"
       },
       "chain.withdraw.v1.TradingWithdrawAction": {
@@ -14729,7 +15253,9 @@
           "ERROR_CODE_SUBACCOUNT_READ_FORBIDDEN",
           "ERROR_CODE_POLICY_SPOT_READ_DENY",
           "ERROR_CODE_API_KEY_SPOT_READ_DENY",
-          "ERROR_CODE_CANCEL_REQUEST_EXPIRED"
+          "ERROR_CODE_CANCEL_REQUEST_EXPIRED",
+          "ERROR_CODE_MAX_QTY",
+          "ERROR_CODE_MAX_NOTIONAL"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -18240,11 +18766,10 @@
       },
       "swap.quickswap.v1.AffiliateShare": {
         "additionalProperties": false,
-        "description": "AffiliateShare pays one affiliate a fraction of the broker's integrator fee.\n The broker keeps whatever the shares leave.",
+        "description": "AffiliateShare credits one affiliate vault, a sub-account the broker owns,\n with a fee charged on top of the service and broker fees.",
         "properties": {
           "accountId": {
-            "description": "Public account ID of the affiliate's account, credited with the share. It\n must not be the broker's own payout account.",
-            "exclusiveMinimum": 0,
+            "description": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN.",
             "format": "int64",
             "title": "account_id",
             "type": [
@@ -18252,15 +18777,396 @@
               "string"
             ]
           },
-          "sharePpm": {
-            "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
-            "maximum": 1000000,
-            "minimum": 1,
-            "title": "share_ppm",
+          "bps": {
+            "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+            "title": "bps",
             "type": "integer"
           }
         },
         "title": "AffiliateShare",
+        "type": "object"
+      },
+      "swap.quickswap.v1.AffiliateVault": {
+        "additionalProperties": false,
+        "description": "AffiliateVault is a sub-account of the broker root, owned by the broker,\n credited with the fees of one affiliate. Affiliate vaults are never\n deleted.",
+        "properties": {
+          "accountId": {
+            "description": "Public sub-account ID of the vault; name it in AffiliateShare.account_id.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the vault was created.",
+            "title": "created_at"
+          },
+          "label": {
+            "description": "Broker-chosen label, unique per broker.",
+            "title": "label",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.VaultStatus",
+            "description": "Whether new QuickSwaps can name the vault.",
+            "title": "status"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the vault was last changed.",
+            "title": "updated_at"
+          }
+        },
+        "title": "AffiliateVault",
+        "type": "object"
+      },
+      "swap.quickswap.v1.AssetVolume": {
+        "additionalProperties": false,
+        "description": "AssetVolume is a total amount in one asset.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Total, in base units of 18 decimals.",
+            "title": "amount"
+          },
+          "assetId": {
+            "description": "Asset, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "AssetVolume",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Broker": {
+        "additionalProperties": false,
+        "description": "Broker is a broker org.",
+        "properties": {
+          "createRps": {
+            "description": "Create requests per second allowed for each API key of the broker, which\n is also the burst. Over the rate, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "title": "create_rps",
+            "type": "integer"
+          },
+          "defaultVaultAccountId": {
+            "description": "Public sub-account ID of the default vault, credited with broker fees\n that name no affiliate.",
+            "format": "int64",
+            "title": "default_vault_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "displayName": {
+            "description": "Display name.",
+            "title": "display_name",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether the broker may quote and create QuickSwaps. A disabled broker\n keeps reads, vaults, keys and members.",
+            "title": "enabled",
+            "type": "boolean"
+          },
+          "maxAffiliateVaults": {
+            "description": "Affiliate vaults the broker may create, active and disabled together.\n At the limit, CreateAffiliateVault fails with RESOURCE_EXHAUSTED /\n BROKER_LIMIT.",
+            "title": "max_affiliate_vaults",
+            "type": "integer"
+          },
+          "maxCreatesPerHour": {
+            "description": "Quick Swaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
+            "title": "max_creates_per_hour",
+            "type": "integer"
+          },
+          "maxUnfundedAddresses": {
+            "description": "Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
+            "title": "max_unfunded_addresses",
+            "type": "integer"
+          },
+          "name": {
+            "description": "Broker name: the immutable identifier used in every request.",
+            "title": "name",
+            "type": "string"
+          },
+          "quoteRps": {
+            "description": "Quote requests per second allowed for each API key of the broker, which\n is also the burst. Over the rate, QuoteQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "title": "quote_rps",
+            "type": "integer"
+          },
+          "readRps": {
+            "description": "Read requests per second allowed for each API key of the broker, which is\n also the burst. GetQuickSwap and every QuickSwapBrokerService call by an\n API key count as reads. Over the rate, the call fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "title": "read_rps",
+            "type": "integer"
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "The caller's role; BROKER_ROLE_UNSPECIFIED for a broker API key.",
+            "title": "role"
+          },
+          "rootAccountId": {
+            "description": "Public account ID of the broker's root account.",
+            "format": "int64",
+            "title": "root_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "Broker",
+        "type": "object"
+      },
+      "swap.quickswap.v1.BrokerKey": {
+        "additionalProperties": false,
+        "description": "BrokerKey is a broker API key, without its secret.",
+        "properties": {
+          "active": {
+            "description": "Whether the key works now: neither revoked nor past expires_at.",
+            "title": "active",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the key was created.",
+            "title": "created_at"
+          },
+          "createdByAccountId": {
+            "description": "Public account ID of the member who created the key; 0 for a key that a\n key created by rotating itself.",
+            "format": "int64",
+            "title": "created_by_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the key's rotation overlap; the key stops working then. Unset\n while the key works until revoked.",
+            "title": "expires_at"
+          },
+          "keyId": {
+            "description": "Public key ID: the part of the token between \"qsk_\" and the second \"_\".",
+            "title": "key_id",
+            "type": "string"
+          },
+          "label": {
+            "description": "Label given at creation; empty for a key created by rotation.",
+            "title": "label",
+            "type": "string"
+          },
+          "revokedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the key was revoked; unset while not revoked.",
+            "title": "revoked_at"
+          },
+          "rotatedFrom": {
+            "description": "Key this key replaced by rotation; empty otherwise.",
+            "title": "rotated_from",
+            "type": "string"
+          }
+        },
+        "title": "BrokerKey",
+        "type": "object"
+      },
+      "swap.quickswap.v1.BrokerRole": {
+        "description": "BrokerRole is a person's role in a broker org. A broker has exactly one\n Owner.",
+        "enum": [
+          "BROKER_ROLE_UNSPECIFIED",
+          "OWNER",
+          "ADMIN",
+          "FINANCE",
+          "AFFILIATE_MANAGER",
+          "VIEWER"
+        ],
+        "title": "BrokerRole",
+        "type": "string"
+      },
+      "swap.quickswap.v1.BrokerStatsPeriod": {
+        "additionalProperties": false,
+        "description": "BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or\n month. A QuickSwap counts in the period it was created in, with its\n current status, its credited deposit and its destination payout, so a\n period's numbers keep moving until its QuickSwaps end. A fee counts in the\n period it was charged in, as in GetFeeTotals, which can be later than the\n period its QuickSwap was created in.",
+        "properties": {
+          "createdCount": {
+            "description": "QuickSwaps created in the period, inside the window.",
+            "format": "int64",
+            "title": "created_count",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "delivered": {
+            "description": "Paid to the destination of those QuickSwaps whose DESTINATION\n withdrawal is FINALIZED, per asset, in asset_id order: after service,\n broker and affiliate fees, before the destination network fee.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AssetVolume"
+            },
+            "title": "delivered",
+            "type": "array"
+          },
+          "deposited": {
+            "description": "Deposits credited to those QuickSwaps and taken in for execution, per\n asset, in asset_id order: including a deposit later found ineligible\n and returned, excluding a deposit held for review before credit.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AssetVolume"
+            },
+            "title": "deposited",
+            "type": "array"
+          },
+          "fees": {
+            "description": "Fees charged to the broker's QuickSwaps in the period, per asset, in\n asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals\n total of the same window, period and asset.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.FeeSplit"
+            },
+            "title": "fees",
+            "type": "array"
+          },
+          "periodStart": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the UTC day or month.",
+            "title": "period_start"
+          },
+          "statuses": {
+            "description": "Those QuickSwaps by current status, in QuickSwapStatus number order;\n statuses with none are omitted. The counts total created_count.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.StatusCount"
+            },
+            "title": "statuses",
+            "type": "array"
+          }
+        },
+        "title": "BrokerStatsPeriod",
+        "type": "object"
+      },
+      "swap.quickswap.v1.BrokerUsage": {
+        "additionalProperties": false,
+        "description": "BrokerUsage is the broker's current use of its limits, counted exactly as\n the limits are enforced: the next create is refused while a count is at or\n above its limit on Broker. A count can be above its limit after the limit\n is lowered. The counts are read when the request is served and can change\n right after with concurrent creates, deposits and expiring funding windows.",
+        "properties": {
+          "affiliateVaults": {
+            "description": "Affiliate vaults created, active and disabled together, counted against\n Broker.max_affiliate_vaults.",
+            "title": "affiliate_vaults",
+            "type": "integer"
+          },
+          "createsLastHour": {
+            "description": "Quick Swaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
+            "title": "creates_last_hour",
+            "type": "integer"
+          },
+          "unfundedAddresses": {
+            "description": "Unfunded Quick Swaps held now, counted against\n Broker.max_unfunded_addresses.",
+            "title": "unfunded_addresses",
+            "type": "integer"
+          }
+        },
+        "title": "BrokerUsage",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ChargedFee": {
+        "additionalProperties": false,
+        "description": "ChargedFee is what one vault has been credited with for a QuickSwap in\n one asset, from settled fills and bridge payouts.",
+        "properties": {
+          "accountId": {
+            "description": "Public sub-account ID of the credited vault: the default vault for\n BROKER, the affiliate vault for AFFILIATE.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Amount credited, in base units of 18 decimals.",
+            "title": "amount"
+          },
+          "assetId": {
+            "description": "Asset credited, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.FeeKind",
+            "description": "BROKER or AFFILIATE.",
+            "title": "kind"
+          }
+        },
+        "title": "ChargedFee",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateAffiliateVaultRequest": {
+        "additionalProperties": false,
+        "description": "CreateAffiliateVaultRequest creates, or returns, the affiliate vault with a\n label.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "label": {
+            "description": "Label, 1 to 64 characters without leading or trailing whitespace, unique\n per broker. The same label always returns the same vault.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "label",
+            "type": "string"
+          }
+        },
+        "title": "CreateAffiliateVaultRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateAffiliateVaultResponse": {
+        "additionalProperties": false,
+        "description": "CreateAffiliateVaultResponse returns the vault.",
+        "properties": {
+          "created": {
+            "description": "Whether this request created it.",
+            "title": "created",
+            "type": "boolean"
+          },
+          "vault": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateVault",
+            "description": "The vault.",
+            "title": "vault"
+          }
+        },
+        "title": "CreateAffiliateVaultResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateKeyRequest": {
+        "additionalProperties": false,
+        "description": "CreateKeyRequest creates a broker API key.",
+        "properties": {
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "label": {
+            "description": "Label, 1 to 64 characters without leading or trailing whitespace.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "label",
+            "type": "string"
+          }
+        },
+        "title": "CreateKeyRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.CreateKeyResponse": {
+        "additionalProperties": false,
+        "description": "CreateKeyResponse returns the key and its token. The token is shown only\n here and cannot be recovered.",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerKey",
+            "description": "The key.",
+            "title": "key"
+          },
+          "token": {
+            "description": "Bearer token qsk_<key id>_<secret>. Store it as a server secret.",
+            "title": "token",
+            "type": "string"
+          }
+        },
+        "title": "CreateKeyResponse",
         "type": "object"
       },
       "swap.quickswap.v1.CreateQuickSwapRequest": {
@@ -18268,13 +19174,17 @@
         "description": "CreateQuickSwapRequest creates, or returns, the QuickSwap for one\n idempotency key.\ncreate_quickswap_request.refund_target // refund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address\n",
         "properties": {
           "affiliates": {
-            "description": "Optional affiliates paid from the broker's integrator fee: at most four\n distinct accounts whose shares total at most 1000000 ppm. Empty means the\n broker keeps the whole integrator fee. The quote shows the total fee only.",
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults. Fixed at creation with broker_bps.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
             },
-            "maxItems": 4,
             "title": "affiliates",
             "type": "array"
+          },
+          "brokerBps": {
+            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "title": "broker_bps",
+            "type": "integer"
           },
           "destinationAddress": {
             "description": "Recipient of the swap output on the destination network, in its native\n text form without memo.\nstring.max_bytes = 256\nstring.min_bytes = 1\n",
@@ -18287,7 +19197,7 @@
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits,\n '.', '_', ':' or '-'. Scoped to the authenticated broker and retained\n permanently. The same key with the same request returns the same QuickSwap\n and deposit address; with a different request it fails with\n IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and\n memo is put in its network's canonical form, so the same address in\n another case or encoding is the same request; affiliate order is\n ignored; every other field must be equal.",
+            "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits,\n '.', '_', ':' or '-'. Scoped to the authenticated broker and retained\n permanently. The same key with the same request returns the same QuickSwap\n and deposit address; with a different request it fails with\n IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and\n memo is put in its network's canonical form, so the same address in\n another case or encoding is the same request; affiliate order is\n ignored; every other field, the fees included, must be equal.",
             "pattern": "^[A-Za-z0-9._:-]{1,128}$",
             "title": "idempotency_key",
             "type": "string"
@@ -18565,7 +19475,7 @@
           },
           "outputAmount": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "Destination amount acquired so far after service and integrator fees and\n before withdrawal network fees, in destination token units. Zero for a\n bridge: its destination withdrawal pays the credit less its fees.",
+            "description": "Destination amount acquired so far after service, broker and affiliate\n fees and before withdrawal network fees, in destination token units. Zero for a\n bridge: its destination withdrawal pays the credit less its fees.",
             "title": "output_amount"
           },
           "startedAt": {
@@ -18583,16 +19493,246 @@
         "type": "object"
       },
       "swap.quickswap.v1.FeeKind": {
-        "description": "FeeKind identifies one component of the quoted fees.",
+        "description": "FeeKind identifies one component of a QuickSwap's fees.",
         "enum": [
           "FEE_UNSPECIFIED",
           "SERVICE",
-          "INTEGRATOR",
+          "BROKER",
+          "AFFILIATE",
           "DEPOSIT_NETWORK",
           "WITHDRAWAL_NETWORK"
         ],
         "title": "FeeKind",
         "type": "string"
+      },
+      "swap.quickswap.v1.FeeSplit": {
+        "additionalProperties": false,
+        "description": "FeeSplit is the fees charged in one asset, by who they credit. Every\n amount is set, zero included.",
+        "properties": {
+          "affiliateFee": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Affiliate fees, credited to the broker's affiliate vaults, in base\n units of 18 decimals.",
+            "title": "affiliate_fee"
+          },
+          "assetId": {
+            "description": "Asset charged, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "brokerFee": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Broker fees, credited to the broker's default vault, in base units of\n 18 decimals.",
+            "title": "broker_fee"
+          },
+          "serviceFee": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Service fees, credited to Polyester, in base units of 18 decimals.",
+            "title": "service_fee"
+          }
+        },
+        "title": "FeeSplit",
+        "type": "object"
+      },
+      "swap.quickswap.v1.FeeTotal": {
+        "additionalProperties": false,
+        "description": "FeeTotal is the fees charged in one group and asset.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Total credited, in base units of 18 decimals.",
+            "title": "amount"
+          },
+          "assetId": {
+            "description": "Asset credited, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "periodStart": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "BY_DAY or BY_MONTH: start of the UTC day or month; unset for BY_VAULT.",
+            "title": "period_start"
+          },
+          "swapCount": {
+            "description": "QuickSwaps that were charged a fee in this group and asset.",
+            "format": "int64",
+            "title": "swap_count",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "vaultAccountId": {
+            "description": "BY_VAULT: public sub-account ID of the credited vault; zero otherwise.",
+            "format": "int64",
+            "title": "vault_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "FeeTotal",
+        "type": "object"
+      },
+      "swap.quickswap.v1.FeeTotalsGrouping": {
+        "description": "FeeTotalsGrouping is how GetFeeTotals groups the fees.",
+        "enum": [
+          "GROUPING_UNSPECIFIED",
+          "BY_VAULT",
+          "BY_DAY",
+          "BY_MONTH"
+        ],
+        "title": "FeeTotalsGrouping",
+        "type": "string"
+      },
+      "swap.quickswap.v1.GetBrokerRequest": {
+        "additionalProperties": false,
+        "description": "GetBrokerRequest names a broker.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          }
+        },
+        "title": "GetBrokerRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetBrokerResponse": {
+        "additionalProperties": false,
+        "description": "GetBrokerResponse returns the broker, with its limits, and its current\n usage of them.",
+        "properties": {
+          "broker": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Broker",
+            "description": "The broker, with its limits.",
+            "title": "broker"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerUsage",
+            "description": "Current usage of the broker's limits.",
+            "title": "usage"
+          }
+        },
+        "title": "GetBrokerResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetBrokerStatsRequest": {
+        "additionalProperties": false,
+        "description": "GetBrokerStatsRequest reads the broker's QuickSwap activity in a time\n window, per UTC day or month.\nget_broker_stats_request.window // end_time must be after start_time and at most 366 days later\n",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the window, exclusive, at most 366 days after start_time.",
+            "title": "end_time"
+          },
+          "groupBy": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.StatsPeriod",
+            "description": "The period to group by.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "group_by"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the window, inclusive. A window that starts or ends inside a\n period counts only the part of that period inside the window.",
+            "title": "start_time"
+          }
+        },
+        "required": [
+          "startTime",
+          "endTime"
+        ],
+        "title": "GetBrokerStatsRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetBrokerStatsResponse": {
+        "additionalProperties": false,
+        "description": "GetBrokerStatsResponse lists every period of the window with a QuickSwap\n created or a fee charged, oldest first, complete (the window is bounded).\n Periods with neither are omitted.",
+        "properties": {
+          "periods": {
+            "description": "The periods.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.BrokerStatsPeriod"
+            },
+            "title": "periods",
+            "type": "array"
+          }
+        },
+        "title": "GetBrokerStatsResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetFeeTotalsRequest": {
+        "additionalProperties": false,
+        "description": "GetFeeTotalsRequest totals the broker and affiliate fees charged to the\n broker's QuickSwaps in a time window.\nget_fee_totals_request.window // end_time must be after start_time and at most 366 days later\n",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the window, exclusive, at most 366 days after start_time.",
+            "title": "end_time"
+          },
+          "groupBy": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.FeeTotalsGrouping",
+            "description": "How to group the totals.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "group_by"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the window, inclusive: fees charged at or after it.",
+            "title": "start_time"
+          },
+          "vaultAccountId": {
+            "description": "Only fees credited to this vault; zero for every vault.",
+            "format": "int64",
+            "title": "vault_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "startTime",
+          "endTime"
+        ],
+        "title": "GetFeeTotalsRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetFeeTotalsResponse": {
+        "additionalProperties": false,
+        "description": "GetFeeTotalsResponse lists every group and asset with a fee in the window,\n complete (the window is bounded): by vault, then asset, for BY_VAULT; by\n period, then asset, for BY_DAY and BY_MONTH, oldest first.",
+        "properties": {
+          "totals": {
+            "description": "The totals.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.FeeTotal"
+            },
+            "title": "totals",
+            "type": "array"
+          }
+        },
+        "title": "GetFeeTotalsResponse",
+        "type": "object"
       },
       "swap.quickswap.v1.GetQuickSwapRequest": {
         "additionalProperties": false,
@@ -18647,10 +19787,437 @@
         "title": "GetQuickSwapResponse",
         "type": "object"
       },
+      "swap.quickswap.v1.GetVaultRequest": {
+        "additionalProperties": false,
+        "description": "GetVaultRequest names one affiliate vault.",
+        "properties": {
+          "accountId": {
+            "description": "Public sub-account ID of the vault.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          }
+        },
+        "title": "GetVaultRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.GetVaultResponse": {
+        "additionalProperties": false,
+        "description": "GetVaultResponse returns the vault.",
+        "properties": {
+          "vault": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateVault",
+            "description": "The vault.",
+            "title": "vault"
+          }
+        },
+        "title": "GetVaultResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Invite": {
+        "additionalProperties": false,
+        "description": "Invite is a pending invitation to join a broker org.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the invited person.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name.",
+            "title": "broker",
+            "type": "string"
+          },
+          "brokerDisplayName": {
+            "description": "Broker display name.",
+            "title": "broker_display_name",
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the invite was sent.",
+            "title": "created_at"
+          },
+          "inviteId": {
+            "description": "Public invite ID.",
+            "format": "int64",
+            "title": "invite_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "invitedByAccountId": {
+            "description": "Public account ID of the member who invited them.",
+            "format": "int64",
+            "title": "invited_by_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "Role the person gets on accepting.",
+            "title": "role"
+          }
+        },
+        "title": "Invite",
+        "type": "object"
+      },
+      "swap.quickswap.v1.InviteMemberRequest": {
+        "additionalProperties": false,
+        "description": "InviteMemberRequest invites a person to the broker.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the person's own account.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "Role the person gets on accepting; never OWNER.",
+            "not": {
+              "enum": [
+                0,
+                1
+              ]
+            },
+            "title": "role"
+          }
+        },
+        "title": "InviteMemberRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.InviteMemberResponse": {
+        "additionalProperties": false,
+        "description": "InviteMemberResponse returns the pending invite.",
+        "properties": {
+          "invite": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Invite",
+            "description": "The invite.",
+            "title": "invite"
+          }
+        },
+        "title": "InviteMemberResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListKeysRequest": {
+        "additionalProperties": false,
+        "description": "ListKeysRequest lists a broker's API keys, working and past.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum number of keys to return; 0 means 100, at most 200.",
+            "maximum": 200,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor from a previous next_page_token, exclusive, bound to\n the broker and ordered newest first by creation time, then key ID. Empty\n for the first page.",
+            "maxLength": 128,
+            "title": "page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListKeysRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListKeysResponse": {
+        "additionalProperties": false,
+        "description": "ListKeysResponse lists the broker's API keys newest first: by creation\n time, then key ID, both descending. A broker has at most two working keys;\n revoked and expired keys stay listed.",
+        "properties": {
+          "keys": {
+            "description": "Keys.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.BrokerKey"
+            },
+            "title": "keys",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Cursor of the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListKeysResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListMembersRequest": {
+        "additionalProperties": false,
+        "description": "ListMembersRequest lists a broker's members.",
+        "properties": {
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          }
+        },
+        "title": "ListMembersRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListMembersResponse": {
+        "additionalProperties": false,
+        "description": "ListMembersResponse lists every member and pending invite of the broker,\n Owner first, then by account ID. Both lists are naturally bounded.",
+        "properties": {
+          "invites": {
+            "description": "Pending invites, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Invite"
+            },
+            "title": "invites",
+            "type": "array"
+          },
+          "members": {
+            "description": "Members.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Member"
+            },
+            "title": "members",
+            "type": "array"
+          }
+        },
+        "title": "ListMembersResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListMyBrokersRequest": {
+        "additionalProperties": false,
+        "description": "ListMyBrokersRequest lists the caller's broker memberships and invites.",
+        "title": "ListMyBrokersRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListMyBrokersResponse": {
+        "additionalProperties": false,
+        "description": "ListMyBrokersResponse lists every membership and pending invite of the\n caller, by broker name. Both lists are naturally bounded.",
+        "properties": {
+          "invites": {
+            "description": "Pending invites addressed to the caller.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Invite"
+            },
+            "title": "invites",
+            "type": "array"
+          },
+          "memberships": {
+            "description": "Brokers the caller is a member of.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.Membership"
+            },
+            "title": "memberships",
+            "type": "array"
+          }
+        },
+        "title": "ListMyBrokersResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListQuickSwapsRequest": {
+        "additionalProperties": false,
+        "description": "ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with\n optional filters. Every filter narrows the list.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Only QuickSwaps created before end_time (exclusive); unset for no upper\n bound.",
+            "title": "end_time"
+          },
+          "limit": {
+            "description": "Maximum number of QuickSwaps to return; 0 means 100, at most 200.",
+            "maximum": 200,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the broker, the filters and the newest-first order by creation time,\n then swap_id. Reuse it with the same filters. Empty for the first page.",
+            "maxLength": 256,
+            "title": "page_token",
+            "type": "string"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Only QuickSwaps created at or after start_time; unset for no lower\n bound.",
+            "title": "start_time"
+          },
+          "statuses": {
+            "description": "Only QuickSwaps in one of these statuses, at most 16; empty for every\n status.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapStatus"
+            },
+            "maxItems": 16,
+            "title": "statuses",
+            "type": "array"
+          },
+          "vaultAccountId": {
+            "description": "Only QuickSwaps whose fees credit this vault: an affiliate vault they\n name, or the default vault when they set a broker fee. Zero for every\n QuickSwap.",
+            "format": "int64",
+            "title": "vault_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "ListQuickSwapsRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListQuickSwapsResponse": {
+        "additionalProperties": false,
+        "description": "ListQuickSwapsResponse lists QuickSwaps newest first: by creation time,\n then swap_id, both descending. A QuickSwap created after the first page\n was read is not listed by later pages; every earlier one is listed exactly\n once.",
+        "properties": {
+          "nextPageToken": {
+            "description": "Cursor of the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          },
+          "quickSwaps": {
+            "description": "The QuickSwaps.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapSummary"
+            },
+            "title": "quick_swaps",
+            "type": "array"
+          }
+        },
+        "title": "ListQuickSwapsResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListVaultsRequest": {
+        "additionalProperties": false,
+        "description": "ListVaultsRequest lists a broker's affiliate vaults.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum number of vaults to return; 0 means 100, at most 200.",
+            "maximum": 200,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor from a previous next_page_token, exclusive, bound to\n the broker and ordered by ascending account_id. Empty for the first page.",
+            "maxLength": 64,
+            "title": "page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListVaultsRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.ListVaultsResponse": {
+        "additionalProperties": false,
+        "description": "ListVaultsResponse lists vaults in ascending account_id order.",
+        "properties": {
+          "nextPageToken": {
+            "description": "Cursor of the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          },
+          "vaults": {
+            "description": "The vaults.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateVault"
+            },
+            "title": "vaults",
+            "type": "array"
+          }
+        },
+        "title": "ListVaultsResponse",
+        "type": "object"
+      },
       "swap.quickswap.v1.MarketExecution": {
         "additionalProperties": false,
         "description": "MarketExecution executes the credited deposit as soon as possible, in one or\n more immediate orders, within the service's market execution window.",
         "title": "MarketExecution",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Member": {
+        "additionalProperties": false,
+        "description": "Member is a person with a role in the broker org.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the person's own account.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "Role.",
+            "title": "role"
+          },
+          "since": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the person got this role.",
+            "title": "since"
+          }
+        },
+        "title": "Member",
+        "type": "object"
+      },
+      "swap.quickswap.v1.Membership": {
+        "additionalProperties": false,
+        "description": "Membership is the caller's role in one broker org.",
+        "properties": {
+          "broker": {
+            "description": "Broker name.",
+            "title": "broker",
+            "type": "string"
+          },
+          "brokerDisplayName": {
+            "description": "Broker display name.",
+            "title": "broker_display_name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "The caller's role.",
+            "title": "role"
+          }
+        },
+        "title": "Membership",
         "type": "object"
       },
       "swap.quickswap.v1.Protection": {
@@ -18693,12 +20260,12 @@
         "additionalProperties": false,
         "description": "QuickSwap is one broker-owned swap of an external deposit into external\n withdrawals. The end user needs no account.",
         "properties": {
-          "affiliates": {
-            "description": "Affiliate shares of the broker fee, as requested.",
+          "chargedFees": {
+            "description": "Broker and affiliate fees charged so far, as settled: one entry per fee\n kind, credited vault and asset, in kind, then account_id, then asset_id\n order. Grows while the QuickSwap executes or pays out a bridge.",
             "items": {
-              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
+              "$ref": "#/components/schemas/swap.quickswap.v1.ChargedFee"
             },
-            "title": "affiliates",
+            "title": "charged_fees",
             "type": "array"
           },
           "createdAt": {
@@ -18740,13 +20307,18 @@
             "title": "execution"
           },
           "feeScheduleVersion": {
-            "description": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service and integrator fees,\n whatever later versions change.",
+            "description": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service fees, whatever later\n versions change.",
             "format": "int64",
             "title": "fee_schedule_version",
             "type": [
               "integer",
               "string"
             ]
+          },
+          "fees": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.RequestedFees",
+            "description": "Broker and affiliate fees as requested, fixed at creation.",
+            "title": "fees"
           },
           "idempotencyKey": {
             "description": "The broker's idempotency key that created this QuickSwap.",
@@ -18873,7 +20445,7 @@
             "title": "expires_at"
           },
           "fees": {
-            "description": "Quoted fee components for deposit_amount: service and integrator fees in\n route order (a bridge has one pair, charged at payout), then network fees.\n Zero fees are omitted.",
+            "description": "Quoted fee components for deposit_amount: each leg's service, broker and\n affiliate fees, in that order, legs in route order (a bridge has one set,\n charged at payout), then network fees. Affiliates are in ascending\n account_id order. Zero fees are omitted.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.QuoteFee"
             },
@@ -18897,7 +20469,7 @@
           },
           "minDepositAmount": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is held\n (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
+            "description": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
             "title": "min_deposit_amount"
           },
           "minRate": {
@@ -18957,6 +20529,71 @@
         ],
         "title": "QuickSwapStatus",
         "type": "string"
+      },
+      "swap.quickswap.v1.QuickSwapSummary": {
+        "additionalProperties": false,
+        "description": "QuickSwapSummary is one QuickSwap in a list: its state and fees. Get it\n with QuickSwapService.GetQuickSwap for its quote, deposit and withdrawals.",
+        "properties": {
+          "chargedFees": {
+            "description": "Broker and affiliate fees charged so far, as settled, as on QuickSwap.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.ChargedFee"
+            },
+            "title": "charged_fees",
+            "type": "array"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the QuickSwap was created.",
+            "title": "created_at"
+          },
+          "fees": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.RequestedFees",
+            "description": "Broker and affiliate fees as requested, fixed at creation; unset when\n the request set none.",
+            "title": "fees"
+          },
+          "idempotencyKey": {
+            "description": "The broker's idempotency key that created it.",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "isTerminal": {
+            "description": "True when status is terminal.",
+            "title": "is_terminal",
+            "type": "boolean"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapReason",
+            "description": "Why the status is notable; REASON_UNSPECIFIED otherwise.",
+            "title": "reason"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapStatus",
+            "description": "Current status.",
+            "title": "status"
+          },
+          "swapId": {
+            "description": "Public QuickSwap identifier.",
+            "format": "int64",
+            "title": "swap_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapTerms",
+            "description": "Accepted economic terms.",
+            "title": "terms"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the QuickSwap last changed.",
+            "title": "updated_at"
+          }
+        },
+        "title": "QuickSwapSummary",
+        "type": "object"
       },
       "swap.quickswap.v1.QuickSwapTerms": {
         "additionalProperties": false,
@@ -19020,12 +20657,26 @@
       },
       "swap.quickswap.v1.QuoteFee": {
         "additionalProperties": false,
-        "description": "QuoteFee is one fee component of a quote. Trading fees (SERVICE and\n INTEGRATOR) are charged when each leg settles, in the asset that leg\n receives: the base asset on a buy, the quote asset on a sell. A bridge has\n no settlement; its fees are charged at payout, in the destination asset.",
+        "description": "QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER\n and AFFILIATE) are charged when each leg settles, in the asset that leg\n receives: the base asset on a buy, the quote asset on a sell. Each is\n computed on its own from what the leg receives and rounded down when\n charged. A bridge has no settlement; its fees are charged at payout, in\n the destination asset.",
         "properties": {
+          "accountId": {
+            "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited\n with the fee; zero for every other kind.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "amount": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
             "description": "Fee in zipped_asset_id's token units; for a fee charged in the\n intermediate asset, in the intermediate asset at its trading precision\n (amount.decimals). Trading fees are rounded up, so the charged fee never\n exceeds the quoted one.",
             "title": "amount"
+          },
+          "bps": {
+            "description": "Rate of a trading fee in basis points of what the leg receives; zero for\n a network fee.",
+            "title": "bps",
+            "type": "integer"
           },
           "kind": {
             "$ref": "#/components/schemas/swap.quickswap.v1.FeeKind",
@@ -19043,8 +20694,21 @@
       },
       "swap.quickswap.v1.QuoteQuickSwapRequest": {
         "additionalProperties": false,
-        "description": "QuoteQuickSwapRequest prices terms without reserving anything.",
+        "description": "QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,\n without reserving anything.",
         "properties": {
+          "affiliates": {
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
+            },
+            "title": "affiliates",
+            "type": "array"
+          },
+          "brokerBps": {
+            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "title": "broker_bps",
+            "type": "integer"
+          },
           "terms": {
             "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapTerms",
             "description": "Terms to price.",
@@ -19070,6 +20734,176 @@
         "title": "QuoteQuickSwapResponse",
         "type": "object"
       },
+      "swap.quickswap.v1.RemoveMemberRequest": {
+        "additionalProperties": false,
+        "description": "RemoveMemberRequest removes a member, or cancels the person's pending\n invite.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the member or invited person.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          }
+        },
+        "title": "RemoveMemberRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RemoveMemberResponse": {
+        "additionalProperties": false,
+        "description": "RemoveMemberResponse is empty.",
+        "title": "RemoveMemberResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RequestedFees": {
+        "additionalProperties": false,
+        "description": "RequestedFees are the broker and affiliate fees a QuickSwap request set,\n charged on top of the service fee.",
+        "properties": {
+          "affiliates": {
+            "description": "Affiliate fees, in ascending account_id order.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
+            },
+            "title": "affiliates",
+            "type": "array"
+          },
+          "brokerBps": {
+            "description": "Broker fee in basis points of what each leg receives, credited to the\n broker's default vault.",
+            "title": "broker_bps",
+            "type": "integer"
+          }
+        },
+        "title": "RequestedFees",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RespondToInviteRequest": {
+        "additionalProperties": false,
+        "description": "RespondToInviteRequest accepts or declines a pending invite addressed to\n the caller.",
+        "properties": {
+          "accept": {
+            "description": "True to accept, false to decline.",
+            "title": "accept",
+            "type": "boolean"
+          },
+          "inviteId": {
+            "description": "Public invite ID.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "invite_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "RespondToInviteRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RespondToInviteResponse": {
+        "additionalProperties": false,
+        "description": "RespondToInviteResponse returns the caller's new membership.",
+        "properties": {
+          "membership": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.Membership",
+            "description": "The membership; unset when the invite was declined.",
+            "title": "membership"
+          }
+        },
+        "title": "RespondToInviteResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RevokeKeyRequest": {
+        "additionalProperties": false,
+        "description": "RevokeKeyRequest revokes a key immediately.",
+        "properties": {
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "keyId": {
+            "description": "Key to revoke.",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "key_id",
+            "type": "string"
+          }
+        },
+        "title": "RevokeKeyRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RevokeKeyResponse": {
+        "additionalProperties": false,
+        "description": "RevokeKeyResponse returns the revoked key.",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerKey",
+            "description": "The key.",
+            "title": "key"
+          }
+        },
+        "title": "RevokeKeyResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RotateKeyRequest": {
+        "additionalProperties": false,
+        "description": "RotateKeyRequest replaces a key by a new one. The old key keeps working\n for the overlap, then stops.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "keyId": {
+            "description": "Key to rotate. A broker API key may rotate only itself.",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "key_id",
+            "type": "string"
+          },
+          "overlapSeconds": {
+            "description": "How long the old key keeps working, in seconds, from 0 to 604800 (7\n days). Default 86400 (24 hours). 0 revokes it immediately.",
+            "maximum": 604800,
+            "nullable": true,
+            "title": "overlap_seconds",
+            "type": "integer"
+          }
+        },
+        "title": "RotateKeyRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.RotateKeyResponse": {
+        "additionalProperties": false,
+        "description": "RotateKeyResponse returns the new key, its token and the old key. The token\n is shown only here and cannot be recovered.",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerKey",
+            "description": "The new key.",
+            "title": "key"
+          },
+          "previousKey": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerKey",
+            "description": "The old key, with the end of its overlap.",
+            "title": "previous_key"
+          },
+          "token": {
+            "description": "Bearer token qsk_<key id>_<secret> of the new key.",
+            "title": "token",
+            "type": "string"
+          }
+        },
+        "title": "RotateKeyResponse",
+        "type": "object"
+      },
       "swap.quickswap.v1.Screening": {
         "additionalProperties": false,
         "description": "Screening is the risk screening of a QuickSwap. Deposits are screened on\n arrival; the outcome shows in the status, its reason and each deposit's\n disposition and reason.",
@@ -19081,6 +20915,126 @@
           }
         },
         "title": "Screening",
+        "type": "object"
+      },
+      "swap.quickswap.v1.SetMemberRoleRequest": {
+        "additionalProperties": false,
+        "description": "SetMemberRoleRequest changes a member's role.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the member.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.BrokerRole",
+            "description": "New role; never OWNER.",
+            "not": {
+              "enum": [
+                0,
+                1
+              ]
+            },
+            "title": "role"
+          }
+        },
+        "title": "SetMemberRoleRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.SetMemberRoleResponse": {
+        "additionalProperties": false,
+        "description": "SetMemberRoleResponse is empty.",
+        "title": "SetMemberRoleResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.SetVaultStatusRequest": {
+        "additionalProperties": false,
+        "description": "SetVaultStatusRequest enables or disables an affiliate vault for new\n QuickSwaps.",
+        "properties": {
+          "accountId": {
+            "description": "Public sub-account ID of the vault.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.VaultStatus",
+            "description": "New status.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "status"
+          }
+        },
+        "title": "SetVaultStatusRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.SetVaultStatusResponse": {
+        "additionalProperties": false,
+        "description": "SetVaultStatusResponse returns the vault.",
+        "properties": {
+          "vault": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateVault",
+            "description": "The vault.",
+            "title": "vault"
+          }
+        },
+        "title": "SetVaultStatusResponse",
+        "type": "object"
+      },
+      "swap.quickswap.v1.StatsPeriod": {
+        "description": "StatsPeriod is the UTC calendar period GetBrokerStats groups by.",
+        "enum": [
+          "PERIOD_UNSPECIFIED",
+          "DAY",
+          "MONTH"
+        ],
+        "title": "StatsPeriod",
+        "type": "string"
+      },
+      "swap.quickswap.v1.StatusCount": {
+        "additionalProperties": false,
+        "description": "StatusCount is how many QuickSwaps are in one status.",
+        "properties": {
+          "count": {
+            "description": "QuickSwaps in it.",
+            "format": "int64",
+            "title": "count",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapStatus",
+            "description": "The status.",
+            "title": "status"
+          }
+        },
+        "title": "StatusCount",
         "type": "object"
       },
       "swap.quickswap.v1.TokenAmount": {
@@ -19101,6 +21055,36 @@
           }
         },
         "title": "TokenAmount",
+        "type": "object"
+      },
+      "swap.quickswap.v1.TransferOwnershipRequest": {
+        "additionalProperties": false,
+        "description": "TransferOwnershipRequest makes another member the Owner.",
+        "properties": {
+          "accountId": {
+            "description": "Public account ID of the member who becomes the Owner.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "broker": {
+            "description": "Broker name.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          }
+        },
+        "title": "TransferOwnershipRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.TransferOwnershipResponse": {
+        "additionalProperties": false,
+        "description": "TransferOwnershipResponse is empty.",
+        "title": "TransferOwnershipResponse",
         "type": "object"
       },
       "swap.quickswap.v1.TwapExecution": {
@@ -19131,6 +21115,16 @@
         },
         "title": "TwapExecution",
         "type": "object"
+      },
+      "swap.quickswap.v1.VaultStatus": {
+        "description": "VaultStatus says whether an affiliate vault can be named by new QuickSwaps.",
+        "enum": [
+          "VAULT_STATUS_UNSPECIFIED",
+          "VAULT_ACTIVE",
+          "VAULT_DISABLED"
+        ],
+        "title": "VaultStatus",
+        "type": "string"
       },
       "swap.quickswap.v1.Withdrawal": {
         "additionalProperties": false,
@@ -19233,6 +21227,489 @@
         ],
         "title": "WithdrawalState",
         "type": "string"
+      },
+      "swap.v1.CreateSwapRequest": {
+        "additionalProperties": false,
+        "description": "CreateSwapRequest creates and executes a Swap.",
+        "properties": {
+          "idempotencyKey": {
+            "description": "Client-chosen key, unique per caller, that makes creation idempotent: the\n same key and request return the same Swap; another request with the same\n key is IDEMPOTENCY_CONFLICT.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "minAmountOutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Positive minimum destination amount after fees for the whole amount, in\n 18-decimal units, usually the quote's min_amount_out_e18. Execution never\n nets a lower rate; what cannot be traded at it stays on the account.",
+            "title": "min_amount_out_e18"
+          },
+          "quoteExpiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "The accepted quote's expires_at. The Swap is refused with QUOTE_EXPIRED\n once it has passed.",
+            "title": "quote_expires_at"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.v1.SwapTerms",
+            "description": "Terms to execute.",
+            "title": "terms"
+          }
+        },
+        "required": [
+          "terms",
+          "minAmountOutE18",
+          "quoteExpiresAt"
+        ],
+        "title": "CreateSwapRequest",
+        "type": "object"
+      },
+      "swap.v1.CreateSwapResponse": {
+        "additionalProperties": false,
+        "description": "CreateSwapResponse is the created (or existing) Swap.",
+        "properties": {
+          "swap": {
+            "$ref": "#/components/schemas/swap.v1.Swap",
+            "description": "The Swap.",
+            "title": "swap"
+          }
+        },
+        "title": "CreateSwapResponse",
+        "type": "object"
+      },
+      "swap.v1.GetSwapRequest": {
+        "additionalProperties": false,
+        "description": "GetSwapRequest selects one Swap of the caller.",
+        "oneOf": [
+          {
+            "properties": {
+              "idempotencyKey": {
+                "description": "Idempotency key the Swap was created with.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "title": "idempotency_key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "idempotencyKey"
+            ],
+            "title": "idempotency_key"
+          },
+          {
+            "properties": {
+              "swapId": {
+                "description": "Swap ID.",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "title": "swap_id",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "swapId"
+            ],
+            "title": "swap_id"
+          }
+        ],
+        "title": "GetSwapRequest",
+        "type": "object"
+      },
+      "swap.v1.GetSwapResponse": {
+        "additionalProperties": false,
+        "description": "GetSwapResponse is the selected Swap.",
+        "properties": {
+          "swap": {
+            "$ref": "#/components/schemas/swap.v1.Swap",
+            "description": "The Swap.",
+            "title": "swap"
+          }
+        },
+        "title": "GetSwapResponse",
+        "type": "object"
+      },
+      "swap.v1.QuoteSwapRequest": {
+        "additionalProperties": false,
+        "description": "QuoteSwapRequest asks for a quote of terms.",
+        "properties": {
+          "maxSlippageBps": {
+            "description": "Accepted shortfall from the expected output, in basis points (1 bp =\n 0.01%), from 1 to 1000; sets the quote's min_amount_out.",
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "max_slippage_bps",
+            "type": "integer"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.v1.SwapTerms",
+            "description": "Terms to quote.",
+            "title": "terms"
+          }
+        },
+        "required": [
+          "terms"
+        ],
+        "title": "QuoteSwapRequest",
+        "type": "object"
+      },
+      "swap.v1.QuoteSwapResponse": {
+        "additionalProperties": false,
+        "description": "QuoteSwapResponse is the quote.",
+        "properties": {
+          "quote": {
+            "$ref": "#/components/schemas/swap.v1.SwapQuote",
+            "description": "The quote.",
+            "title": "quote"
+          }
+        },
+        "title": "QuoteSwapResponse",
+        "type": "object"
+      },
+      "swap.v1.Side": {
+        "description": "Side is a spot order side.",
+        "enum": [
+          "SIDE_UNSPECIFIED",
+          "BUY",
+          "SELL"
+        ],
+        "title": "Side",
+        "type": "string"
+      },
+      "swap.v1.Swap": {
+        "additionalProperties": false,
+        "description": "Swap is one signed-in Swap and its outcome. Amounts count settled fills\n only.",
+        "properties": {
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Source amount requested, in 18-decimal units.",
+            "title": "amount_e18"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the Swap was created.",
+            "title": "created_at"
+          },
+          "destinationAssetId": {
+            "description": "Asset received.",
+            "title": "destination_asset_id",
+            "type": "integer"
+          },
+          "executedAmountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Source amount spent in settled fills, in 18-decimal units.",
+            "title": "executed_amount_e18"
+          },
+          "feeE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Total fee charged, in 18-decimal units of the destination asset.",
+            "title": "fee_e18"
+          },
+          "idempotencyKey": {
+            "description": "Idempotency key the Swap was created with.",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "isTerminal": {
+            "description": "True once the status is final: COMPLETED, PARTIALLY_COMPLETED or FAILED.",
+            "title": "is_terminal",
+            "type": "boolean"
+          },
+          "minAmountOutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Minimum destination amount after fees for the whole amount, in 18-decimal\n units. Each traded part nets at least this rate.",
+            "title": "min_amount_out_e18"
+          },
+          "orders": {
+            "description": "The Swap's spot orders, in placement order.",
+            "items": {
+              "$ref": "#/components/schemas/swap.v1.SwapOrder"
+            },
+            "title": "orders",
+            "type": "array"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/swap.v1.SwapReason",
+            "description": "Why the Swap did not trade its whole amount; set with PARTIALLY_COMPLETED\n and FAILED.",
+            "title": "reason"
+          },
+          "receivedAmountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Destination amount received after fees, in 18-decimal units.",
+            "title": "received_amount_e18"
+          },
+          "sourceAssetId": {
+            "description": "Asset spent.",
+            "title": "source_asset_id",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.v1.SwapStatus",
+            "description": "Current status.",
+            "title": "status"
+          },
+          "subaccountId": {
+            "description": "Sub-account public ID funding the Swap; 0 for the root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "swapId": {
+            "description": "Swap ID.",
+            "format": "int64",
+            "title": "swap_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "unspentAmountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Source amount not spent, in 18-decimal units; it never left the\n account. Final once is_terminal is true.",
+            "title": "unspent_amount_e18"
+          }
+        },
+        "title": "Swap",
+        "type": "object"
+      },
+      "swap.v1.SwapOrder": {
+        "additionalProperties": false,
+        "description": "SwapOrder is one spot order of a Swap: an immediate-or-cancel limit order\n at the Swap's protection price.",
+        "properties": {
+          "feeE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Fee charged on settled fills, in 18-decimal units of the asset the order\n receives.",
+            "title": "fee_e18"
+          },
+          "leg": {
+            "description": "Zero-based position of the order's market in the Swap's route.",
+            "title": "leg",
+            "type": "integer"
+          },
+          "limitPriceTicks": {
+            "description": "Limit price in quote-asset price ticks (1e-9 quote units per base unit):\n the worst price at which the order nets the Swap's minimum rate after fees.",
+            "format": "int64",
+            "title": "limit_price_ticks",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "orderId": {
+            "description": "Spot order ID, once the market accepted the order; 0 before.",
+            "format": "int64",
+            "title": "order_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "receivedE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Amount the order received in settled fills after fees, in 18-decimal\n units.",
+            "title": "received_e18"
+          },
+          "side": {
+            "$ref": "#/components/schemas/swap.v1.Side",
+            "description": "Side of the order.",
+            "title": "side"
+          },
+          "spentE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Amount the order spent in settled fills, fees in the spent asset included,\n in 18-decimal units.",
+            "title": "spent_e18"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.v1.SwapOrderStatus",
+            "description": "State of the order.",
+            "title": "status"
+          },
+          "symbolId": {
+            "description": "Stable numeric pair ID from GetSpotConfig.",
+            "title": "symbol_id",
+            "type": "integer"
+          }
+        },
+        "title": "SwapOrder",
+        "type": "object"
+      },
+      "swap.v1.SwapOrderStatus": {
+        "description": "SwapOrderStatus is the state of a Swap's spot order.",
+        "enum": [
+          "ORDER_STATUS_UNSPECIFIED",
+          "PLACING",
+          "PLACED",
+          "REFUSED",
+          "NOT_PLACED",
+          "UNCONFIRMED"
+        ],
+        "title": "SwapOrderStatus",
+        "type": "string"
+      },
+      "swap.v1.SwapQuote": {
+        "additionalProperties": false,
+        "description": "SwapQuote is an estimate from current order-book depth. Nothing is\n reserved: the prices are indicative, and only min_amount_out binds once the\n Swap is created.",
+        "properties": {
+          "expectedAmountOutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Estimated destination amount after fees, in 18-decimal units.",
+            "title": "expected_amount_out_e18"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Last moment the quote may be accepted, 30 seconds after quoted_at. Pass it\n as quote_expires_at when creating the Swap.",
+            "title": "expires_at"
+          },
+          "legs": {
+            "description": "Markets the Swap would trade on, in order. A direct Swap has one.",
+            "items": {
+              "$ref": "#/components/schemas/swap.v1.SwapQuoteLeg"
+            },
+            "title": "legs",
+            "type": "array"
+          },
+          "minAmountOutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Minimum destination amount after fees at the requested slippage, in\n 18-decimal units. Create the Swap with this value (or another accepted\n minimum) as min_amount_out_e18: whatever is executed then nets at least the\n same rate, and what cannot be stays on the account.",
+            "title": "min_amount_out_e18"
+          },
+          "quotedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the quote was priced.",
+            "title": "quoted_at"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/swap.v1.SwapTerms",
+            "description": "The quoted terms.",
+            "title": "terms"
+          }
+        },
+        "title": "SwapQuote",
+        "type": "object"
+      },
+      "swap.v1.SwapQuoteLeg": {
+        "additionalProperties": false,
+        "description": "SwapQuoteLeg is one spot market a quote trades on.",
+        "properties": {
+          "averagePrice": {
+            "description": "Estimated average fill price, quote asset per base asset, as a decimal\n string; for display.",
+            "title": "average_price",
+            "type": "string"
+          },
+          "feeAssetId": {
+            "description": "Asset the fee is charged in: the asset the leg receives.",
+            "title": "fee_asset_id",
+            "type": "integer"
+          },
+          "feeE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Estimated fee, in 18-decimal units of the asset the leg receives\n (fee_asset_id).",
+            "title": "fee_e18"
+          },
+          "priceImpactBps": {
+            "description": "Distance of average_price from the best price of the book, in basis points,\n rounded up: the cost of the order's size against current depth.",
+            "title": "price_impact_bps",
+            "type": "integer"
+          },
+          "side": {
+            "$ref": "#/components/schemas/swap.v1.Side",
+            "description": "Side of the order on the market.",
+            "title": "side"
+          },
+          "symbolId": {
+            "description": "Stable numeric pair ID from GetSpotConfig.",
+            "title": "symbol_id",
+            "type": "integer"
+          },
+          "takerFeeRatePercent": {
+            "description": "The account's spot taker fee rate on the market, in percent (for example\n \"0.1\" for 0.1%), as a decimal string.",
+            "title": "taker_fee_rate_percent",
+            "type": "string"
+          }
+        },
+        "title": "SwapQuoteLeg",
+        "type": "object"
+      },
+      "swap.v1.SwapReason": {
+        "description": "SwapReason says why a Swap did not trade its whole amount.",
+        "enum": [
+          "REASON_UNSPECIFIED",
+          "INSUFFICIENT_BALANCE",
+          "PRICE_PROTECTION",
+          "MARKET_UNAVAILABLE",
+          "ORDER_SIZE_OUT_OF_RANGE",
+          "RATE_LIMITED",
+          "ORDER_REJECTED",
+          "EXPIRED",
+          "MINIMUM_NOT_MET"
+        ],
+        "title": "SwapReason",
+        "type": "string"
+      },
+      "swap.v1.SwapStatus": {
+        "description": "SwapStatus is the state of a Swap.",
+        "enum": [
+          "STATUS_UNSPECIFIED",
+          "EXECUTING",
+          "COMPLETED",
+          "PARTIALLY_COMPLETED",
+          "FAILED",
+          "RECONCILING"
+        ],
+        "title": "SwapStatus",
+        "type": "string"
+      },
+      "swap.v1.SwapTerms": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "properties": {
+              "destinationAssetId": {
+                "description": "Asset received: a unified asset ID.",
+                "exclusiveMinimum": 0,
+                "title": "destination_asset_id",
+                "type": "integer"
+              },
+              "sourceAssetId": {
+                "description": "Asset spent: a unified asset ID, as used for balances and internal\n transfers.",
+                "exclusiveMinimum": 0,
+                "title": "source_asset_id",
+                "type": "integer"
+              },
+              "subaccountId": {
+                "description": "Optional sub-account public ID whose Trading balance funds the Swap. When\n omitted, the caller's root account funds it, or the sub-account an API key\n is bound to.",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "title": "subaccount_id",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              }
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "amountE18": {
+                    "$ref": "#/components/schemas/polyester.type.v1.U128",
+                    "description": "Positive source amount to spend, in 18-decimal units (0.5 is\n 500000000000000000). Only whole order steps of the market are traded;\n the rest stays on the account.",
+                    "title": "amount_e18"
+                  }
+                },
+                "required": [
+                  "amountE18"
+                ],
+                "title": "amount_e18"
+              }
+            ]
+          }
+        ],
+        "description": "SwapTerms are the economic terms of one Swap: spend amount_e18 of the\n source asset from the account's Trading balance and receive the destination\n asset there. The same terms are quoted and created. A Swap executes as spot\n orders at the account's own spot taker fee; no other fee is charged.\nswap_terms.distinct_assets // source and destination must differ\n",
+        "title": "SwapTerms",
+        "type": "object"
       },
       "transfer.v1.CreateInternalTransferRequest": {
         "additionalProperties": false,
@@ -21534,7 +24011,7 @@
         "type": "http"
       },
       "BrokerApiKeyAuth": {
-        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. Polyester issues keys at broker onboarding; contact Polyester to obtain or rotate one.",
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. The broker's members create, rotate and revoke keys through the QuickSwap broker API, and a key may rotate itself.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -21766,6 +24243,302 @@
         "summary": "Release a claimed fresh step-up proof when the protected request does not complete.",
         "tags": [
           "MFAService"
+        ]
+      }
+    },
+    "/chain.withdraw.v1.AutoWithdrawService/DisableAutoWithdrawRule": {
+      "post": {
+        "description": "Disable the account's rule. Requires a session login with withdraw\n rights on the account and a fresh single-use step-up.",
+        "operationId": "AutoWithdrawService_DisableAutoWithdrawRule",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.DisableAutoWithdrawRuleRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.DisableAutoWithdrawRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.DisableAutoWithdrawRuleResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.DisableAutoWithdrawRuleResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Disable the account's rule. Requires a session login with withdraw  rights on the account and a fresh single-use step-up.",
+        "tags": [
+          "AutoWithdrawService"
+        ]
+      }
+    },
+    "/chain.withdraw.v1.AutoWithdrawService/GetAutoWithdrawRule": {
+      "post": {
+        "description": "Read the account's latest rule version.",
+        "operationId": "AutoWithdrawService_GetAutoWithdrawRule",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.GetAutoWithdrawRuleRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.GetAutoWithdrawRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.GetAutoWithdrawRuleResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.GetAutoWithdrawRuleResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the account's latest rule version.",
+        "tags": [
+          "AutoWithdrawService"
+        ]
+      }
+    },
+    "/chain.withdraw.v1.AutoWithdrawService/ListAutoWithdrawRuns": {
+      "post": {
+        "description": "List the account's auto-withdraw runs with their payouts, newest first.",
+        "operationId": "AutoWithdrawService_ListAutoWithdrawRuns",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.ListAutoWithdrawRunsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.ListAutoWithdrawRunsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.ListAutoWithdrawRunsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.ListAutoWithdrawRunsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the account's auto-withdraw runs with their payouts, newest first.",
+        "tags": [
+          "AutoWithdrawService"
+        ]
+      }
+    },
+    "/chain.withdraw.v1.AutoWithdrawService/SetAutoWithdrawRule": {
+      "post": {
+        "description": "Create the account's rule, or replace its latest version with a new\n one. Requires a session login with withdraw rights on the account and\n a fresh single-use step-up; every destination must be on the account's\n external withdraw whitelist.",
+        "operationId": "AutoWithdrawService_SetAutoWithdrawRule",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.SetAutoWithdrawRuleRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.withdraw.v1.SetAutoWithdrawRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.SetAutoWithdrawRuleResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.withdraw.v1.SetAutoWithdrawRuleResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create the account's rule, or replace its latest version with a new  one. Requires a session login with withdraw rights on the account and  a fresh single-use step-up; every destination must be on the account's  external withdraw whitelist.",
+        "tags": [
+          "AutoWithdrawService"
         ]
       }
     },
@@ -23703,6 +26476,1431 @@
         ]
       }
     },
+    "/swap.quickswap.v1.QuickSwapBrokerService/CreateAffiliateVault": {
+      "post": {
+        "description": "Create or return the broker's affiliate vault for a label.",
+        "operationId": "QuickSwapBrokerService_CreateAffiliateVault",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateAffiliateVaultRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateAffiliateVaultRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateAffiliateVaultResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateAffiliateVaultResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create affiliate vault",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/CreateKey": {
+      "post": {
+        "description": "Create a broker API key; its token is shown once.",
+        "operationId": "QuickSwapBrokerService_CreateKey",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateKeyRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.CreateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateKeyResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.CreateKeyResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create API key",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/GetBroker": {
+      "post": {
+        "description": "Get the broker, its limits and current usage, and the caller's role.",
+        "operationId": "QuickSwapBrokerService_GetBroker",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get broker",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/GetBrokerStats": {
+      "post": {
+        "description": "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per day or month.",
+        "operationId": "QuickSwapBrokerService_GetBrokerStats",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerStatsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerStatsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetBrokerStatsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get broker stats",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/GetFeeTotals": {
+      "post": {
+        "description": "Total the broker and affiliate fees charged in a window, per asset, by vault, day or month.",
+        "operationId": "QuickSwapBrokerService_GetFeeTotals",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetFeeTotalsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetFeeTotalsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetFeeTotalsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetFeeTotalsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get fee totals",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/GetVault": {
+      "post": {
+        "description": "Get one of the broker's affiliate vaults.",
+        "operationId": "QuickSwapBrokerService_GetVault",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetVaultRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.GetVaultRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetVaultResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.GetVaultResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get affiliate vault",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/InviteMember": {
+      "post": {
+        "description": "Invite a person to the broker with a role other than Owner.",
+        "operationId": "QuickSwapBrokerService_InviteMember",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.InviteMemberRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.InviteMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.InviteMemberResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.InviteMemberResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Invite member",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/ListKeys": {
+      "post": {
+        "description": "List the broker's API keys without secrets.",
+        "operationId": "QuickSwapBrokerService_ListKeys",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListKeysRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListKeysRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListKeysResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListKeysResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List API keys",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/ListMembers": {
+      "post": {
+        "description": "List the broker's members and pending invites.",
+        "operationId": "QuickSwapBrokerService_ListMembers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListMembersRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListMembersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListMembersResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListMembersResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List members",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/ListMyBrokers": {
+      "post": {
+        "description": "List the caller's broker memberships and pending invites.",
+        "operationId": "QuickSwapBrokerService_ListMyBrokers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListMyBrokersRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListMyBrokersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListMyBrokersResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListMyBrokersResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List my brokers",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/ListQuickSwaps": {
+      "post": {
+        "description": "List the broker's QuickSwaps, newest first, by vault, status and creation time.",
+        "operationId": "QuickSwapBrokerService_ListQuickSwaps",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListQuickSwapsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListQuickSwapsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListQuickSwapsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListQuickSwapsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List QuickSwaps",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/ListVaults": {
+      "post": {
+        "description": "List the broker's affiliate vaults.",
+        "operationId": "QuickSwapBrokerService_ListVaults",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListVaultsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.ListVaultsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListVaultsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.ListVaultsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List affiliate vaults",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/RemoveMember": {
+      "post": {
+        "description": "Remove a member or cancel a pending invite.",
+        "operationId": "QuickSwapBrokerService_RemoveMember",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RemoveMemberRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RemoveMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RemoveMemberResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RemoveMemberResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove member",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/RespondToInvite": {
+      "post": {
+        "description": "Accept or decline a pending broker invite addressed to the caller.",
+        "operationId": "QuickSwapBrokerService_RespondToInvite",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RespondToInviteRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RespondToInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RespondToInviteResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RespondToInviteResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Respond to invite",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/RevokeKey": {
+      "post": {
+        "description": "Revoke a broker API key immediately.",
+        "operationId": "QuickSwapBrokerService_RevokeKey",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RevokeKeyRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RevokeKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RevokeKeyResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RevokeKeyResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke API key",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/RotateKey": {
+      "post": {
+        "description": "Replace a broker API key, keeping the old one working for an overlap.",
+        "operationId": "QuickSwapBrokerService_RotateKey",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RotateKeyRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.RotateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RotateKeyResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.RotateKeyResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rotate API key",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/SetMemberRole": {
+      "post": {
+        "description": "Change a member's role.",
+        "operationId": "QuickSwapBrokerService_SetMemberRole",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.SetMemberRoleRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.SetMemberRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.SetMemberRoleResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.SetMemberRoleResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set member role",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/SetVaultStatus": {
+      "post": {
+        "description": "Enable or disable an affiliate vault for new QuickSwaps.",
+        "operationId": "QuickSwapBrokerService_SetVaultStatus",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.SetVaultStatusRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.SetVaultStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.SetVaultStatusResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.SetVaultStatusResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set affiliate vault status",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/TransferOwnership": {
+      "post": {
+        "description": "Make another member the Owner of the broker.",
+        "operationId": "QuickSwapBrokerService_TransferOwnership",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.TransferOwnershipRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.TransferOwnershipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.TransferOwnershipResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.TransferOwnershipResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Transfer ownership",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
     "/swap.quickswap.v1.QuickSwapService/CreateQuickSwap": {
       "post": {
         "description": "Create or return the QuickSwap and deposit address for an idempotency key.",
@@ -23940,6 +28138,231 @@
         "tags": [
           "QuickSwap",
           "QuickSwapService"
+        ]
+      }
+    },
+    "/swap.v1.SwapService/CreateSwap": {
+      "post": {
+        "description": "Create and execute a Swap of the account's Trading balance, or return the Swap of an idempotency key.",
+        "operationId": "SwapService_CreateSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.CreateSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.CreateSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.CreateSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.CreateSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create Swap",
+        "tags": [
+          "Swap",
+          "SwapService"
+        ]
+      }
+    },
+    "/swap.v1.SwapService/GetSwap": {
+      "post": {
+        "description": "Get one Swap by identifier or by idempotency key.",
+        "operationId": "SwapService_GetSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.GetSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.GetSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.GetSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.GetSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Swap",
+        "tags": [
+          "Swap",
+          "SwapService"
+        ]
+      }
+    },
+    "/swap.v1.SwapService/QuoteSwap": {
+      "post": {
+        "description": "Price a Swap of the account's Trading balance without reserving anything.",
+        "operationId": "SwapService_QuoteSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.QuoteSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.v1.QuoteSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.QuoteSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.v1.QuoteSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Quote Swap",
+        "tags": [
+          "Swap",
+          "SwapService"
         ]
       }
     },
@@ -32113,6 +36536,10 @@
       "name": "LifecycleReadService"
     },
     {
+      "description": "AutoWithdrawService manages scheduled in-kind auto-withdraw rules for a\n root account or subaccount. A rule pays each asset's balance out on an\n hourly, daily, weekly, biweekly or monthly UTC slot, through the normal\n withdraw path, only to destinations on the account's external withdraw\n whitelist. Changing a\n rule requires a person with withdraw rights and a fresh single-use MFA\n step-up; API keys can read rules and runs but never change them.",
+      "name": "AutoWithdrawService"
+    },
+    {
       "description": "Request withdrawals from Trading for a Polyester account or subaccount.",
       "name": "Trading Withdraws"
     },
@@ -32221,8 +36648,24 @@
       "name": "QuickSwap"
     },
     {
-      "description": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. Polyester issues keys at\n broker onboarding; contact Polyester to obtain or rotate one.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 404 for NOT_FOUND, 409 for IDEMPOTENCY_CONFLICT, 413 when\n a request body is too large, 429 when the caller is rate limited, 500 for\n an internal error, 503 for UNAVAILABLE and 504 for DEADLINE_EXCEEDED.",
+      "description": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. The broker's members create,\n rotate and revoke keys with QuickSwapBrokerService, and a key may rotate\n itself.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for\n IDEMPOTENCY_CONFLICT, 413 when a request body is too large, 429 for\n RESOURCE_EXHAUSTED (with a Retry-After header when the request rate was\n exceeded), 500 for an internal error, 503 for UNAVAILABLE and 504 for\n DEADLINE_EXCEEDED.",
       "name": "QuickSwapService"
+    },
+    {
+      "description": "Self-service administration of a QuickSwap broker org: affiliate vaults, API keys and members, and reporting on its QuickSwaps and fees.",
+      "name": "QuickSwap Broker"
+    },
+    {
+      "description": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n\n A member managing keys or members must also send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
+      "name": "QuickSwapBrokerService"
+    },
+    {
+      "description": "Convert one asset of an account's Trading balance into another through the spot order books.",
+      "name": "Swap"
+    },
+    {
+      "description": "SwapService converts one asset of an account's Trading balance into another\n through Polyester's spot order books. A Swap executes as immediate-or-cancel\n spot orders on the account, at the account's spot taker fee and with no\n other fee, protected by the end-to-end min_amount_out the caller accepts:\n any part that trades nets at least that rate, and anything that cannot stays\n on the account. Quotes are estimates and reserve nothing.\n\n Requests are authenticated with a session token or a signed API key. The\n caller needs the SWAP permission on the account: the trading roles grant it\n on sub-accounts, and API keys and sub-account policies must include the SWAP\n action. A Swap's orders also remain subject to the sub-account's spot\n trading policy.\n\n Follow a Swap with GetSwap until is_terminal is true; a direct Swap usually\n completes within seconds.",
+      "name": "SwapService"
     },
     {
       "description": "Authenticated Trading to Trading internal transfer intake.",

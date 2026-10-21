@@ -1,6 +1,597 @@
 {
   "types": [
     {
+      "name": "chain.withdraw.v1.AutoWithdrawCadence",
+      "kind": "enum",
+      "doc": "AutoWithdrawCadence is how often an auto-withdraw rule runs. Every slot\n is a UTC time, with no daylight-saving shift.",
+      "enum": {
+        "values": [
+          {
+            "name": "DAILY",
+            "number": 1,
+            "doc": "Once a day at minute_of_day UTC."
+          },
+          {
+            "name": "WEEKLY",
+            "number": 2,
+            "doc": "Once a week on weekday at minute_of_day UTC."
+          },
+          {
+            "name": "HOURLY",
+            "number": 3,
+            "doc": "Checked every hour at minute_of_hour UTC; pays only an asset whose\n payable amount has reached its minimums, so a payout follows within the\n hour of the balance reaching them. An hour with nothing to pay records\n no run."
+          },
+          {
+            "name": "BIWEEKLY",
+            "number": 4,
+            "doc": "Every two weeks on weekday at minute_of_day UTC: in the week of\n anchor_date and every second week before or after it."
+          },
+          {
+            "name": "MONTHLY",
+            "number": 5,
+            "doc": "Once a month on day_of_month at minute_of_day UTC. A month without that\n day runs on its last day: day 31 runs on April 30 and on February 28 or\n 29, and days 29 and 30 run on the last day of February."
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawDestination",
+      "kind": "message",
+      "doc": "AutoWithdrawDestination pays one asset, in kind, to one external-chain\n address.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Ledger asset paid. At most one destination per asset.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 2,
+            "doc": "External destination chain identifier.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 3,
+            "doc": "Destination address on destination_chain_id. It must be on the\n account's external withdraw whitelist when the rule is written and\n whenever a run pays it. Responses carry its canonical form.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 385
+              }
+            }
+          },
+          {
+            "name": "min_amount_e18",
+            "jsonName": "minAmountE18",
+            "number": 4,
+            "doc": "A run pays this asset only when the payable amount reaches this\n minimum, in 18-decimal asset units, and the rule's min_usd_value_e18;\n otherwise the balance stays on the account for a later run. Must be at\n least the route's withdrawal minimum.",
+            "protoRef": "polyester.type.v1.U128",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "max_amount_e18",
+            "jsonName": "maxAmountE18",
+            "number": 5,
+            "doc": "The most one run pays this asset, in 18-decimal asset units; at least\n min_amount_e18. A larger balance pays this ceiling and the rest stays on\n the account.",
+            "protoRef": "polyester.type.v1.U128",
+            "validate": {
+              "required": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawPause",
+      "kind": "message",
+      "doc": "AutoWithdrawPause reports why a rule stopped running on its own.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Asset whose payout paused the rule.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 2,
+            "doc": "Machine-readable reason: destination_not_whitelisted when the\n destination left the account's external withdraw whitelist,\n destination_invalid when it is no longer a valid destination, or\n authority_revoked when the person who set the rule may no longer change\n it or withdraw from the account.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "paused_at",
+            "jsonName": "pausedAt",
+            "number": 3,
+            "doc": "When the rule was paused.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawRule",
+      "kind": "message",
+      "doc": "AutoWithdrawRule is one version of an account's auto-withdraw rule. Each\n change or disable creates the next version; only the latest version runs,\n and a run in progress keeps the version it started with but pays nothing\n further once that version is no longer the latest.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID the rule belongs to; zero for the root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "version",
+            "jsonName": "version",
+            "number": 2,
+            "doc": "Rule version, starting at 1.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "enabled",
+            "jsonName": "enabled",
+            "number": 3,
+            "doc": "Whether the rule runs. A disabled version has no destinations.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "schedule",
+            "jsonName": "schedule",
+            "number": 4,
+            "doc": "When the rule runs.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawSchedule"
+          },
+          {
+            "name": "destinations",
+            "jsonName": "destinations",
+            "number": 5,
+            "doc": "One destination per paid asset, ordered by asset_id.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.AutoWithdrawDestination"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 6,
+            "doc": "When this version was created.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "pause",
+            "jsonName": "pause",
+            "number": 7,
+            "doc": "Set when the rule paused itself; a new version resumes it.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawPause"
+          },
+          {
+            "name": "min_usd_value_e18",
+            "jsonName": "minUsdValueE18",
+            "number": 8,
+            "doc": "Least USD value one payout of the rule pays, in 18-decimal USD units;\n zero means no USD minimum.",
+            "protoRef": "polyester.type.v1.U128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawRun",
+      "kind": "message",
+      "doc": "AutoWithdrawRun is one scheduled run of an account's rule.",
+      "message": {
+        "fields": [
+          {
+            "name": "run_seq",
+            "jsonName": "runSeq",
+            "number": 1,
+            "doc": "The account's run number, increasing by one per run.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "rule_version",
+            "jsonName": "ruleVersion",
+            "number": 2,
+            "doc": "The rule version the run executes.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "scheduled_for",
+            "jsonName": "scheduledFor",
+            "number": 3,
+            "doc": "The scheduled slot the run belongs to.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 4,
+            "doc": "Where the run stands.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRunState"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 5,
+            "doc": "Machine-readable reason for a skipped run: nothing_to_pay,\n price_unavailable (an asset was not paid because no current price valued\n it) or rule_superseded; empty otherwise.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "steps",
+            "jsonName": "steps",
+            "number": 6,
+            "doc": "One step per destination of the rule version, ordered by asset_id.\n Empty while the run is planned.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.AutoWithdrawStep"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 7,
+            "doc": "When the run started.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "finished_at",
+            "jsonName": "finishedAt",
+            "number": 8,
+            "doc": "When the run ended; unset while it is in progress.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawRunState",
+      "kind": "enum",
+      "doc": "AutoWithdrawRunState is where one auto-withdraw run stands.",
+      "enum": {
+        "values": [
+          {
+            "name": "RUN_PLANNED",
+            "number": 1,
+            "doc": "The run is reading the account's balances."
+          },
+          {
+            "name": "RUN_PAYING",
+            "number": 2,
+            "doc": "The run's payouts are in progress."
+          },
+          {
+            "name": "RUN_COMPLETED",
+            "number": 3,
+            "doc": "Every payout completed or was skipped, and at least one paid."
+          },
+          {
+            "name": "RUN_PARTIALLY_FAILED",
+            "number": 4,
+            "doc": "Some payouts failed; their funds are back on the account."
+          },
+          {
+            "name": "RUN_FAILED",
+            "number": 5,
+            "doc": "Every attempted payout failed; the funds are back on the account."
+          },
+          {
+            "name": "RUN_SKIPPED",
+            "number": 6,
+            "doc": "Nothing was paid: every asset was below its minimum, no current price\n valued it, or the rule was no longer current."
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawSchedule",
+      "kind": "message",
+      "doc": "AutoWithdrawSchedule is a rule's UTC run slot. Only the fields of its\n cadence may be set; the others must be zero or empty.",
+      "message": {
+        "fields": [
+          {
+            "name": "cadence",
+            "jsonName": "cadence",
+            "number": 1,
+            "doc": "How often the rule runs.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawCadence",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "weekday",
+            "jsonName": "weekday",
+            "number": 2,
+            "doc": "Run day of a weekly or biweekly rule.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawWeekday",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "minute_of_day",
+            "jsonName": "minuteOfDay",
+            "number": 3,
+            "doc": "Minute after 00:00 UTC the run starts, 0 to 1439, for every cadence but\n HOURLY; must be 0 for an hourly rule.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "1439"
+              }
+            }
+          },
+          {
+            "name": "minute_of_hour",
+            "jsonName": "minuteOfHour",
+            "number": 4,
+            "doc": "Minute past every hour an HOURLY rule is checked, 0 to 59.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "59"
+              }
+            }
+          },
+          {
+            "name": "day_of_month",
+            "jsonName": "dayOfMonth",
+            "number": 5,
+            "doc": "Run day of a MONTHLY rule, 1 to 31; see MONTHLY for shorter months.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "31"
+              }
+            }
+          },
+          {
+            "name": "anchor_date",
+            "jsonName": "anchorDate",
+            "number": 6,
+            "doc": "A UTC date (YYYY-MM-DD) in a week a BIWEEKLY rule runs; weeks start on\n Monday. Responses return the Monday that starts that week.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 10,
+                "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawStep",
+      "kind": "message",
+      "doc": "AutoWithdrawStep is one asset's payout in a run.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Ledger asset paid.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 2,
+            "doc": "External destination chain identifier.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 3,
+            "doc": "Canonical destination address.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "available_e18",
+            "jsonName": "availableE18",
+            "number": 4,
+            "doc": "The account's available balance of the asset when the run started, in\n 18-decimal asset units.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "amount_e18",
+            "jsonName": "amountE18",
+            "number": 5,
+            "doc": "What the step pays, in 18-decimal asset units: the available balance\n up to the ceiling, rounded down to whole on-chain units. Zero when\n skipped. The remainder stays on the account.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 6,
+            "doc": "Where the payout stands.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawStepState"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 7,
+            "doc": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "intent_id",
+            "jsonName": "intentId",
+            "number": 8,
+            "doc": "Withdraw intent identifier once the withdrawal is accepted; follows the\n same lifecycle as a user withdrawal.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "tx_hash",
+            "jsonName": "txHash",
+            "number": 9,
+            "doc": "Destination-network transaction hash once the withdrawal completed.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "value_usd_e18",
+            "jsonName": "valueUsdE18",
+            "number": 10,
+            "doc": "USD value of the payable amount when the run started, in 18-decimal USD\n units, checked against the rule's min_usd_value_e18. Unset when the rule\n has no USD minimum or no current price was available.",
+            "protoRef": "polyester.type.v1.U128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawStepState",
+      "kind": "enum",
+      "doc": "AutoWithdrawStepState is where one asset's payout of a run stands.",
+      "enum": {
+        "values": [
+          {
+            "name": "STEP_PENDING",
+            "number": 1,
+            "doc": "Planned; not yet requested."
+          },
+          {
+            "name": "STEP_SUBMITTING",
+            "number": 2,
+            "doc": "Being requested."
+          },
+          {
+            "name": "STEP_SUBMITTED",
+            "number": 3,
+            "doc": "Withdrawal accepted; waiting for it to complete on chain."
+          },
+          {
+            "name": "STEP_COMPLETED",
+            "number": 4,
+            "doc": "The withdrawal completed on chain."
+          },
+          {
+            "name": "STEP_FAILED",
+            "number": 5,
+            "doc": "The withdrawal failed; its funds are back on the account."
+          },
+          {
+            "name": "STEP_SKIPPED",
+            "number": 6,
+            "doc": "Nothing was paid for this asset in this run."
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawWeekday",
+      "kind": "enum",
+      "doc": "AutoWithdrawWeekday is the run day of a weekly or biweekly rule.",
+      "enum": {
+        "values": [
+          {
+            "name": "MONDAY",
+            "number": 1,
+            "doc": "Monday."
+          },
+          {
+            "name": "TUESDAY",
+            "number": 2,
+            "doc": "Tuesday."
+          },
+          {
+            "name": "WEDNESDAY",
+            "number": 3,
+            "doc": "Wednesday."
+          },
+          {
+            "name": "THURSDAY",
+            "number": 4,
+            "doc": "Thursday."
+          },
+          {
+            "name": "FRIDAY",
+            "number": 5,
+            "doc": "Friday."
+          },
+          {
+            "name": "SATURDAY",
+            "number": 6,
+            "doc": "Saturday."
+          },
+          {
+            "name": "SUNDAY",
+            "number": 7,
+            "doc": "Sunday."
+          }
+        ]
+      }
+    },
+    {
       "name": "chain.withdraw.v1.CreateTradingWithdrawRequest",
       "kind": "message",
       "doc": "CreateTradingWithdrawRequest creates or returns one durable backend-authorized\n Trading withdraw intent from typed protobuf fields and an API-key signature.",
@@ -118,6 +709,54 @@
             "doc": "Stable server-owned intent identifier for the accepted withdraw lifecycle.\n Clients use this id to follow later progress for the same withdraw flow.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.DisableAutoWithdrawRuleRequest",
+      "kind": "message",
+      "doc": "DisableAutoWithdrawRuleRequest stops the rule of the root account or one\n subaccount.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "expected_version",
+            "jsonName": "expectedVersion",
+            "number": 2,
+            "doc": "The account's latest rule version.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.DisableAutoWithdrawRuleResponse",
+      "kind": "message",
+      "doc": "DisableAutoWithdrawRuleResponse returns the disabled version.",
+      "message": {
+        "fields": [
+          {
+            "name": "rule",
+            "jsonName": "rule",
+            "number": 1,
+            "doc": "The created, disabled version.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
           }
         ]
       }
@@ -337,6 +976,11 @@
             "name": "ERROR_CODE_CONFLICT",
             "number": 42,
             "doc": "The request conflicts with existing state."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_AUTO_WITHDRAW_SCHEDULE",
+            "number": 43,
+            "doc": "The auto-withdraw schedule is invalid: a field its cadence needs is\n missing or out of range, or a field of another cadence is set."
           }
         ]
       }
@@ -353,6 +997,184 @@
             "number": 1,
             "doc": "Stable error code matching the REST problem+json code field.",
             "protoRef": "chain.withdraw.v1.ErrorCode"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.GetAutoWithdrawRuleRequest",
+      "kind": "message",
+      "doc": "GetAutoWithdrawRuleRequest reads the latest rule version.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.GetAutoWithdrawRuleResponse",
+      "kind": "message",
+      "doc": "GetAutoWithdrawRuleResponse returns the latest rule version.",
+      "message": {
+        "fields": [
+          {
+            "name": "rule",
+            "jsonName": "rule",
+            "number": 1,
+            "doc": "The latest version; unset when the account never had a rule.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.ListAutoWithdrawRunsRequest",
+      "kind": "message",
+      "doc": "ListAutoWithdrawRunsRequest pages through an account's runs, newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 2,
+            "doc": "Maximum number of runs to return: 0 means 20, at most 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 3,
+            "doc": "Opaque, exclusive, keyset-backed cursor from a previous response,\n bound to the caller's account or subaccount and the newest-first\n run_seq order. Empty for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.ListAutoWithdrawRunsResponse",
+      "kind": "message",
+      "doc": "ListAutoWithdrawRunsResponse returns one page of runs, newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "runs",
+            "jsonName": "runs",
+            "number": 1,
+            "doc": "Runs ordered by run_seq, newest first.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRun"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.SetAutoWithdrawRuleRequest",
+      "kind": "message",
+      "doc": "SetAutoWithdrawRuleRequest creates or replaces the rule of the root\n account or one subaccount.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "expected_version",
+            "jsonName": "expectedVersion",
+            "number": 2,
+            "doc": "The version the change replaces: 0 when the account has no rule yet,\n otherwise its latest version. A mismatch is rejected so concurrent\n changes never overwrite each other.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "schedule",
+            "jsonName": "schedule",
+            "number": 3,
+            "doc": "When the rule runs.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawSchedule",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "destinations",
+            "jsonName": "destinations",
+            "number": 4,
+            "doc": "Destinations, one per asset, 1 to 32.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.AutoWithdrawDestination",
+            "validate": {
+              "repeated": {
+                "minItems": 1,
+                "maxItems": 32
+              }
+            }
+          },
+          {
+            "name": "min_usd_value_e18",
+            "jsonName": "minUsdValueE18",
+            "number": 5,
+            "doc": "Least USD value one payout pays, in 18-decimal USD units; unset or zero\n for no USD minimum. Each run values each asset's payable amount at the\n current index price. A smaller amount stays on the account for a later\n run, and the asset is skipped with reason price_unavailable when no\n current price is available. A payout never goes below its destination's\n min_amount_e18 or the route's withdrawal minimum.",
+            "protoRef": "polyester.type.v1.U128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.SetAutoWithdrawRuleResponse",
+      "kind": "message",
+      "doc": "SetAutoWithdrawRuleResponse returns the new rule version.",
+      "message": {
+        "fields": [
+          {
+            "name": "rule",
+            "jsonName": "rule",
+            "number": 1,
+            "doc": "The created version.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
           }
         ]
       }

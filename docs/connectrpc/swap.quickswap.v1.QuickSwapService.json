@@ -2,7 +2,7 @@
   "services": [
     {
       "name": "swap.quickswap.v1.QuickSwapService",
-      "doc": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. Polyester issues keys at\n broker onboarding; contact Polyester to obtain or rotate one.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 404 for NOT_FOUND, 409 for IDEMPOTENCY_CONFLICT, 413 when\n a request body is too large, 429 when the caller is rate limited, 500 for\n an internal error, 503 for UNAVAILABLE and 504 for DEADLINE_EXCEEDED.",
+      "doc": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. The broker's members create,\n rotate and revoke keys with QuickSwapBrokerService, and a key may rotate\n itself.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for\n IDEMPOTENCY_CONFLICT, 413 when a request body is too large, 429 for\n RESOURCE_EXHAUSTED (with a Retry-After header when the request rate was\n exceeded), 500 for an internal error, 503 for UNAVAILABLE and 504 for\n DEADLINE_EXCEEDED.",
       "methods": [
         {
           "name": "CreateQuickSwap",
@@ -10,7 +10,7 @@
           "requestType": "swap.quickswap.v1.CreateQuickSwapRequest",
           "responseType": "swap.quickswap.v1.CreateQuickSwapResponse",
           "summary": "CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and",
-          "doc": "CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and\n allocates its deposit address. It is idempotent per broker and key: a\n repeated or concurrent request with the same body returns the same\n QuickSwap, quote and address, so every unknown outcome is resolved by\n repeating the request unchanged.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,\n   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or AFFILIATES_INVALID.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,\n   REFUND_ADDRESS_REQUIRED, or AFFILIATES_INVALID when affiliates are not\n   enabled for the broker; nothing is bound to the key.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.\n - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its\n   address automatically; follow it with GetQuickSwap or the same request.\n - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;\n   retry the same request.\n - UNAUTHENTICATED: missing or invalid broker API key.",
+          "doc": "CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and\n allocates its deposit address. It is idempotent per broker and key: a\n repeated or concurrent request with the same body returns the same\n QuickSwap, quote and address, so every unknown outcome is resolved by\n repeating the request unchanged.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,\n   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,\n   REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN; nothing is bound to\n   the key.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.\n - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its\n   address automatically; follow it with GetQuickSwap or the same request.\n - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address; create\n   a new one with a new idempotency key.\n - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;\n   retry the same request.\n - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT; nothing is bound to the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "authRequired": true,
           "authenticationMethods": [
             "broker_api_key"
@@ -24,9 +24,10 @@
               "affiliates": [
                 {
                   "accountId": "7563897446546",
-                  "sharePpm": 1
+                  "bps": 1
                 }
               ],
+              "brokerBps": 1,
               "destinationAddress": "0x3333333333333333333333333333333333333333",
               "destinationMemo": "value",
               "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
@@ -54,10 +55,15 @@
             },
             "response": {
               "quickSwap": {
-                "affiliates": [
+                "chargedFees": [
                   {
                     "accountId": "7563897446546",
-                    "sharePpm": 1
+                    "amount": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "assetId": 100,
+                    "kind": "SERVICE"
                   }
                 ],
                 "createdAt": "2025-01-01T00:00:00Z",
@@ -117,6 +123,15 @@
                   "totalSlices": 1
                 },
                 "feeScheduleVersion": "1",
+                "fees": {
+                  "affiliates": [
+                    {
+                      "accountId": "7563897446546",
+                      "bps": 1
+                    }
+                  ],
+                  "brokerBps": 1
+                },
                 "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                 "isTerminal": false,
                 "quote": {
@@ -131,10 +146,12 @@
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "fees": [
                     {
+                      "accountId": "7563897446546",
                       "amount": {
                         "baseUnits": "value",
                         "decimals": 36
                       },
+                      "bps": 1,
                       "kind": "SERVICE",
                       "zippedAssetId": 100
                     }
@@ -222,7 +239,7 @@
           "requestType": "swap.quickswap.v1.GetQuickSwapRequest",
           "responseType": "swap.quickswap.v1.GetQuickSwapResponse",
           "summary": "GetQuickSwap returns the current state of one QuickSwap by swap_id or by",
-          "doc": "GetQuickSwap returns the current state of one QuickSwap by swap_id or by\n idempotency key.\n\n Errors:\n - INVALID_ARGUMENT: malformed selector.\n - NOT_FOUND: SWAP_NOT_FOUND.\n - UNAUTHENTICATED: missing or invalid broker API key.",
+          "doc": "GetQuickSwap returns the current state of one QuickSwap by swap_id or by\n idempotency key.\n\n Errors:\n - INVALID_ARGUMENT: malformed selector.\n - NOT_FOUND: SWAP_NOT_FOUND.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the read request rate of the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "authRequired": true,
           "authenticationMethods": [
             "broker_api_key"
@@ -237,10 +254,15 @@
             },
             "response": {
               "quickSwap": {
-                "affiliates": [
+                "chargedFees": [
                   {
                     "accountId": "7563897446546",
-                    "sharePpm": 1
+                    "amount": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "assetId": 100,
+                    "kind": "SERVICE"
                   }
                 ],
                 "createdAt": "2025-01-01T00:00:00Z",
@@ -300,6 +322,15 @@
                   "totalSlices": 1
                 },
                 "feeScheduleVersion": "1",
+                "fees": {
+                  "affiliates": [
+                    {
+                      "accountId": "7563897446546",
+                      "bps": 1
+                    }
+                  ],
+                  "brokerBps": 1
+                },
                 "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                 "isTerminal": false,
                 "quote": {
@@ -314,10 +345,12 @@
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "fees": [
                     {
+                      "accountId": "7563897446546",
                       "amount": {
                         "baseUnits": "value",
                         "decimals": 36
                       },
+                      "bps": 1,
                       "kind": "SERVICE",
                       "zippedAssetId": 100
                     }
@@ -405,7 +438,7 @@
           "requestType": "swap.quickswap.v1.QuoteQuickSwapRequest",
           "responseType": "swap.quickswap.v1.QuoteQuickSwapResponse",
           "summary": "QuoteQuickSwap prices terms without creating a QuickSwap or reserving a",
-          "doc": "QuoteQuickSwap prices terms without creating a QuickSwap or reserving a\n deposit address. The quote states whether the route needs a refund\n address.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE or\n   DECIMALS_MISMATCH.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED or PROTECTION_UNACHIEVABLE.\n - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.\n - UNAUTHENTICATED: missing or invalid broker API key.",
+          "doc": "QuoteQuickSwap prices terms without creating a QuickSwap or reserving a\n deposit address. The quote states whether the route needs a refund\n address.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH or FEES_INVALID.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or\n   AFFILIATE_VAULT_UNKNOWN.\n - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.\n - PERMISSION_DENIED: BROKER_DISABLED.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the quote request rate of the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "authRequired": true,
           "authenticationMethods": [
             "broker_api_key"
@@ -416,6 +449,13 @@
           "errorCatalog": "core:generic",
           "examples": {
             "request": {
+              "affiliates": [
+                {
+                  "accountId": "7563897446546",
+                  "bps": 1
+                }
+              ],
+              "brokerBps": 1,
               "terms": {
                 "amount": {
                   "baseUnits": "value",
@@ -445,10 +485,12 @@
                 "expiresAt": "2025-01-01T00:00:00Z",
                 "fees": [
                   {
+                    "accountId": "7563897446546",
                     "amount": {
                       "baseUnits": "value",
                       "decimals": 36
                     },
+                    "bps": 1,
                     "kind": "SERVICE",
                     "zippedAssetId": 100
                   }

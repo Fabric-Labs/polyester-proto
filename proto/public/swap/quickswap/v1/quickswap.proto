@@ -152,30 +152,35 @@ message QuickSwapTerms {
   Execution execution = 6 [(buf.validate.field).required = true];
 }
 
-// FeeKind identifies one component of the quoted fees.
+// FeeKind identifies one component of a QuickSwap's fees.
 enum FeeKind {
   // No kind; never returned.
   FEE_UNSPECIFIED = 0;
-  // Polyester fee of one trading leg: the leg's pair fee in basis points of
+  // Service fee of one trading leg: the leg's pair fee in basis points of
   // what the leg receives. A two-leg route has one per leg. On a bridge, the
   // one bridge fee in basis points of the credited amount, charged at payout.
   SERVICE = 1;
-  // Broker fee of one trading leg: the broker's fee on the leg's pair in basis
-  // points of what the leg receives, including any affiliate shares paid from
-  // it. A two-leg route has one per leg. On a bridge, the broker's one bridge
-  // fee in basis points of the credited amount, charged at payout.
-  INTEGRATOR = 2;
+  // Broker fee of one trading leg, the request's broker_bps of what the leg
+  // receives, credited to the broker's default vault. A two-leg route has one
+  // per leg; a bridge has one, on the credited amount, charged at payout.
+  BROKER = 2;
+  // Affiliate fee of one trading leg, one affiliate's bps of what the leg
+  // receives, credited to that affiliate vault. Each affiliate has one per
+  // leg; on a bridge one, on the credited amount, charged at payout.
+  AFFILIATE = 3;
   // Network fee withheld from the deposit before it is credited.
-  DEPOSIT_NETWORK = 3;
+  DEPOSIT_NETWORK = 4;
   // Estimated network fee for a withdrawal. The actual fee is charged at
   // withdrawal time and reported on the withdrawal.
-  WITHDRAWAL_NETWORK = 4;
+  WITHDRAWAL_NETWORK = 5;
 }
 
-// QuoteFee is one fee component of a quote. Trading fees (SERVICE and
-// INTEGRATOR) are charged when each leg settles, in the asset that leg
-// receives: the base asset on a buy, the quote asset on a sell. A bridge has
-// no settlement; its fees are charged at payout, in the destination asset.
+// QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER
+// and AFFILIATE) are charged when each leg settles, in the asset that leg
+// receives: the base asset on a buy, the quote asset on a sell. Each is
+// computed on its own from what the leg receives and rounded down when
+// charged. A bridge has no settlement; its fees are charged at payout, in
+// the destination asset.
 message QuoteFee {
   // Fee component.
   FeeKind kind = 1;
@@ -188,6 +193,12 @@ message QuoteFee {
   // (amount.decimals). Trading fees are rounded up, so the charged fee never
   // exceeds the quoted one.
   TokenAmount amount = 3;
+  // Rate of a trading fee in basis points of what the leg receives; zero for
+  // a network fee.
+  uint32 bps = 4;
+  // AFFILIATE only: public sub-account ID of the affiliate vault credited
+  // with the fee; zero for every other kind.
+  fixed64 account_id = 5;
 }
 
 // QuickSwapQuote is the priced view of a QuickSwap's terms. Price fields are
@@ -229,8 +240,9 @@ message QuickSwapQuote {
   // quote.
   string min_rate = 4;
   // Published minimum deposit, in source token units, compared with the
-  // deposit before its network fee. A smaller deposit is held
-  // (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum
+  // deposit before its network fee. A smaller deposit is returned to
+  // return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source
+  // network's minimum
   // (AssetChainVariant.deposit_min_amount in the config), and differs from
   // ErrorDetail.min_deposit_amount, the smallest deposit that currently
   // quotes.
@@ -247,9 +259,10 @@ message QuickSwapQuote {
   // bridge. When non-zero, CreateQuickSwap requires a refund address for that
   // asset. The route is fixed at creation.
   uint32 intermediate_asset_id = 7;
-  // Quoted fee components for deposit_amount: service and integrator fees in
-  // route order (a bridge has one pair, charged at payout), then network fees.
-  // Zero fees are omitted.
+  // Quoted fee components for deposit_amount: each leg's service, broker and
+  // affiliate fees, in that order, legs in route order (a bridge has one set,
+  // charged at payout), then network fees. Affiliates are in ascending
+  // account_id order. Zero fees are omitted.
   repeated QuoteFee fees = 8;
   // When the quote was priced.
   google.protobuf.Timestamp quoted_at = 9;
@@ -337,8 +350,10 @@ enum DepositDisposition {
   ELIGIBLE = 2;
   // Not accepted: it is returned to return_address and never executes. A
   // deposit found ineligible after it was credited, such as a late deposit
-  // (LATE_DEPOSIT) or one above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM),
-  // keeps credited_at and is returned from its credit.
+  // (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or
+  // above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong
+  // asset or network (WRONG_ASSET), keeps credited_at and is returned from its
+  // credit.
   RETURN_ONLY = 3;
   // Held for review; it neither executes nor returns until released.
   ON_HOLD = 4;
@@ -374,16 +389,22 @@ enum QuickSwapReason {
   EXECUTION_DEADLINE_REACHED = 8;
   // The deposit was first seen after funding_expires_at.
   LATE_DEPOSIT = 9;
-  // The deposit is below the published min_deposit_amount. It is held, not
-  // executed or returned automatically. The broker contacts Polyester broker
-  // support with the swap_id.
+  // The deposit is below the published min_deposit_amount. It is not
+  // executed: it is returned to return_address, and the QuickSwap shows
+  // RETURNING and RETURNED with this reason. A deposit that cannot be returned
+  // on the network it was received on is held (HELD with this reason); the
+  // broker contacts Polyester broker support with the swap_id.
   DEPOSIT_BELOW_MINIMUM = 11;
   // The deposit is above max_deposit_amount; it is returned to
   // return_address.
   DEPOSIT_ABOVE_MAXIMUM = 12;
-  // The deposit is not the quoted source asset. It is held, not executed or
-  // returned automatically. The broker contacts Polyester broker support
-  // with the swap_id.
+  // The deposit is not the quoted source asset or network. It is not
+  // executed: it is returned to return_address on the network and in the
+  // asset it was received in, and the QuickSwap shows RETURNING and RETURNED
+  // with this reason. A deposit that cannot be returned there, such as one
+  // received on a network where return_address is not valid, is held (HELD
+  // with this reason); the broker contacts Polyester broker support with the
+  // swap_id.
   WRONG_ASSET = 13;
   // The funding window ended without an eligible deposit.
   FUNDING_WINDOW_ENDED = 15;
@@ -454,8 +475,8 @@ message ExecutionProgress {
   // Source amount traded so far, in source token units. On a two-leg route
   // this counts the first leg. Zero for a bridge, which trades nothing.
   TokenAmount executed_input = 2;
-  // Destination amount acquired so far after service and integrator fees and
-  // before withdrawal network fees, in destination token units. Zero for a
+  // Destination amount acquired so far after service, broker and affiliate
+  // fees and before withdrawal network fees, in destination token units. Zero for a
   // bridge: its destination withdrawal pays the credit less its fees.
   TokenAmount output_amount = 3;
   // On a two-leg route, intermediate asset acquired but not yet converted, in
@@ -488,7 +509,8 @@ enum WithdrawalRole {
   // refund, to refund_address on the refund route's network.
   REFUND = 2;
   // Source funds that were not accepted or not traded, to return_address on
-  // the source network.
+  // the network and in the asset they were received in: the source network,
+  // or for a wrong asset the network it was sent on.
   RETURN = 3;
 }
 
@@ -634,8 +656,8 @@ enum QuickSwapStatus {
 // QuickSwap is one broker-owned swap of an external deposit into external
 // withdrawals. The end user needs no account.
 message QuickSwap {
-  reserved 19;
-  reserved "capacity_wait_expires_at";
+  reserved 19, 27;
+  reserved "capacity_wait_expires_at", "affiliates";
 
   // Public QuickSwap identifier.
   fixed64 swap_id = 1;
@@ -704,18 +726,56 @@ message QuickSwap {
   // while ALLOCATING; 1 once the deposit address is issued
   // (AWAITING_DEPOSIT); every later change increments it.
   uint64 version = 26;
-  // Affiliate shares of the broker fee, as requested.
-  repeated AffiliateShare affiliates = 27;
   // Fee schedule version fixed at creation. Every execution or bridge payout
-  // of this QuickSwap is charged that version's service and integrator fees,
-  // whatever later versions change.
+  // of this QuickSwap is charged that version's service fees, whatever later
+  // versions change.
   uint64 fee_schedule_version = 28;
+  // Broker and affiliate fees as requested, fixed at creation.
+  RequestedFees fees = 29;
+  // Broker and affiliate fees charged so far, as settled: one entry per fee
+  // kind, credited vault and asset, in kind, then account_id, then asset_id
+  // order. Grows while the QuickSwap executes or pays out a bridge.
+  repeated ChargedFee charged_fees = 30;
 }
 
-// QuoteQuickSwapRequest prices terms without reserving anything.
+// RequestedFees are the broker and affiliate fees a QuickSwap request set,
+// charged on top of the service fee.
+message RequestedFees {
+  // Broker fee in basis points of what each leg receives, credited to the
+  // broker's default vault.
+  uint32 broker_bps = 1;
+  // Affiliate fees, in ascending account_id order.
+  repeated AffiliateShare affiliates = 2;
+}
+
+// ChargedFee is what one vault has been credited with for a QuickSwap in
+// one asset, from settled fills and bridge payouts.
+message ChargedFee {
+  // BROKER or AFFILIATE.
+  FeeKind kind = 1;
+  // Public sub-account ID of the credited vault: the default vault for
+  // BROKER, the affiliate vault for AFFILIATE.
+  fixed64 account_id = 2;
+  // Asset credited, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 3;
+  // Amount credited, in base units of 18 decimals.
+  TokenAmount amount = 4;
+}
+
+// QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,
+// without reserving anything.
 message QuoteQuickSwapRequest {
   // Terms to price.
   QuickSwapTerms terms = 1 [(buf.validate.field).required = true];
+  // Broker fee in basis points of what each leg receives, charged on top of
+  // the service fee and credited to the broker's default vault; 0 for none.
+  // broker_bps and the affiliates' bps total at most 300. Fees outside these
+  // rules fail with FEES_INVALID.
+  uint32 broker_bps = 2;
+  // Affiliate fees, each charged on top and credited to its affiliate vault:
+  // at most three distinct vaults.
+  repeated AffiliateShare affiliates = 3;
 }
 
 // QuoteQuickSwapResponse is an indicative quote.
@@ -725,17 +785,16 @@ message QuoteQuickSwapResponse {
   QuickSwapQuote quote = 1;
 }
 
-// AffiliateShare pays one affiliate a fraction of the broker's integrator fee.
-// The broker keeps whatever the shares leave.
+// AffiliateShare credits one affiliate vault, a sub-account the broker owns,
+// with a fee charged on top of the service and broker fees.
 message AffiliateShare {
-  // Public account ID of the affiliate's account, credited with the share. It
-  // must not be the broker's own payout account.
-  fixed64 account_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Share of the integrator fee in parts per million, from 1 to 1000000.
-  uint32 share_ppm = 2 [(buf.validate.field).uint32 = {
-    gte: 1
-    lte: 1000000
-  }];
+  // Public sub-account ID of an active affiliate vault of the broker
+  // (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an
+  // unknown, disabled or other broker's vault, or the default vault, fails
+  // with AFFILIATE_VAULT_UNKNOWN.
+  fixed64 account_id = 1;
+  // Fee in basis points of what each leg receives, from 1 to 300.
+  uint32 bps = 2;
 }
 
 // CreateQuickSwapRequest creates, or returns, the QuickSwap for one
@@ -754,7 +813,7 @@ message CreateQuickSwapRequest {
   // IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and
   // memo is put in its network's canonical form, so the same address in
   // another case or encoding is the same request; affiliate order is
-  // ignored; every other field must be equal.
+  // ignored; every other field, the fees included, must be equal.
   string idempotency_key = 1 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
   // Economic terms.
   QuickSwapTerms terms = 2 [(buf.validate.field).required = true];
@@ -794,10 +853,14 @@ message CreateQuickSwapRequest {
   // know it in advance. It must be a valid address on the source network and
   // is shown on the QuickSwap.
   string source_wallet = 10 [(buf.validate.field).string.max_bytes = 256];
-  // Optional affiliates paid from the broker's integrator fee: at most four
-  // distinct accounts whose shares total at most 1000000 ppm. Empty means the
-  // broker keeps the whole integrator fee. The quote shows the total fee only.
-  repeated AffiliateShare affiliates = 11 [(buf.validate.field).repeated.max_items = 4];
+  // Affiliate fees, each charged on top and credited to its affiliate vault:
+  // at most three distinct vaults. Fixed at creation with broker_bps.
+  repeated AffiliateShare affiliates = 11;
+  // Broker fee in basis points of what each leg receives, charged on top of
+  // the service fee and credited to the broker's default vault; 0 for none.
+  // broker_bps and the affiliates' bps total at most 300. Fees outside these
+  // rules fail with FEES_INVALID.
+  uint32 broker_bps = 12;
 }
 
 // CreateQuickSwapResponse returns the QuickSwap bound to the idempotency key.
@@ -828,8 +891,8 @@ message GetQuickSwapResponse {
 
 // ErrorCode is the stable machine-readable QuickSwap error code.
 enum ErrorCode {
-  reserved 9, 10, 16;
-  reserved "SOURCE_SCREENING_REJECTED", "SCREENING_UNAVAILABLE", "NOT_CANCELLABLE";
+  reserved 9, 10, 16, 17;
+  reserved "SOURCE_SCREENING_REJECTED", "SCREENING_UNAVAILABLE", "NOT_CANCELLABLE", "AFFILIATES_INVALID";
 
   // No code.
   ERROR_UNSPECIFIED = 0;
@@ -869,10 +932,61 @@ enum ErrorCode {
   IDEMPOTENCY_CONFLICT = 14;
   // No QuickSwap of this broker matches the selector.
   SWAP_NOT_FOUND = 15;
-  // affiliates are not valid: an account named twice, shares totalling more
-  // than 1000000 ppm, an unknown account or the broker's own payout account;
-  // or affiliates are not enabled for the broker.
-  AFFILIATES_INVALID = 17;
+  // The broker is disabled: quotes and creates are refused. Reads and
+  // QuickSwaps already created continue.
+  BROKER_DISABLED = 18;
+  // A broker limit was reached: the unfunded QuickSwaps held at once, the
+  // QuickSwaps created per hour, the request rate of the API key, or the
+  // affiliate vaults the broker may create. Nothing is bound to the key. A
+  // funded or expired QuickSwap frees an unfunded slot; when the response
+  // carries a Retry-After header, retry after that many seconds.
+  BROKER_LIMIT = 19;
+  // An affiliate names a vault that is not an active affiliate vault of the
+  // broker: unknown, not yet created, disabled, another broker's, or the
+  // default vault. Nothing is bound to the key; create or enable the vault
+  // and repeat the request.
+  AFFILIATE_VAULT_UNKNOWN = 20;
+  // No broker with this name has the caller as its key or member.
+  BROKER_NOT_FOUND = 21;
+  // The caller's role, or a broker API key, may not perform the action.
+  ACTION_DENIED = 22;
+  // The action needs a fresh step-up proof of the acting member in the
+  // X-Auth-Step-Up header, and none was sent or it was already used or
+  // expired. Complete an MFA challenge for fresh step-up and repeat the
+  // request with the new proof.
+  STEP_UP_REQUIRED = 23;
+  // The broker has no affiliate vault with this ID.
+  VAULT_NOT_FOUND = 24;
+  // The broker has no API key with this ID, or it no longer works.
+  KEY_NOT_FOUND = 25;
+  // The broker would have more than two working API keys. Revoke one first.
+  KEY_LIMIT = 26;
+  // The key is the broker's last key that works without an expiry; create
+  // another key first.
+  LAST_KEY = 27;
+  // The person is not a member of the broker and has no pending invite, or
+  // the account does not exist.
+  MEMBER_NOT_FOUND = 28;
+  // The person is already a member of the broker.
+  ALREADY_MEMBER = 29;
+  // The Owner cannot be removed or given another role; transfer ownership
+  // instead.
+  OWNER_IMMUTABLE = 30;
+  // No pending invite with this ID is addressed to the caller.
+  INVITE_NOT_FOUND = 31;
+  // The fees are not valid: more than three affiliates, an affiliate without
+  // a valid account_id or with bps outside 1 to 300, a vault named twice, or
+  // broker_bps and the affiliates' bps totalling more than 300.
+  FEES_INVALID = 32;
+  // The broker stats cannot be read: a QuickSwap in the window, named by
+  // ErrorDetail.swap_id, is missing a record they need. Contact Polyester
+  // broker support with the swap_id.
+  STATS_INCOMPLETE = 33;
+  // The QuickSwap (swap_id in the error) cannot be issued a deposit address
+  // and never gets one, so nothing can be deposited to it. Create a new
+  // QuickSwap with a new idempotency key, and report the swap_id to Polyester
+  // broker support.
+  ADDRESS_CONFLICT = 34;
 }
 
 // ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it
@@ -892,7 +1006,8 @@ message ErrorDetail {
   // the route with the requested protection, in source token units, whatever
   // the request's basis. It moves with prices and network fees; show it as
   // guidance, not a guarantee. A deposit below QuickSwapQuote.min_deposit_amount
-  // is held. Unset for other codes and when no deposit currently quotes.
+  // is returned to return_address (DEPOSIT_BELOW_MINIMUM). Unset for other
+  // codes and when no deposit currently quotes.
   TokenAmount min_deposit_amount = 3;
   // AMOUNT_OUT_OF_RANGE only: the largest deposit that quotes, in source token
   // units. Unset for other codes, when no deposit currently quotes, and for a
@@ -907,8 +1022,9 @@ message ErrorDetail {
 // own QuickSwaps.
 //
 // The broker API key is a server credential. Call this API from the broker's
-// backend, never from a browser or mobile app. Polyester issues keys at
-// broker onboarding; contact Polyester to obtain or rotate one.
+// backend, never from a browser or mobile app. The broker's members create,
+// rotate and revoke keys with QuickSwapBrokerService, and a key may rotate
+// itself.
 //
 // A QuickSwap's status advances as the deposit and execution progress; poll
 // GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while
@@ -916,19 +1032,24 @@ message ErrorDetail {
 //
 // REST errors are application/problem+json (see ErrorDetail) with these HTTP
 // statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for
-// UNAUTHENTICATED, 404 for NOT_FOUND, 409 for IDEMPOTENCY_CONFLICT, 413 when
-// a request body is too large, 429 when the caller is rate limited, 500 for
-// an internal error, 503 for UNAVAILABLE and 504 for DEADLINE_EXCEEDED.
+// UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for
+// IDEMPOTENCY_CONFLICT, 413 when a request body is too large, 429 for
+// RESOURCE_EXHAUSTED (with a Retry-After header when the request rate was
+// exceeded), 500 for an internal error, 503 for UNAVAILABLE and 504 for
+// DEADLINE_EXCEEDED.
 service QuickSwapService {
   // QuoteQuickSwap prices terms without creating a QuickSwap or reserving a
   // deposit address. The quote states whether the route needs a refund
   // address.
   //
   // Errors:
-  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE or
-  //   DECIMALS_MISMATCH.
-  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED or PROTECTION_UNACHIEVABLE.
+  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,
+  //   DECIMALS_MISMATCH or FEES_INVALID.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or
+  //   AFFILIATE_VAULT_UNKNOWN.
   // - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.
+  // - PERMISSION_DENIED: BROKER_DISABLED.
+  // - RESOURCE_EXHAUSTED: BROKER_LIMIT, the quote request rate of the key.
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc QuoteQuickSwap(QuoteQuickSwapRequest) returns (QuoteQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
@@ -954,15 +1075,19 @@ service QuickSwapService {
   // Errors:
   // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,
   //   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,
-  //   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or AFFILIATES_INVALID.
+  //   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID.
   // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,
-  //   REFUND_ADDRESS_REQUIRED, or AFFILIATES_INVALID when affiliates are not
-  //   enabled for the broker; nothing is bound to the key.
+  //   REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN; nothing is bound to
+  //   the key.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.
   // - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its
   //   address automatically; follow it with GetQuickSwap or the same request.
+  // - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address; create
+  //   a new one with a new idempotency key.
   // - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;
   //   retry the same request.
+  // - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.
+  // - RESOURCE_EXHAUSTED: BROKER_LIMIT; nothing is bound to the key.
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc CreateQuickSwap(CreateQuickSwapRequest) returns (CreateQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
@@ -985,6 +1110,7 @@ service QuickSwapService {
   // Errors:
   // - INVALID_ARGUMENT: malformed selector.
   // - NOT_FOUND: SWAP_NOT_FOUND.
+  // - RESOURCE_EXHAUSTED: BROKER_LIMIT, the read request rate of the key.
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc GetQuickSwap(GetQuickSwapRequest) returns (GetQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;

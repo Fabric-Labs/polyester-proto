@@ -3,37 +3,581 @@
     {
       "name": "swap.quickswap.v1.AffiliateShare",
       "kind": "message",
-      "doc": "AffiliateShare pays one affiliate a fraction of the broker's integrator fee.\n The broker keeps whatever the shares leave.",
+      "doc": "AffiliateShare credits one affiliate vault, a sub-account the broker owns,\n with a fee charged on top of the service and broker fees.",
       "message": {
         "fields": [
           {
             "name": "account_id",
             "jsonName": "accountId",
             "number": 1,
-            "doc": "Public account ID of the affiliate's account, credited with the share. It\n must not be the broker's own payout account.",
+            "doc": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN.",
             "protoScalar": "fixed64",
             "jsonType": "string",
-            "format": "fixed64",
+            "format": "fixed64"
+          },
+          {
+            "name": "bps",
+            "jsonName": "bps",
+            "number": 2,
+            "doc": "Fee in basis points of what each leg receives, from 1 to 300.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.AffiliateVault",
+      "kind": "message",
+      "doc": "AffiliateVault is a sub-account of the broker root, owned by the broker,\n credited with the fees of one affiliate. Affiliate vaults are never\n deleted.",
+      "message": {
+        "fields": [
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 1,
+            "doc": "Public sub-account ID of the vault; name it in AffiliateShare.account_id.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 2,
+            "doc": "Broker-chosen label, unique per broker.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 3,
+            "doc": "Whether new QuickSwaps can name the vault.",
+            "protoRef": "swap.quickswap.v1.VaultStatus"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 4,
+            "doc": "When the vault was created.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "updated_at",
+            "jsonName": "updatedAt",
+            "number": 5,
+            "doc": "When the vault was last changed.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.AssetVolume",
+      "kind": "message",
+      "doc": "AssetVolume is a total amount in one asset.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Asset, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 2,
+            "doc": "Total, in base units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.Broker",
+      "kind": "message",
+      "doc": "Broker is a broker org.",
+      "message": {
+        "fields": [
+          {
+            "name": "name",
+            "jsonName": "name",
+            "number": 1,
+            "doc": "Broker name: the immutable identifier used in every request.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "display_name",
+            "jsonName": "displayName",
+            "number": 2,
+            "doc": "Display name.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "enabled",
+            "jsonName": "enabled",
+            "number": 3,
+            "doc": "Whether the broker may quote and create QuickSwaps. A disabled broker\n keeps reads, vaults, keys and members.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "root_account_id",
+            "jsonName": "rootAccountId",
+            "number": 4,
+            "doc": "Public account ID of the broker's root account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "default_vault_account_id",
+            "jsonName": "defaultVaultAccountId",
+            "number": 5,
+            "doc": "Public sub-account ID of the default vault, credited with broker fees\n that name no affiliate.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "max_affiliate_vaults",
+            "jsonName": "maxAffiliateVaults",
+            "number": 6,
+            "doc": "Affiliate vaults the broker may create, active and disabled together.\n At the limit, CreateAffiliateVault fails with RESOURCE_EXHAUSTED /\n BROKER_LIMIT.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 7,
+            "doc": "The caller's role; BROKER_ROLE_UNSPECIFIED for a broker API key.",
+            "protoRef": "swap.quickswap.v1.BrokerRole"
+          },
+          {
+            "name": "quote_rps",
+            "jsonName": "quoteRps",
+            "number": 8,
+            "doc": "Quote requests per second allowed for each API key of the broker, which\n is also the burst. Over the rate, QuoteQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "create_rps",
+            "jsonName": "createRps",
+            "number": 9,
+            "doc": "Create requests per second allowed for each API key of the broker, which\n is also the burst. Over the rate, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "read_rps",
+            "jsonName": "readRps",
+            "number": 10,
+            "doc": "Read requests per second allowed for each API key of the broker, which is\n also the burst. GetQuickSwap and every QuickSwapBrokerService call by an\n API key count as reads. Over the rate, the call fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_unfunded_addresses",
+            "jsonName": "maxUnfundedAddresses",
+            "number": 11,
+            "doc": "Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_creates_per_hour",
+            "jsonName": "maxCreatesPerHour",
+            "number": 12,
+            "doc": "Quick Swaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.BrokerKey",
+      "kind": "message",
+      "doc": "BrokerKey is a broker API key, without its secret.",
+      "message": {
+        "fields": [
+          {
+            "name": "key_id",
+            "jsonName": "keyId",
+            "number": 1,
+            "doc": "Public key ID: the part of the token between \"qsk_\" and the second \"_\".",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 2,
+            "doc": "Label given at creation; empty for a key created by rotation.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 3,
+            "doc": "When the key was created.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "created_by_account_id",
+            "jsonName": "createdByAccountId",
+            "number": 4,
+            "doc": "Public account ID of the member who created the key; 0 for a key that a\n key created by rotating itself.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "rotated_from",
+            "jsonName": "rotatedFrom",
+            "number": 5,
+            "doc": "Key this key replaced by rotation; empty otherwise.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 6,
+            "doc": "End of the key's rotation overlap; the key stops working then. Unset\n while the key works until revoked.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "revoked_at",
+            "jsonName": "revokedAt",
+            "number": 7,
+            "doc": "When the key was revoked; unset while not revoked.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "active",
+            "jsonName": "active",
+            "number": 8,
+            "doc": "Whether the key works now: neither revoked nor past expires_at.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.BrokerRole",
+      "kind": "enum",
+      "doc": "BrokerRole is a person's role in a broker org. A broker has exactly one\n Owner.",
+      "enum": {
+        "values": [
+          {
+            "name": "OWNER",
+            "number": 1,
+            "doc": "Everything, including transferring ownership. Exactly one per broker."
+          },
+          {
+            "name": "ADMIN",
+            "number": 2,
+            "doc": "Everything except changing the Owner or transferring ownership."
+          },
+          {
+            "name": "FINANCE",
+            "number": 3,
+            "doc": "Internal transfers, withdrawals and payout settings."
+          },
+          {
+            "name": "AFFILIATE_MANAGER",
+            "number": 4,
+            "doc": "Creates affiliate vaults and views balances."
+          },
+          {
+            "name": "VIEWER",
+            "number": 5,
+            "doc": "Read-only."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.BrokerStatsPeriod",
+      "kind": "message",
+      "doc": "BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or\n month. A QuickSwap counts in the period it was created in, with its\n current status, its credited deposit and its destination payout, so a\n period's numbers keep moving until its QuickSwaps end. A fee counts in the\n period it was charged in, as in GetFeeTotals, which can be later than the\n period its QuickSwap was created in.",
+      "message": {
+        "fields": [
+          {
+            "name": "period_start",
+            "jsonName": "periodStart",
+            "number": 1,
+            "doc": "Start of the UTC day or month.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "created_count",
+            "jsonName": "createdCount",
+            "number": 2,
+            "doc": "QuickSwaps created in the period, inside the window.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "statuses",
+            "jsonName": "statuses",
+            "number": 3,
+            "doc": "Those QuickSwaps by current status, in QuickSwapStatus number order;\n statuses with none are omitted. The counts total created_count.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.StatusCount"
+          },
+          {
+            "name": "deposited",
+            "jsonName": "deposited",
+            "number": 4,
+            "doc": "Deposits credited to those QuickSwaps and taken in for execution, per\n asset, in asset_id order: including a deposit later found ineligible\n and returned, excluding a deposit held for review before credit.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AssetVolume"
+          },
+          {
+            "name": "delivered",
+            "jsonName": "delivered",
+            "number": 5,
+            "doc": "Paid to the destination of those QuickSwaps whose DESTINATION\n withdrawal is FINALIZED, per asset, in asset_id order: after service,\n broker and affiliate fees, before the destination network fee.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AssetVolume"
+          },
+          {
+            "name": "fees",
+            "jsonName": "fees",
+            "number": 6,
+            "doc": "Fees charged to the broker's QuickSwaps in the period, per asset, in\n asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals\n total of the same window, period and asset.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.FeeSplit"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.BrokerUsage",
+      "kind": "message",
+      "doc": "BrokerUsage is the broker's current use of its limits, counted exactly as\n the limits are enforced: the next create is refused while a count is at or\n above its limit on Broker. A count can be above its limit after the limit\n is lowered. The counts are read when the request is served and can change\n right after with concurrent creates, deposits and expiring funding windows.",
+      "message": {
+        "fields": [
+          {
+            "name": "unfunded_addresses",
+            "jsonName": "unfundedAddresses",
+            "number": 1,
+            "doc": "Unfunded Quick Swaps held now, counted against\n Broker.max_unfunded_addresses.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "creates_last_hour",
+            "jsonName": "createsLastHour",
+            "number": 2,
+            "doc": "Quick Swaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "affiliate_vaults",
+            "jsonName": "affiliateVaults",
+            "number": 3,
+            "doc": "Affiliate vaults created, active and disabled together, counted against\n Broker.max_affiliate_vaults.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ChargedFee",
+      "kind": "message",
+      "doc": "ChargedFee is what one vault has been credited with for a QuickSwap in\n one asset, from settled fills and bridge payouts.",
+      "message": {
+        "fields": [
+          {
+            "name": "kind",
+            "jsonName": "kind",
+            "number": 1,
+            "doc": "BROKER or AFFILIATE.",
+            "protoRef": "swap.quickswap.v1.FeeKind"
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the credited vault: the default vault for\n BROKER, the affiliate vault for AFFILIATE.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 3,
+            "doc": "Asset credited, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 4,
+            "doc": "Amount credited, in base units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.CreateAffiliateVaultRequest",
+      "kind": "message",
+      "doc": "CreateAffiliateVaultRequest creates, or returns, the affiliate vault with a\n label.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
             "validate": {
-              "number": {
-                "gt": "0"
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
               }
             }
           },
           {
-            "name": "share_ppm",
-            "jsonName": "sharePpm",
+            "name": "label",
+            "jsonName": "label",
             "number": 2,
-            "doc": "Share of the integrator fee in parts per million, from 1 to 1000000.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32",
+            "doc": "Label, 1 to 64 characters without leading or trailing whitespace, unique\n per broker. The same label always returns the same vault.",
+            "protoScalar": "string",
+            "jsonType": "string",
             "validate": {
-              "number": {
-                "gte": "1",
-                "lte": "1000000"
+              "string": {
+                "minLen": 1,
+                "maxLen": 64
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.CreateAffiliateVaultResponse",
+      "kind": "message",
+      "doc": "CreateAffiliateVaultResponse returns the vault.",
+      "message": {
+        "fields": [
+          {
+            "name": "vault",
+            "jsonName": "vault",
+            "number": 1,
+            "doc": "The vault.",
+            "protoRef": "swap.quickswap.v1.AffiliateVault"
+          },
+          {
+            "name": "created",
+            "jsonName": "created",
+            "number": 2,
+            "doc": "Whether this request created it.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.CreateKeyRequest",
+      "kind": "message",
+      "doc": "CreateKeyRequest creates a broker API key.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 2,
+            "doc": "Label, 1 to 64 characters without leading or trailing whitespace.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.CreateKeyResponse",
+      "kind": "message",
+      "doc": "CreateKeyResponse returns the key and its token. The token is shown only\n here and cannot be recovered.",
+      "message": {
+        "fields": [
+          {
+            "name": "key",
+            "jsonName": "key",
+            "number": 1,
+            "doc": "The key.",
+            "protoRef": "swap.quickswap.v1.BrokerKey"
+          },
+          {
+            "name": "token",
+            "jsonName": "token",
+            "number": 2,
+            "doc": "Bearer token qsk_\u003ckey id\u003e_\u003csecret\u003e. Store it as a server secret.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -55,7 +599,7 @@
             "name": "idempotency_key",
             "jsonName": "idempotencyKey",
             "number": 1,
-            "doc": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits,\n '.', '_', ':' or '-'. Scoped to the authenticated broker and retained\n permanently. The same key with the same request returns the same QuickSwap\n and deposit address; with a different request it fails with\n IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and\n memo is put in its network's canonical form, so the same address in\n another case or encoding is the same request; affiliate order is\n ignored; every other field must be equal.",
+            "doc": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits,\n '.', '_', ':' or '-'. Scoped to the authenticated broker and retained\n permanently. The same key with the same request returns the same QuickSwap\n and deposit address; with a different request it fails with\n IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and\n memo is put in its network's canonical form, so the same address in\n another case or encoding is the same request; affiliate order is\n ignored; every other field, the fees included, must be equal.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -143,14 +687,18 @@
             "name": "affiliates",
             "jsonName": "affiliates",
             "number": 11,
-            "doc": "Optional affiliates paid from the broker's integrator fee: at most four\n distinct accounts whose shares total at most 1000000 ppm. Empty means the\n broker keeps the whole integrator fee. The quote shows the total fee only.",
+            "doc": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults. Fixed at creation with broker_bps.",
             "repeated": true,
-            "protoRef": "swap.quickswap.v1.AffiliateShare",
-            "validate": {
-              "repeated": {
-                "maxItems": 4
-              }
-            }
+            "protoRef": "swap.quickswap.v1.AffiliateShare"
+          },
+          {
+            "name": "broker_bps",
+            "jsonName": "brokerBps",
+            "number": 12,
+            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -323,7 +871,7 @@
           {
             "name": "RETURN_ONLY",
             "number": 3,
-            "doc": "Not accepted: it is returned to return_address and never executes. A\n deposit found ineligible after it was credited, such as a late deposit\n (LATE_DEPOSIT) or one above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM),\n keeps credited_at and is returned from its credit."
+            "doc": "Not accepted: it is returned to return_address and never executes. A\n deposit found ineligible after it was credited, such as a late deposit\n (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or\n above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong\n asset or network (WRONG_ASSET), keeps credited_at and is returned from its\n credit."
           },
           {
             "name": "ON_HOLD",
@@ -487,9 +1035,89 @@
             "doc": "No QuickSwap of this broker matches the selector."
           },
           {
-            "name": "AFFILIATES_INVALID",
-            "number": 17,
-            "doc": "affiliates are not valid: an account named twice, shares totalling more\n than 1000000 ppm, an unknown account or the broker's own payout account;\n or affiliates are not enabled for the broker."
+            "name": "BROKER_DISABLED",
+            "number": 18,
+            "doc": "The broker is disabled: quotes and creates are refused. Reads and\n QuickSwaps already created continue."
+          },
+          {
+            "name": "BROKER_LIMIT",
+            "number": 19,
+            "doc": "A broker limit was reached: the unfunded QuickSwaps held at once, the\n QuickSwaps created per hour, the request rate of the API key, or the\n affiliate vaults the broker may create. Nothing is bound to the key. A\n funded or expired QuickSwap frees an unfunded slot; when the response\n carries a Retry-After header, retry after that many seconds."
+          },
+          {
+            "name": "AFFILIATE_VAULT_UNKNOWN",
+            "number": 20,
+            "doc": "An affiliate names a vault that is not an active affiliate vault of the\n broker: unknown, not yet created, disabled, another broker's, or the\n default vault. Nothing is bound to the key; create or enable the vault\n and repeat the request."
+          },
+          {
+            "name": "BROKER_NOT_FOUND",
+            "number": 21,
+            "doc": "No broker with this name has the caller as its key or member."
+          },
+          {
+            "name": "ACTION_DENIED",
+            "number": 22,
+            "doc": "The caller's role, or a broker API key, may not perform the action."
+          },
+          {
+            "name": "STEP_UP_REQUIRED",
+            "number": 23,
+            "doc": "The action needs a fresh step-up proof of the acting member in the\n X-Auth-Step-Up header, and none was sent or it was already used or\n expired. Complete an MFA challenge for fresh step-up and repeat the\n request with the new proof."
+          },
+          {
+            "name": "VAULT_NOT_FOUND",
+            "number": 24,
+            "doc": "The broker has no affiliate vault with this ID."
+          },
+          {
+            "name": "KEY_NOT_FOUND",
+            "number": 25,
+            "doc": "The broker has no API key with this ID, or it no longer works."
+          },
+          {
+            "name": "KEY_LIMIT",
+            "number": 26,
+            "doc": "The broker would have more than two working API keys. Revoke one first."
+          },
+          {
+            "name": "LAST_KEY",
+            "number": 27,
+            "doc": "The key is the broker's last key that works without an expiry; create\n another key first."
+          },
+          {
+            "name": "MEMBER_NOT_FOUND",
+            "number": 28,
+            "doc": "The person is not a member of the broker and has no pending invite, or\n the account does not exist."
+          },
+          {
+            "name": "ALREADY_MEMBER",
+            "number": 29,
+            "doc": "The person is already a member of the broker."
+          },
+          {
+            "name": "OWNER_IMMUTABLE",
+            "number": 30,
+            "doc": "The Owner cannot be removed or given another role; transfer ownership\n instead."
+          },
+          {
+            "name": "INVITE_NOT_FOUND",
+            "number": 31,
+            "doc": "No pending invite with this ID is addressed to the caller."
+          },
+          {
+            "name": "FEES_INVALID",
+            "number": 32,
+            "doc": "The fees are not valid: more than three affiliates, an affiliate without\n a valid account_id or with bps outside 1 to 300, a vault named twice, or\n broker_bps and the affiliates' bps totalling more than 300."
+          },
+          {
+            "name": "STATS_INCOMPLETE",
+            "number": 33,
+            "doc": "The broker stats cannot be read: a QuickSwap in the window, named by\n ErrorDetail.swap_id, is missing a record they need. Contact Polyester\n broker support with the swap_id."
+          },
+          {
+            "name": "ADDRESS_CONFLICT",
+            "number": 34,
+            "doc": "The QuickSwap (swap_id in the error) cannot be issued a deposit address\n and never gets one, so nothing can be deposited to it. Create a new\n QuickSwap with a new idempotency key, and report the swap_id to Polyester\n broker support."
           }
         ]
       }
@@ -520,7 +1148,7 @@
             "name": "min_deposit_amount",
             "jsonName": "minDepositAmount",
             "number": 3,
-            "doc": "AMOUNT_OUT_OF_RANGE only: the smallest deposit that currently quotes on\n the route with the requested protection, in source token units, whatever\n the request's basis. It moves with prices and network fees; show it as\n guidance, not a guarantee. A deposit below QuickSwapQuote.min_deposit_amount\n is held. Unset for other codes and when no deposit currently quotes.",
+            "doc": "AMOUNT_OUT_OF_RANGE only: the smallest deposit that currently quotes on\n the route with the requested protection, in source token units, whatever\n the request's basis. It moves with prices and network fees; show it as\n guidance, not a guarantee. A deposit below QuickSwapQuote.min_deposit_amount\n is returned to return_address (DEPOSIT_BELOW_MINIMUM). Unset for other\n codes and when no deposit currently quotes.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -592,7 +1220,7 @@
             "name": "output_amount",
             "jsonName": "outputAmount",
             "number": 3,
-            "doc": "Destination amount acquired so far after service and integrator fees and\n before withdrawal network fees, in destination token units. Zero for a\n bridge: its destination withdrawal pays the credit less its fees.",
+            "doc": "Destination amount acquired so far after service, broker and affiliate\n fees and before withdrawal network fees, in destination token units. Zero for a\n bridge: its destination withdrawal pays the credit less its fees.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -653,28 +1281,372 @@
     {
       "name": "swap.quickswap.v1.FeeKind",
       "kind": "enum",
-      "doc": "FeeKind identifies one component of the quoted fees.",
+      "doc": "FeeKind identifies one component of a QuickSwap's fees.",
       "enum": {
         "values": [
           {
             "name": "SERVICE",
             "number": 1,
-            "doc": "Polyester fee of one trading leg: the leg's pair fee in basis points of\n what the leg receives. A two-leg route has one per leg. On a bridge, the\n one bridge fee in basis points of the credited amount, charged at payout."
+            "doc": "Service fee of one trading leg: the leg's pair fee in basis points of\n what the leg receives. A two-leg route has one per leg. On a bridge, the\n one bridge fee in basis points of the credited amount, charged at payout."
           },
           {
-            "name": "INTEGRATOR",
+            "name": "BROKER",
             "number": 2,
-            "doc": "Broker fee of one trading leg: the broker's fee on the leg's pair in basis\n points of what the leg receives, including any affiliate shares paid from\n it. A two-leg route has one per leg. On a bridge, the broker's one bridge\n fee in basis points of the credited amount, charged at payout."
+            "doc": "Broker fee of one trading leg, the request's broker_bps of what the leg\n receives, credited to the broker's default vault. A two-leg route has one\n per leg; a bridge has one, on the credited amount, charged at payout."
+          },
+          {
+            "name": "AFFILIATE",
+            "number": 3,
+            "doc": "Affiliate fee of one trading leg, one affiliate's bps of what the leg\n receives, credited to that affiliate vault. Each affiliate has one per\n leg; on a bridge one, on the credited amount, charged at payout."
           },
           {
             "name": "DEPOSIT_NETWORK",
-            "number": 3,
+            "number": 4,
             "doc": "Network fee withheld from the deposit before it is credited."
           },
           {
             "name": "WITHDRAWAL_NETWORK",
-            "number": 4,
+            "number": 5,
             "doc": "Estimated network fee for a withdrawal. The actual fee is charged at\n withdrawal time and reported on the withdrawal."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.FeeSplit",
+      "kind": "message",
+      "doc": "FeeSplit is the fees charged in one asset, by who they credit. Every\n amount is set, zero included.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Asset charged, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "service_fee",
+            "jsonName": "serviceFee",
+            "number": 2,
+            "doc": "Service fees, credited to Polyester, in base units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "broker_fee",
+            "jsonName": "brokerFee",
+            "number": 3,
+            "doc": "Broker fees, credited to the broker's default vault, in base units of\n 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "affiliate_fee",
+            "jsonName": "affiliateFee",
+            "number": 4,
+            "doc": "Affiliate fees, credited to the broker's affiliate vaults, in base\n units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.FeeTotal",
+      "kind": "message",
+      "doc": "FeeTotal is the fees charged in one group and asset.",
+      "message": {
+        "fields": [
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 1,
+            "doc": "BY_VAULT: public sub-account ID of the credited vault; zero otherwise.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "period_start",
+            "jsonName": "periodStart",
+            "number": 2,
+            "doc": "BY_DAY or BY_MONTH: start of the UTC day or month; unset for BY_VAULT.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 3,
+            "doc": "Asset credited, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 4,
+            "doc": "Total credited, in base units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "swap_count",
+            "jsonName": "swapCount",
+            "number": 5,
+            "doc": "QuickSwaps that were charged a fee in this group and asset.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.FeeTotalsGrouping",
+      "kind": "enum",
+      "doc": "FeeTotalsGrouping is how GetFeeTotals groups the fees.",
+      "enum": {
+        "values": [
+          {
+            "name": "BY_VAULT",
+            "number": 1,
+            "doc": "By credited vault."
+          },
+          {
+            "name": "BY_DAY",
+            "number": 2,
+            "doc": "By UTC day the fee was charged."
+          },
+          {
+            "name": "BY_MONTH",
+            "number": 3,
+            "doc": "By UTC month the fee was charged."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetBrokerRequest",
+      "kind": "message",
+      "doc": "GetBrokerRequest names a broker.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetBrokerResponse",
+      "kind": "message",
+      "doc": "GetBrokerResponse returns the broker, with its limits, and its current\n usage of them.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "The broker, with its limits.",
+            "protoRef": "swap.quickswap.v1.Broker"
+          },
+          {
+            "name": "usage",
+            "jsonName": "usage",
+            "number": 2,
+            "doc": "Current usage of the broker's limits.",
+            "protoRef": "swap.quickswap.v1.BrokerUsage"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetBrokerStatsRequest",
+      "kind": "message",
+      "doc": "GetBrokerStatsRequest reads the broker's QuickSwap activity in a time\n window, per UTC day or month.",
+      "message": {
+        "cel": [
+          {
+            "id": "get_broker_stats_request.window",
+            "message": "end_time must be after start_time and at most 366 days later",
+            "expression": "this.end_time \u003e this.start_time \u0026\u0026 this.end_time - this.start_time \u003c= duration('8784h')"
+          }
+        ],
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "group_by",
+            "jsonName": "groupBy",
+            "number": 2,
+            "doc": "The period to group by.",
+            "protoRef": "swap.quickswap.v1.StatsPeriod",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 3,
+            "doc": "Start of the window, inclusive. A window that starts or ends inside a\n period counts only the part of that period inside the window.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 4,
+            "doc": "End of the window, exclusive, at most 366 days after start_time.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetBrokerStatsResponse",
+      "kind": "message",
+      "doc": "GetBrokerStatsResponse lists every period of the window with a QuickSwap\n created or a fee charged, oldest first, complete (the window is bounded).\n Periods with neither are omitted.",
+      "message": {
+        "fields": [
+          {
+            "name": "periods",
+            "jsonName": "periods",
+            "number": 1,
+            "doc": "The periods.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.BrokerStatsPeriod"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetFeeTotalsRequest",
+      "kind": "message",
+      "doc": "GetFeeTotalsRequest totals the broker and affiliate fees charged to the\n broker's QuickSwaps in a time window.",
+      "message": {
+        "cel": [
+          {
+            "id": "get_fee_totals_request.window",
+            "message": "end_time must be after start_time and at most 366 days later",
+            "expression": "this.end_time \u003e this.start_time \u0026\u0026 this.end_time - this.start_time \u003c= duration('8784h')"
+          }
+        ],
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "group_by",
+            "jsonName": "groupBy",
+            "number": 2,
+            "doc": "How to group the totals.",
+            "protoRef": "swap.quickswap.v1.FeeTotalsGrouping",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 3,
+            "doc": "Start of the window, inclusive: fees charged at or after it.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 4,
+            "doc": "End of the window, exclusive, at most 366 days after start_time.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 5,
+            "doc": "Only fees credited to this vault; zero for every vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetFeeTotalsResponse",
+      "kind": "message",
+      "doc": "GetFeeTotalsResponse lists every group and asset with a fee in the window,\n complete (the window is bounded): by vault, then asset, for BY_VAULT; by\n period, then asset, for BY_DAY and BY_MONTH, oldest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "totals",
+            "jsonName": "totals",
+            "number": 1,
+            "doc": "The totals.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.FeeTotal"
           }
         ]
       }
@@ -744,11 +1716,607 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.GetVaultRequest",
+      "kind": "message",
+      "doc": "GetVaultRequest names one affiliate vault.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetVaultResponse",
+      "kind": "message",
+      "doc": "GetVaultResponse returns the vault.",
+      "message": {
+        "fields": [
+          {
+            "name": "vault",
+            "jsonName": "vault",
+            "number": 1,
+            "doc": "The vault.",
+            "protoRef": "swap.quickswap.v1.AffiliateVault"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.Invite",
+      "kind": "message",
+      "doc": "Invite is a pending invitation to join a broker org.",
+      "message": {
+        "fields": [
+          {
+            "name": "invite_id",
+            "jsonName": "inviteId",
+            "number": 1,
+            "doc": "Public invite ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 2,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "broker_display_name",
+            "jsonName": "brokerDisplayName",
+            "number": 3,
+            "doc": "Broker display name.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 4,
+            "doc": "Public account ID of the invited person.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 5,
+            "doc": "Role the person gets on accepting.",
+            "protoRef": "swap.quickswap.v1.BrokerRole"
+          },
+          {
+            "name": "invited_by_account_id",
+            "jsonName": "invitedByAccountId",
+            "number": 6,
+            "doc": "Public account ID of the member who invited them.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 7,
+            "doc": "When the invite was sent.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.InviteMemberRequest",
+      "kind": "message",
+      "doc": "InviteMemberRequest invites a person to the broker.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public account ID of the person's own account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 3,
+            "doc": "Role the person gets on accepting; never OWNER.",
+            "protoRef": "swap.quickswap.v1.BrokerRole",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0,
+                  1
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.InviteMemberResponse",
+      "kind": "message",
+      "doc": "InviteMemberResponse returns the pending invite.",
+      "message": {
+        "fields": [
+          {
+            "name": "invite",
+            "jsonName": "invite",
+            "number": 1,
+            "doc": "The invite.",
+            "protoRef": "swap.quickswap.v1.Invite"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListKeysRequest",
+      "kind": "message",
+      "doc": "ListKeysRequest lists a broker's API keys, working and past.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 2,
+            "doc": "Maximum number of keys to return; 0 means 100, at most 200.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "200"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 3,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound to\n the broker and ordered newest first by creation time, then key ID. Empty\n for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 128
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListKeysResponse",
+      "kind": "message",
+      "doc": "ListKeysResponse lists the broker's API keys newest first: by creation\n time, then key ID, both descending. A broker has at most two working keys;\n revoked and expired keys stay listed.",
+      "message": {
+        "fields": [
+          {
+            "name": "keys",
+            "jsonName": "keys",
+            "number": 1,
+            "doc": "Keys.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.BrokerKey"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListMembersRequest",
+      "kind": "message",
+      "doc": "ListMembersRequest lists a broker's members.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListMembersResponse",
+      "kind": "message",
+      "doc": "ListMembersResponse lists every member and pending invite of the broker,\n Owner first, then by account ID. Both lists are naturally bounded.",
+      "message": {
+        "fields": [
+          {
+            "name": "members",
+            "jsonName": "members",
+            "number": 1,
+            "doc": "Members.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.Member"
+          },
+          {
+            "name": "invites",
+            "jsonName": "invites",
+            "number": 2,
+            "doc": "Pending invites, newest first.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.Invite"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListMyBrokersRequest",
+      "kind": "message",
+      "doc": "ListMyBrokersRequest lists the caller's broker memberships and invites.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListMyBrokersResponse",
+      "kind": "message",
+      "doc": "ListMyBrokersResponse lists every membership and pending invite of the\n caller, by broker name. Both lists are naturally bounded.",
+      "message": {
+        "fields": [
+          {
+            "name": "memberships",
+            "jsonName": "memberships",
+            "number": 1,
+            "doc": "Brokers the caller is a member of.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.Membership"
+          },
+          {
+            "name": "invites",
+            "jsonName": "invites",
+            "number": 2,
+            "doc": "Pending invites addressed to the caller.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.Invite"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListQuickSwapsRequest",
+      "kind": "message",
+      "doc": "ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with\n optional filters. Every filter narrows the list.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Only QuickSwaps whose fees credit this vault: an affiliate vault they\n name, or the default vault when they set a broker fee. Zero for every\n QuickSwap.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "statuses",
+            "jsonName": "statuses",
+            "number": 3,
+            "doc": "Only QuickSwaps in one of these statuses, at most 16; empty for every\n status.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.QuickSwapStatus",
+            "validate": {
+              "repeated": {
+                "maxItems": 16
+              }
+            }
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 4,
+            "doc": "Only QuickSwaps created at or after start_time; unset for no lower\n bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 5,
+            "doc": "Only QuickSwaps created before end_time (exclusive); unset for no upper\n bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 6,
+            "doc": "Maximum number of QuickSwaps to return; 0 means 100, at most 200.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "200"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 7,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the broker, the filters and the newest-first order by creation time,\n then swap_id. Reuse it with the same filters. Empty for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListQuickSwapsResponse",
+      "kind": "message",
+      "doc": "ListQuickSwapsResponse lists QuickSwaps newest first: by creation time,\n then swap_id, both descending. A QuickSwap created after the first page\n was read is not listed by later pages; every earlier one is listed exactly\n once.",
+      "message": {
+        "fields": [
+          {
+            "name": "quick_swaps",
+            "jsonName": "quickSwaps",
+            "number": 1,
+            "doc": "The QuickSwaps.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.QuickSwapSummary"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultsRequest",
+      "kind": "message",
+      "doc": "ListVaultsRequest lists a broker's affiliate vaults.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 2,
+            "doc": "Maximum number of vaults to return; 0 means 100, at most 200.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "200"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 3,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound to\n the broker and ordered by ascending account_id. Empty for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultsResponse",
+      "kind": "message",
+      "doc": "ListVaultsResponse lists vaults in ascending account_id order.",
+      "message": {
+        "fields": [
+          {
+            "name": "vaults",
+            "jsonName": "vaults",
+            "number": 1,
+            "doc": "The vaults.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AffiliateVault"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.MarketExecution",
       "kind": "message",
       "doc": "MarketExecution executes the credited deposit as soon as possible, in one or\n more immediate orders, within the service's market execution window.",
       "message": {
         "fields": []
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.Member",
+      "kind": "message",
+      "doc": "Member is a person with a role in the broker org.",
+      "message": {
+        "fields": [
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 1,
+            "doc": "Public account ID of the person's own account.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 2,
+            "doc": "Role.",
+            "protoRef": "swap.quickswap.v1.BrokerRole"
+          },
+          {
+            "name": "since",
+            "jsonName": "since",
+            "number": 3,
+            "doc": "When the person got this role.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.Membership",
+      "kind": "message",
+      "doc": "Membership is the caller's role in one broker org.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "broker_display_name",
+            "jsonName": "brokerDisplayName",
+            "number": 2,
+            "doc": "Broker display name.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 3,
+            "doc": "The caller's role.",
+            "protoRef": "swap.quickswap.v1.BrokerRole"
+          }
+        ]
       }
     },
     {
@@ -1009,21 +2577,28 @@
             "format": "uint64"
           },
           {
-            "name": "affiliates",
-            "jsonName": "affiliates",
-            "number": 27,
-            "doc": "Affiliate shares of the broker fee, as requested.",
-            "repeated": true,
-            "protoRef": "swap.quickswap.v1.AffiliateShare"
-          },
-          {
             "name": "fee_schedule_version",
             "jsonName": "feeScheduleVersion",
             "number": 28,
-            "doc": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service and integrator fees,\n whatever later versions change.",
+            "doc": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service fees, whatever later\n versions change.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "fees",
+            "jsonName": "fees",
+            "number": 29,
+            "doc": "Broker and affiliate fees as requested, fixed at creation.",
+            "protoRef": "swap.quickswap.v1.RequestedFees"
+          },
+          {
+            "name": "charged_fees",
+            "jsonName": "chargedFees",
+            "number": 30,
+            "doc": "Broker and affiliate fees charged so far, as settled: one entry per fee\n kind, credited vault and asset, in kind, then account_id, then asset_id\n order. Grows while the QuickSwap executes or pays out a bridge.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ChargedFee"
           }
         ]
       }
@@ -1067,7 +2642,7 @@
             "name": "min_deposit_amount",
             "jsonName": "minDepositAmount",
             "number": 5,
-            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is held\n (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
+            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -1090,7 +2665,7 @@
             "name": "fees",
             "jsonName": "fees",
             "number": 8,
-            "doc": "Quoted fee components for deposit_amount: service and integrator fees in\n route order (a bridge has one pair, charged at payout), then network fees.\n Zero fees are omitted.",
+            "doc": "Quoted fee components for deposit_amount: each leg's service, broker and\n affiliate fees, in that order, legs in route order (a bridge has one set,\n charged at payout), then network fees. Affiliates are in ascending\n account_id order. Zero fees are omitted.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.QuoteFee"
           },
@@ -1149,7 +2724,7 @@
           {
             "name": "DEPOSIT_BELOW_MINIMUM",
             "number": 11,
-            "doc": "The deposit is below the published min_deposit_amount. It is held, not\n executed or returned automatically. The broker contacts Polyester broker\n support with the swap_id."
+            "doc": "The deposit is below the published min_deposit_amount. It is not\n executed: it is returned to return_address, and the QuickSwap shows\n RETURNING and RETURNED with this reason. A deposit that cannot be returned\n on the network it was received on is held (HELD with this reason); the\n broker contacts Polyester broker support with the swap_id."
           },
           {
             "name": "DEPOSIT_ABOVE_MAXIMUM",
@@ -1159,7 +2734,7 @@
           {
             "name": "WRONG_ASSET",
             "number": 13,
-            "doc": "The deposit is not the quoted source asset. It is held, not executed or\n returned automatically. The broker contacts Polyester broker support\n with the swap_id."
+            "doc": "The deposit is not the quoted source asset or network. It is not\n executed: it is returned to return_address on the network and in the\n asset it was received in, and the QuickSwap shows RETURNING and RETURNED\n with this reason. A deposit that cannot be returned there, such as one\n received on a network where return_address is not valid, is held (HELD\n with this reason); the broker contacts Polyester broker support with the\n swap_id."
           },
           {
             "name": "FUNDING_WINDOW_ENDED",
@@ -1269,6 +2844,94 @@
             "name": "EXPIRED",
             "number": 16,
             "doc": "Terminal: the funding window ended without an eligible deposit."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapSummary",
+      "kind": "message",
+      "doc": "QuickSwapSummary is one QuickSwap in a list: its state and fees. Get it\n with QuickSwapService.GetQuickSwap for its quote, deposit and withdrawals.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 1,
+            "doc": "Public QuickSwap identifier.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "idempotency_key",
+            "jsonName": "idempotencyKey",
+            "number": 2,
+            "doc": "The broker's idempotency key that created it.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 3,
+            "doc": "Current status.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatus"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 4,
+            "doc": "Why the status is notable; REASON_UNSPECIFIED otherwise.",
+            "protoRef": "swap.quickswap.v1.QuickSwapReason"
+          },
+          {
+            "name": "is_terminal",
+            "jsonName": "isTerminal",
+            "number": 5,
+            "doc": "True when status is terminal.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "terms",
+            "jsonName": "terms",
+            "number": 6,
+            "doc": "Accepted economic terms.",
+            "protoRef": "swap.quickswap.v1.QuickSwapTerms"
+          },
+          {
+            "name": "fees",
+            "jsonName": "fees",
+            "number": 7,
+            "doc": "Broker and affiliate fees as requested, fixed at creation; unset when\n the request set none.",
+            "protoRef": "swap.quickswap.v1.RequestedFees"
+          },
+          {
+            "name": "charged_fees",
+            "jsonName": "chargedFees",
+            "number": 8,
+            "doc": "Broker and affiliate fees charged so far, as settled, as on QuickSwap.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ChargedFee"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 9,
+            "doc": "When the QuickSwap was created.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "updated_at",
+            "jsonName": "updatedAt",
+            "number": 10,
+            "doc": "When the QuickSwap last changed.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
           }
         ]
       }
@@ -1391,7 +3054,7 @@
     {
       "name": "swap.quickswap.v1.QuoteFee",
       "kind": "message",
-      "doc": "QuoteFee is one fee component of a quote. Trading fees (SERVICE and\n INTEGRATOR) are charged when each leg settles, in the asset that leg\n receives: the base asset on a buy, the quote asset on a sell. A bridge has\n no settlement; its fees are charged at payout, in the destination asset.",
+      "doc": "QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER\n and AFFILIATE) are charged when each leg settles, in the asset that leg\n receives: the base asset on a buy, the quote asset on a sell. Each is\n computed on its own from what the leg receives and rounded down when\n charged. A bridge has no settlement; its fees are charged at payout, in\n the destination asset.",
       "message": {
         "fields": [
           {
@@ -1416,6 +3079,24 @@
             "number": 3,
             "doc": "Fee in zipped_asset_id's token units; for a fee charged in the\n intermediate asset, in the intermediate asset at its trading precision\n (amount.decimals). Trading fees are rounded up, so the charged fee never\n exceeds the quoted one.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "bps",
+            "jsonName": "bps",
+            "number": 4,
+            "doc": "Rate of a trading fee in basis points of what the leg receives; zero for\n a network fee.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 5,
+            "doc": "AFFILIATE only: public sub-account ID of the affiliate vault credited\n with the fee; zero for every other kind.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -1423,7 +3104,7 @@
     {
       "name": "swap.quickswap.v1.QuoteQuickSwapRequest",
       "kind": "message",
-      "doc": "QuoteQuickSwapRequest prices terms without reserving anything.",
+      "doc": "QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,\n without reserving anything.",
       "message": {
         "fields": [
           {
@@ -1435,6 +3116,23 @@
             "validate": {
               "required": true
             }
+          },
+          {
+            "name": "broker_bps",
+            "jsonName": "brokerBps",
+            "number": 2,
+            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "affiliates",
+            "jsonName": "affiliates",
+            "number": 3,
+            "doc": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AffiliateShare"
           }
         ]
       }
@@ -1456,6 +3154,254 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.RemoveMemberRequest",
+      "kind": "message",
+      "doc": "RemoveMemberRequest removes a member, or cancels the person's pending\n invite.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public account ID of the member or invited person.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RemoveMemberResponse",
+      "kind": "message",
+      "doc": "RemoveMemberResponse is empty.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RequestedFees",
+      "kind": "message",
+      "doc": "RequestedFees are the broker and affiliate fees a QuickSwap request set,\n charged on top of the service fee.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker_bps",
+            "jsonName": "brokerBps",
+            "number": 1,
+            "doc": "Broker fee in basis points of what each leg receives, credited to the\n broker's default vault.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "affiliates",
+            "jsonName": "affiliates",
+            "number": 2,
+            "doc": "Affiliate fees, in ascending account_id order.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AffiliateShare"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RespondToInviteRequest",
+      "kind": "message",
+      "doc": "RespondToInviteRequest accepts or declines a pending invite addressed to\n the caller.",
+      "message": {
+        "fields": [
+          {
+            "name": "invite_id",
+            "jsonName": "inviteId",
+            "number": 1,
+            "doc": "Public invite ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "accept",
+            "jsonName": "accept",
+            "number": 2,
+            "doc": "True to accept, false to decline.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RespondToInviteResponse",
+      "kind": "message",
+      "doc": "RespondToInviteResponse returns the caller's new membership.",
+      "message": {
+        "fields": [
+          {
+            "name": "membership",
+            "jsonName": "membership",
+            "number": 1,
+            "doc": "The membership; unset when the invite was declined.",
+            "protoRef": "swap.quickswap.v1.Membership"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RevokeKeyRequest",
+      "kind": "message",
+      "doc": "RevokeKeyRequest revokes a key immediately.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "key_id",
+            "jsonName": "keyId",
+            "number": 2,
+            "doc": "Key to revoke.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[0-9a-f]{32}$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RevokeKeyResponse",
+      "kind": "message",
+      "doc": "RevokeKeyResponse returns the revoked key.",
+      "message": {
+        "fields": [
+          {
+            "name": "key",
+            "jsonName": "key",
+            "number": 1,
+            "doc": "The key.",
+            "protoRef": "swap.quickswap.v1.BrokerKey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RotateKeyRequest",
+      "kind": "message",
+      "doc": "RotateKeyRequest replaces a key by a new one. The old key keeps working\n for the overlap, then stops.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "key_id",
+            "jsonName": "keyId",
+            "number": 2,
+            "doc": "Key to rotate. A broker API key may rotate only itself.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[0-9a-f]{32}$"
+              }
+            }
+          },
+          {
+            "name": "overlap_seconds",
+            "jsonName": "overlapSeconds",
+            "number": 3,
+            "doc": "How long the old key keeps working, in seconds, from 0 to 604800 (7\n days). Default 86400 (24 hours). 0 revokes it immediately.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "604800"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RotateKeyResponse",
+      "kind": "message",
+      "doc": "RotateKeyResponse returns the new key, its token and the old key. The token\n is shown only here and cannot be recovered.",
+      "message": {
+        "fields": [
+          {
+            "name": "key",
+            "jsonName": "key",
+            "number": 1,
+            "doc": "The new key.",
+            "protoRef": "swap.quickswap.v1.BrokerKey"
+          },
+          {
+            "name": "token",
+            "jsonName": "token",
+            "number": 2,
+            "doc": "Bearer token qsk_\u003ckey id\u003e_\u003csecret\u003e of the new key.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "previous_key",
+            "jsonName": "previousKey",
+            "number": 3,
+            "doc": "The old key, with the end of its overlap.",
+            "protoRef": "swap.quickswap.v1.BrokerKey"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.Screening",
       "kind": "message",
       "doc": "Screening is the risk screening of a QuickSwap. Deposits are screened on\n arrival; the outcome shows in the status, its reason and each deposit's\n disposition and reason.",
@@ -1468,6 +3414,177 @@
             "doc": "Source wallet supplied in the request; empty when none was supplied.\n Recorded and shown; not used to accept or reject a deposit.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.SetMemberRoleRequest",
+      "kind": "message",
+      "doc": "SetMemberRoleRequest changes a member's role.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public account ID of the member.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "role",
+            "jsonName": "role",
+            "number": 3,
+            "doc": "New role; never OWNER.",
+            "protoRef": "swap.quickswap.v1.BrokerRole",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0,
+                  1
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.SetMemberRoleResponse",
+      "kind": "message",
+      "doc": "SetMemberRoleResponse is empty.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.SetVaultStatusRequest",
+      "kind": "message",
+      "doc": "SetVaultStatusRequest enables or disables an affiliate vault for new\n QuickSwaps.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 3,
+            "doc": "New status.",
+            "protoRef": "swap.quickswap.v1.VaultStatus",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.SetVaultStatusResponse",
+      "kind": "message",
+      "doc": "SetVaultStatusResponse returns the vault.",
+      "message": {
+        "fields": [
+          {
+            "name": "vault",
+            "jsonName": "vault",
+            "number": 1,
+            "doc": "The vault.",
+            "protoRef": "swap.quickswap.v1.AffiliateVault"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.StatsPeriod",
+      "kind": "enum",
+      "doc": "StatsPeriod is the UTC calendar period GetBrokerStats groups by.",
+      "enum": {
+        "values": [
+          {
+            "name": "DAY",
+            "number": 1,
+            "doc": "A UTC day."
+          },
+          {
+            "name": "MONTH",
+            "number": 2,
+            "doc": "A UTC month."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.StatusCount",
+      "kind": "message",
+      "doc": "StatusCount is how many QuickSwaps are in one status.",
+      "message": {
+        "fields": [
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 1,
+            "doc": "The status.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatus"
+          },
+          {
+            "name": "count",
+            "jsonName": "count",
+            "number": 2,
+            "doc": "QuickSwaps in it.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -1506,6 +3623,50 @@
             }
           }
         ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.TransferOwnershipRequest",
+      "kind": "message",
+      "doc": "TransferOwnershipRequest makes another member the Owner.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 2,
+            "doc": "Public account ID of the member who becomes the Owner.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.TransferOwnershipResponse",
+      "kind": "message",
+      "doc": "TransferOwnershipResponse is empty.",
+      "message": {
+        "fields": []
       }
     },
     {
@@ -1549,6 +3710,25 @@
                 "gte": "10000"
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultStatus",
+      "kind": "enum",
+      "doc": "VaultStatus says whether an affiliate vault can be named by new QuickSwaps.",
+      "enum": {
+        "values": [
+          {
+            "name": "VAULT_ACTIVE",
+            "number": 1,
+            "doc": "New QuickSwaps can credit the vault."
+          },
+          {
+            "name": "VAULT_DISABLED",
+            "number": 2,
+            "doc": "New QuickSwaps naming the vault are refused with AFFILIATE_VAULT_UNKNOWN.\n QuickSwaps already created still credit it."
           }
         ]
       }
@@ -1693,7 +3873,7 @@
           {
             "name": "RETURN",
             "number": 3,
-            "doc": "Source funds that were not accepted or not traded, to return_address on\n the source network."
+            "doc": "Source funds that were not accepted or not traded, to return_address on\n the network and in the asset they were received in: the source network,\n or for a wrong asset the network it was sent on."
           }
         ]
       }
