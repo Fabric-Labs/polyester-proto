@@ -1,0 +1,1024 @@
+syntax = "proto3";
+
+package swap.quickswap.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+import "swap/quickswap/v1/quickswap.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "QuickSwap Broker"
+      description: "Self-service administration of a QuickSwap broker org: affiliate vaults, API keys and members, and reporting on its QuickSwaps and fees."
+    }
+  ]
+};
+
+// BrokerRole is a person's role in a broker org. A broker has exactly one
+// Owner.
+enum BrokerRole {
+  // No role; rejected in requests and never returned.
+  BROKER_ROLE_UNSPECIFIED = 0;
+  // Everything, including transferring ownership. Exactly one per broker.
+  OWNER = 1;
+  // Everything except changing the Owner or transferring ownership.
+  ADMIN = 2;
+  // Internal transfers, withdrawals and payout settings.
+  FINANCE = 3;
+  // Creates affiliate vaults and views balances.
+  AFFILIATE_MANAGER = 4;
+  // Read-only.
+  VIEWER = 5;
+}
+
+// Broker is a broker org.
+message Broker {
+  // Broker name: the immutable identifier used in every request.
+  string name = 1;
+  // Display name.
+  string display_name = 2;
+  // Whether the broker may quote and create QuickSwaps. A disabled broker
+  // keeps reads, vaults, keys and members.
+  bool enabled = 3;
+  // Public account ID of the broker's root account.
+  fixed64 root_account_id = 4;
+  // Public sub-account ID of the default vault, credited with broker fees
+  // that name no affiliate.
+  fixed64 default_vault_account_id = 5;
+  // Affiliate vaults the broker may create, active and disabled together.
+  // At the limit, CreateAffiliateVault fails with RESOURCE_EXHAUSTED /
+  // BROKER_LIMIT.
+  uint32 max_affiliate_vaults = 6;
+  // The caller's role; BROKER_ROLE_UNSPECIFIED for a broker API key.
+  BrokerRole role = 7;
+  // Quote requests per second allowed for each API key of the broker, which
+  // is also the burst. Over the rate, QuoteQuickSwap fails with
+  // RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.
+  uint32 quote_rps = 8;
+  // Create requests per second allowed for each API key of the broker, which
+  // is also the burst. Over the rate, CreateQuickSwap fails with
+  // RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.
+  uint32 create_rps = 9;
+  // Read requests per second allowed for each API key of the broker, which is
+  // also the burst. GetQuickSwap and every QuickSwapBrokerService call by an
+  // API key count as reads. Over the rate, the call fails with
+  // RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.
+  uint32 read_rps = 10;
+  // Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose
+  // deposit address is being issued or is still awaiting a deposit within
+  // its funding window. At the limit, CreateQuickSwap fails with
+  // RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding
+  // window frees a slot.
+  uint32 max_unfunded_addresses = 11;
+  // Quick Swaps the broker may create in any rolling hour. At the limit,
+  // CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the
+  // oldest create of the hour is more than an hour old.
+  uint32 max_creates_per_hour = 12;
+}
+
+// BrokerUsage is the broker's current use of its limits, counted exactly as
+// the limits are enforced: the next create is refused while a count is at or
+// above its limit on Broker. A count can be above its limit after the limit
+// is lowered. The counts are read when the request is served and can change
+// right after with concurrent creates, deposits and expiring funding windows.
+message BrokerUsage {
+  // Unfunded Quick Swaps held now, counted against
+  // Broker.max_unfunded_addresses.
+  uint32 unfunded_addresses = 1;
+  // Quick Swaps created in the last hour, counted against
+  // Broker.max_creates_per_hour.
+  uint32 creates_last_hour = 2;
+  // Affiliate vaults created, active and disabled together, counted against
+  // Broker.max_affiliate_vaults.
+  uint32 affiliate_vaults = 3;
+}
+
+// VaultStatus says whether an affiliate vault can be named by new QuickSwaps.
+enum VaultStatus {
+  // No status; rejected in requests and never returned.
+  VAULT_STATUS_UNSPECIFIED = 0;
+  // New QuickSwaps can credit the vault.
+  VAULT_ACTIVE = 1;
+  // New QuickSwaps naming the vault are refused with AFFILIATE_VAULT_UNKNOWN.
+  // QuickSwaps already created still credit it.
+  VAULT_DISABLED = 2;
+}
+
+// AffiliateVault is a sub-account of the broker root, owned by the broker,
+// credited with the fees of one affiliate. Affiliate vaults are never
+// deleted.
+message AffiliateVault {
+  // Public sub-account ID of the vault; name it in AffiliateShare.account_id.
+  fixed64 account_id = 1;
+  // Broker-chosen label, unique per broker.
+  string label = 2;
+  // Whether new QuickSwaps can name the vault.
+  VaultStatus status = 3;
+  // When the vault was created.
+  google.protobuf.Timestamp created_at = 4;
+  // When the vault was last changed.
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// BrokerKey is a broker API key, without its secret.
+message BrokerKey {
+  // Public key ID: the part of the token between "qsk_" and the second "_".
+  string key_id = 1;
+  // Label given at creation; empty for a key created by rotation.
+  string label = 2;
+  // When the key was created.
+  google.protobuf.Timestamp created_at = 3;
+  // Public account ID of the member who created the key; 0 for a key that a
+  // key created by rotating itself.
+  fixed64 created_by_account_id = 4;
+  // Key this key replaced by rotation; empty otherwise.
+  string rotated_from = 5;
+  // End of the key's rotation overlap; the key stops working then. Unset
+  // while the key works until revoked.
+  google.protobuf.Timestamp expires_at = 6;
+  // When the key was revoked; unset while not revoked.
+  google.protobuf.Timestamp revoked_at = 7;
+  // Whether the key works now: neither revoked nor past expires_at.
+  bool active = 8;
+}
+
+// Member is a person with a role in the broker org.
+message Member {
+  // Public account ID of the person's own account.
+  fixed64 account_id = 1;
+  // Role.
+  BrokerRole role = 2;
+  // When the person got this role.
+  google.protobuf.Timestamp since = 3;
+}
+
+// Invite is a pending invitation to join a broker org.
+message Invite {
+  // Public invite ID.
+  fixed64 invite_id = 1;
+  // Broker name.
+  string broker = 2;
+  // Broker display name.
+  string broker_display_name = 3;
+  // Public account ID of the invited person.
+  fixed64 account_id = 4;
+  // Role the person gets on accepting.
+  BrokerRole role = 5;
+  // Public account ID of the member who invited them.
+  fixed64 invited_by_account_id = 6;
+  // When the invite was sent.
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// Membership is the caller's role in one broker org.
+message Membership {
+  // Broker name.
+  string broker = 1;
+  // Broker display name.
+  string broker_display_name = 2;
+  // The caller's role.
+  BrokerRole role = 3;
+}
+
+// GetBrokerRequest names a broker.
+message GetBrokerRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+}
+
+// GetBrokerResponse returns the broker, with its limits, and its current
+// usage of them.
+message GetBrokerResponse {
+  // The broker, with its limits.
+  Broker broker = 1;
+  // Current usage of the broker's limits.
+  BrokerUsage usage = 2;
+}
+
+// ListMyBrokersRequest lists the caller's broker memberships and invites.
+message ListMyBrokersRequest {}
+
+// ListMyBrokersResponse lists every membership and pending invite of the
+// caller, by broker name. Both lists are naturally bounded.
+message ListMyBrokersResponse {
+  // Brokers the caller is a member of.
+  repeated Membership memberships = 1;
+  // Pending invites addressed to the caller.
+  repeated Invite invites = 2;
+}
+
+// RespondToInviteRequest accepts or declines a pending invite addressed to
+// the caller.
+message RespondToInviteRequest {
+  // Public invite ID.
+  fixed64 invite_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // True to accept, false to decline.
+  bool accept = 2;
+}
+
+// RespondToInviteResponse returns the caller's new membership.
+message RespondToInviteResponse {
+  // The membership; unset when the invite was declined.
+  Membership membership = 1;
+}
+
+// ListMembersRequest lists a broker's members.
+message ListMembersRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+}
+
+// ListMembersResponse lists every member and pending invite of the broker,
+// Owner first, then by account ID. Both lists are naturally bounded.
+message ListMembersResponse {
+  // Members.
+  repeated Member members = 1;
+  // Pending invites, newest first.
+  repeated Invite invites = 2;
+}
+
+// InviteMemberRequest invites a person to the broker.
+message InviteMemberRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public account ID of the person's own account.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // Role the person gets on accepting; never OWNER.
+  BrokerRole role = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [
+      0,
+      1
+    ]
+  }];
+}
+
+// InviteMemberResponse returns the pending invite.
+message InviteMemberResponse {
+  // The invite.
+  Invite invite = 1;
+}
+
+// SetMemberRoleRequest changes a member's role.
+message SetMemberRoleRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public account ID of the member.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // New role; never OWNER.
+  BrokerRole role = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [
+      0,
+      1
+    ]
+  }];
+}
+
+// SetMemberRoleResponse is empty.
+message SetMemberRoleResponse {}
+
+// RemoveMemberRequest removes a member, or cancels the person's pending
+// invite.
+message RemoveMemberRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public account ID of the member or invited person.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// RemoveMemberResponse is empty.
+message RemoveMemberResponse {}
+
+// TransferOwnershipRequest makes another member the Owner.
+message TransferOwnershipRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public account ID of the member who becomes the Owner.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// TransferOwnershipResponse is empty.
+message TransferOwnershipResponse {}
+
+// ListKeysRequest lists a broker's API keys, working and past.
+message ListKeysRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Maximum number of keys to return; 0 means 100, at most 200.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound to
+  // the broker and ordered newest first by creation time, then key ID. Empty
+  // for the first page.
+  string page_token = 3 [(buf.validate.field).string.max_len = 128];
+}
+
+// ListKeysResponse lists the broker's API keys newest first: by creation
+// time, then key ID, both descending. A broker has at most two working keys;
+// revoked and expired keys stay listed.
+message ListKeysResponse {
+  // Keys.
+  repeated BrokerKey keys = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// CreateKeyRequest creates a broker API key.
+message CreateKeyRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Label, 1 to 64 characters without leading or trailing whitespace.
+  string label = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+}
+
+// CreateKeyResponse returns the key and its token. The token is shown only
+// here and cannot be recovered.
+message CreateKeyResponse {
+  // The key.
+  BrokerKey key = 1;
+  // Bearer token qsk_<key id>_<secret>. Store it as a server secret.
+  string token = 2;
+}
+
+// RotateKeyRequest replaces a key by a new one. The old key keeps working
+// for the overlap, then stops.
+message RotateKeyRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Key to rotate. A broker API key may rotate only itself.
+  string key_id = 2 [(buf.validate.field).string.pattern = "^[0-9a-f]{32}$"];
+  // How long the old key keeps working, in seconds, from 0 to 604800 (7
+  // days). Default 86400 (24 hours). 0 revokes it immediately.
+  optional uint32 overlap_seconds = 3 [(buf.validate.field).uint32.lte = 604800];
+}
+
+// RotateKeyResponse returns the new key, its token and the old key. The token
+// is shown only here and cannot be recovered.
+message RotateKeyResponse {
+  // The new key.
+  BrokerKey key = 1;
+  // Bearer token qsk_<key id>_<secret> of the new key.
+  string token = 2;
+  // The old key, with the end of its overlap.
+  BrokerKey previous_key = 3;
+}
+
+// RevokeKeyRequest revokes a key immediately.
+message RevokeKeyRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Key to revoke.
+  string key_id = 2 [(buf.validate.field).string.pattern = "^[0-9a-f]{32}$"];
+}
+
+// RevokeKeyResponse returns the revoked key.
+message RevokeKeyResponse {
+  // The key.
+  BrokerKey key = 1;
+}
+
+// CreateAffiliateVaultRequest creates, or returns, the affiliate vault with a
+// label.
+message CreateAffiliateVaultRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Label, 1 to 64 characters without leading or trailing whitespace, unique
+  // per broker. The same label always returns the same vault.
+  string label = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+}
+
+// CreateAffiliateVaultResponse returns the vault.
+message CreateAffiliateVaultResponse {
+  // The vault.
+  AffiliateVault vault = 1;
+  // Whether this request created it.
+  bool created = 2;
+}
+
+// ListVaultsRequest lists a broker's affiliate vaults.
+message ListVaultsRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Maximum number of vaults to return; 0 means 100, at most 200.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound to
+  // the broker and ordered by ascending account_id. Empty for the first page.
+  string page_token = 3 [(buf.validate.field).string.max_len = 64];
+}
+
+// ListVaultsResponse lists vaults in ascending account_id order.
+message ListVaultsResponse {
+  // The vaults.
+  repeated AffiliateVault vaults = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetVaultRequest names one affiliate vault.
+message GetVaultRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public sub-account ID of the vault.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetVaultResponse returns the vault.
+message GetVaultResponse {
+  // The vault.
+  AffiliateVault vault = 1;
+}
+
+// SetVaultStatusRequest enables or disables an affiliate vault for new
+// QuickSwaps.
+message SetVaultStatusRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public sub-account ID of the vault.
+  fixed64 account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // New status.
+  VaultStatus status = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// SetVaultStatusResponse returns the vault.
+message SetVaultStatusResponse {
+  // The vault.
+  AffiliateVault vault = 1;
+}
+
+// QuickSwapSummary is one QuickSwap in a list: its state and fees. Get it
+// with QuickSwapService.GetQuickSwap for its quote, deposit and withdrawals.
+message QuickSwapSummary {
+  // Public QuickSwap identifier.
+  fixed64 swap_id = 1;
+  // The broker's idempotency key that created it.
+  string idempotency_key = 2;
+  // Current status.
+  QuickSwapStatus status = 3;
+  // Why the status is notable; REASON_UNSPECIFIED otherwise.
+  QuickSwapReason reason = 4;
+  // True when status is terminal.
+  bool is_terminal = 5;
+  // Accepted economic terms.
+  QuickSwapTerms terms = 6;
+  // Broker and affiliate fees as requested, fixed at creation; unset when
+  // the request set none.
+  RequestedFees fees = 7;
+  // Broker and affiliate fees charged so far, as settled, as on QuickSwap.
+  repeated ChargedFee charged_fees = 8;
+  // When the QuickSwap was created.
+  google.protobuf.Timestamp created_at = 9;
+  // When the QuickSwap last changed.
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with
+// optional filters. Every filter narrows the list.
+message ListQuickSwapsRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Only QuickSwaps whose fees credit this vault: an affiliate vault they
+  // name, or the default vault when they set a broker fee. Zero for every
+  // QuickSwap.
+  fixed64 vault_account_id = 2;
+  // Only QuickSwaps in one of these statuses, at most 16; empty for every
+  // status.
+  repeated QuickSwapStatus statuses = 3 [(buf.validate.field).repeated = {
+    max_items: 16
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Only QuickSwaps created at or after start_time; unset for no lower
+  // bound.
+  google.protobuf.Timestamp start_time = 4;
+  // Only QuickSwaps created before end_time (exclusive); unset for no upper
+  // bound.
+  google.protobuf.Timestamp end_time = 5;
+  // Maximum number of QuickSwaps to return; 0 means 100, at most 200.
+  uint32 limit = 6 [(buf.validate.field).uint32.lte = 200];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound
+  // to the broker, the filters and the newest-first order by creation time,
+  // then swap_id. Reuse it with the same filters. Empty for the first page.
+  string page_token = 7 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListQuickSwapsResponse lists QuickSwaps newest first: by creation time,
+// then swap_id, both descending. A QuickSwap created after the first page
+// was read is not listed by later pages; every earlier one is listed exactly
+// once.
+message ListQuickSwapsResponse {
+  // The QuickSwaps.
+  repeated QuickSwapSummary quick_swaps = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// FeeTotalsGrouping is how GetFeeTotals groups the fees.
+enum FeeTotalsGrouping {
+  // No grouping; rejected.
+  GROUPING_UNSPECIFIED = 0;
+  // By credited vault.
+  BY_VAULT = 1;
+  // By UTC day the fee was charged.
+  BY_DAY = 2;
+  // By UTC month the fee was charged.
+  BY_MONTH = 3;
+}
+
+// GetFeeTotalsRequest totals the broker and affiliate fees charged to the
+// broker's QuickSwaps in a time window.
+message GetFeeTotalsRequest {
+  option (buf.validate.message).cel = {
+    id: "get_fee_totals_request.window"
+    message: "end_time must be after start_time and at most 366 days later"
+    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= duration('8784h')"
+  };
+
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // How to group the totals.
+  FeeTotalsGrouping group_by = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Start of the window, inclusive: fees charged at or after it.
+  google.protobuf.Timestamp start_time = 3 [(buf.validate.field).required = true];
+  // End of the window, exclusive, at most 366 days after start_time.
+  google.protobuf.Timestamp end_time = 4 [(buf.validate.field).required = true];
+  // Only fees credited to this vault; zero for every vault.
+  fixed64 vault_account_id = 5;
+}
+
+// FeeTotal is the fees charged in one group and asset.
+message FeeTotal {
+  // BY_VAULT: public sub-account ID of the credited vault; zero otherwise.
+  fixed64 vault_account_id = 1;
+  // BY_DAY or BY_MONTH: start of the UTC day or month; unset for BY_VAULT.
+  google.protobuf.Timestamp period_start = 2;
+  // Asset credited, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 3;
+  // Total credited, in base units of 18 decimals.
+  TokenAmount amount = 4;
+  // QuickSwaps that were charged a fee in this group and asset.
+  uint64 swap_count = 5;
+}
+
+// GetFeeTotalsResponse lists every group and asset with a fee in the window,
+// complete (the window is bounded): by vault, then asset, for BY_VAULT; by
+// period, then asset, for BY_DAY and BY_MONTH, oldest first.
+message GetFeeTotalsResponse {
+  // The totals.
+  repeated FeeTotal totals = 1;
+}
+
+// StatsPeriod is the UTC calendar period GetBrokerStats groups by.
+enum StatsPeriod {
+  // No period; rejected.
+  PERIOD_UNSPECIFIED = 0;
+  // A UTC day.
+  DAY = 1;
+  // A UTC month.
+  MONTH = 2;
+}
+
+// GetBrokerStatsRequest reads the broker's QuickSwap activity in a time
+// window, per UTC day or month.
+message GetBrokerStatsRequest {
+  option (buf.validate.message).cel = {
+    id: "get_broker_stats_request.window"
+    message: "end_time must be after start_time and at most 366 days later"
+    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= duration('8784h')"
+  };
+
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // The period to group by.
+  StatsPeriod group_by = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Start of the window, inclusive. A window that starts or ends inside a
+  // period counts only the part of that period inside the window.
+  google.protobuf.Timestamp start_time = 3 [(buf.validate.field).required = true];
+  // End of the window, exclusive, at most 366 days after start_time.
+  google.protobuf.Timestamp end_time = 4 [(buf.validate.field).required = true];
+}
+
+// StatusCount is how many QuickSwaps are in one status.
+message StatusCount {
+  // The status.
+  QuickSwapStatus status = 1;
+  // QuickSwaps in it.
+  uint64 count = 2;
+}
+
+// AssetVolume is a total amount in one asset.
+message AssetVolume {
+  // Asset, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // Total, in base units of 18 decimals.
+  TokenAmount amount = 2;
+}
+
+// FeeSplit is the fees charged in one asset, by who they credit. Every
+// amount is set, zero included.
+message FeeSplit {
+  // Asset charged, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // Service fees, credited to Polyester, in base units of 18 decimals.
+  TokenAmount service_fee = 2;
+  // Broker fees, credited to the broker's default vault, in base units of
+  // 18 decimals.
+  TokenAmount broker_fee = 3;
+  // Affiliate fees, credited to the broker's affiliate vaults, in base
+  // units of 18 decimals.
+  TokenAmount affiliate_fee = 4;
+}
+
+// BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or
+// month. A QuickSwap counts in the period it was created in, with its
+// current status, its credited deposit and its destination payout, so a
+// period's numbers keep moving until its QuickSwaps end. A fee counts in the
+// period it was charged in, as in GetFeeTotals, which can be later than the
+// period its QuickSwap was created in.
+message BrokerStatsPeriod {
+  // Start of the UTC day or month.
+  google.protobuf.Timestamp period_start = 1;
+  // QuickSwaps created in the period, inside the window.
+  uint64 created_count = 2;
+  // Those QuickSwaps by current status, in QuickSwapStatus number order;
+  // statuses with none are omitted. The counts total created_count.
+  repeated StatusCount statuses = 3;
+  // Deposits credited to those QuickSwaps and taken in for execution, per
+  // asset, in asset_id order: including a deposit later found ineligible
+  // and returned, excluding a deposit held for review before credit.
+  repeated AssetVolume deposited = 4;
+  // Paid to the destination of those QuickSwaps whose DESTINATION
+  // withdrawal is FINALIZED, per asset, in asset_id order: after service,
+  // broker and affiliate fees, before the destination network fee.
+  repeated AssetVolume delivered = 5;
+  // Fees charged to the broker's QuickSwaps in the period, per asset, in
+  // asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals
+  // total of the same window, period and asset.
+  repeated FeeSplit fees = 6;
+}
+
+// GetBrokerStatsResponse lists every period of the window with a QuickSwap
+// created or a fee charged, oldest first, complete (the window is bounded).
+// Periods with neither are omitted.
+message GetBrokerStatsResponse {
+  // The periods.
+  repeated BrokerStatsPeriod periods = 1;
+}
+
+// QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.
+// Every request names its broker. The caller is either the broker's API key,
+// sent as a bearer token (see QuickSwapService), or a member's interactive
+// session token; a person who is not a member of the broker gets NOT_FOUND /
+// BROKER_NOT_FOUND. Each RPC maps to one broker action:
+//
+// | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |
+// | --- | --- | --- | --- | --- | --- | --- |
+// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |
+// | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |
+// | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |
+// | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |
+// | Transfer ownership | yes | no | no | no | no | no |
+//
+// A member managing keys or members must also send a fresh step-up proof in
+// the X-Auth-Step-Up header, obtained by completing an MFA challenge for
+// fresh step-up; each proof authorizes one change. Reads, vaults and a key
+// rotating itself need none. A denied action fails with PERMISSION_DENIED /
+// ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /
+// STEP_UP_REQUIRED.
+//
+// REST errors are application/problem+json (see ErrorDetail) with the HTTP
+// statuses of QuickSwapService.
+service QuickSwapBrokerService {
+  // GetBroker returns the broker, its limits and current usage of them, and
+  // the caller's role.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  rpc GetBroker(GetBrokerRequest) returns (GetBrokerResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get broker"
+      description: "Get the broker, its limits and current usage, and the caller's role."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListMyBrokers lists the brokers the caller is a member of and the
+  // invites addressed to the caller. Session token only.
+  rpc ListMyBrokers(ListMyBrokersRequest) returns (ListMyBrokersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List my brokers"
+      description: "List the caller's broker memberships and pending invites."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // RespondToInvite accepts or declines a pending invite addressed to the
+  // caller. Session token only; no step-up proof is needed.
+  //
+  // Errors:
+  // - NOT_FOUND: INVITE_NOT_FOUND.
+  // - ALREADY_EXISTS: ALREADY_MEMBER.
+  rpc RespondToInvite(RespondToInviteRequest) returns (RespondToInviteResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Respond to invite"
+      description: "Accept or decline a pending broker invite addressed to the caller."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListMembers lists the broker's members and pending invites. Session
+  // token only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED.
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List members"
+      description: "List the broker's members and pending invites."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // InviteMember invites a person with any role but OWNER; the person
+  // accepts with their own login. Inviting again replaces the pending invite.
+  // Session token and step-up proof only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND, or MEMBER_NOT_FOUND when the account does
+  //   not exist.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - ALREADY_EXISTS: ALREADY_MEMBER.
+  rpc InviteMember(InviteMemberRequest) returns (InviteMemberResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Invite member"
+      description: "Invite a person to the broker with a role other than Owner."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // SetMemberRole changes a member's role to any role but OWNER. The Owner's
+  // role cannot be changed; transfer ownership instead. Session token and
+  // step-up proof only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - FAILED_PRECONDITION: OWNER_IMMUTABLE.
+  rpc SetMemberRole(SetMemberRoleRequest) returns (SetMemberRoleResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set member role"
+      description: "Change a member's role."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // RemoveMember removes a member, ending their access immediately, or
+  // cancels the person's pending invite. The Owner cannot be removed. Session
+  // token and step-up proof only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - FAILED_PRECONDITION: OWNER_IMMUTABLE.
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Remove member"
+      description: "Remove a member or cancel a pending invite."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // TransferOwnership makes another member the Owner; the caller, the
+  // current Owner, becomes an Admin in the same change. Session token and
+  // step-up proof only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Transfer ownership"
+      description: "Make another member the Owner of the broker."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListKeys lists the broker's API keys, without secrets, a page at a time.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or malformed.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List API keys"
+      description: "List the broker's API keys without secrets."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // CreateKey creates an API key. A broker has at most two working keys.
+  // Session token and step-up proof only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - FAILED_PRECONDITION: KEY_LIMIT.
+  rpc CreateKey(CreateKeyRequest) returns (CreateKeyResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create API key"
+      description: "Create a broker API key; its token is shown once."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // RotateKey replaces a working key by a new one. The old key keeps working
+  // until the overlap ends, then only the new key does. A broker API key may
+  // rotate itself without a step-up proof; a member needs a session token and
+  // step-up proof.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or KEY_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - FAILED_PRECONDITION: KEY_LIMIT, when the broker would have more than
+  //   two working keys during the overlap.
+  rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Rotate API key"
+      description: "Replace a broker API key, keeping the old one working for an overlap."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // RevokeKey revokes a key immediately. The broker's last key that works
+  // without an expiry cannot be revoked. Session token and step-up proof
+  // only.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or KEY_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - FAILED_PRECONDITION: LAST_KEY.
+  rpc RevokeKey(RevokeKeyRequest) returns (RevokeKeyResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Revoke API key"
+      description: "Revoke a broker API key immediately."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // CreateAffiliateVault creates, or returns, the affiliate vault with label.
+  // Create a vault before the first QuickSwap that credits it: a QuickSwap
+  // naming a vault that does not exist yet is refused. Concurrent and
+  // repeated requests with the same label return the same vault. No step-up
+  // proof is needed.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED.
+  // - RESOURCE_EXHAUSTED: BROKER_LIMIT, the broker's vault limit.
+  rpc CreateAffiliateVault(CreateAffiliateVaultRequest) returns (CreateAffiliateVaultResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create affiliate vault"
+      description: "Create or return the broker's affiliate vault for a label."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaults lists the broker's affiliate vaults.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or malformed.
+  rpc ListVaults(ListVaultsRequest) returns (ListVaultsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List affiliate vaults"
+      description: "List the broker's affiliate vaults."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // GetVault returns one affiliate vault.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  rpc GetVault(GetVaultRequest) returns (GetVaultResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get affiliate vault"
+      description: "Get one of the broker's affiliate vaults."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // SetVaultStatus enables or disables an affiliate vault for new
+  // QuickSwaps. No step-up proof is needed.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - PERMISSION_DENIED: ACTION_DENIED.
+  rpc SetVaultStatus(SetVaultStatusRequest) returns (SetVaultStatusResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set affiliate vault status"
+      description: "Enable or disable an affiliate vault for new QuickSwaps."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListQuickSwaps lists the broker's QuickSwaps, newest first, filtered by
+  // vault, status and creation time.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker, other filters or
+  //   malformed.
+  rpc ListQuickSwaps(ListQuickSwapsRequest) returns (ListQuickSwapsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List QuickSwaps"
+      description: "List the broker's QuickSwaps, newest first, by vault, status and creation time."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // GetFeeTotals totals the broker and affiliate fees charged to the
+  // broker's QuickSwaps in a window, per asset, by vault, day or month.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  rpc GetFeeTotals(GetFeeTotalsRequest) returns (GetFeeTotalsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get fee totals"
+      description: "Total the broker and affiliate fees charged in a window, per asset, by vault, day or month."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC
+  // day or month: QuickSwaps created by status, deposits credited and
+  // payouts delivered per asset, and the service, broker and affiliate fees
+  // charged per asset.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - INTERNAL: STATS_INCOMPLETE, with the swap_id of a QuickSwap whose
+  //   records the stats cannot read.
+  rpc GetBrokerStats(GetBrokerStatsRequest) returns (GetBrokerStatsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get broker stats"
+      description: "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per day or month."
+      tags: "QuickSwap Broker"
+    };
+  }
+}

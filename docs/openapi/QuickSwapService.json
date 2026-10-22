@@ -53,7 +53,7 @@
             "type": "integer"
           },
           "swapId": {
-            "description": "QuickSwap bound to the request's idempotency key, as a decimal string: the original QuickSwap on IDEMPOTENCY_CONFLICT, or the QuickSwap whose deposit address could not be allocated yet on ADDRESS_UNAVAILABLE.",
+            "description": "QuickSwap bound to the request's idempotency key, as a decimal string: the original QuickSwap on IDEMPOTENCY_CONFLICT, the QuickSwap whose deposit address could not be allocated yet on ADDRESS_UNAVAILABLE, or the QuickSwap that never gets one on ADDRESS_CONFLICT.",
             "pattern": "^[0-9]+$",
             "type": "string"
           },
@@ -79,28 +79,33 @@
         "additionalProperties": false,
         "properties": {
           "affiliates": {
-            "description": "Optional affiliates paid from the broker's integrator fee: at most four distinct accounts whose shares total at most 1000000 ppm. Empty means the broker keeps the whole integrator fee. The quote shows the total fee only.",
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault: at most three distinct vaults. Fixed at creation with broker_bps.",
             "items": {
               "additionalProperties": false,
               "properties": {
                 "accountId": {
-                  "description": "Public account ID of the affiliate's account, credited with the share. It must not be the broker's own payout account.",
+                  "description": "Public sub-account ID of an active affiliate vault of the broker (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an unknown, disabled or other broker's vault, or the default vault, fails with AFFILIATE_VAULT_UNKNOWN.",
                   "pattern": "^[0-9]+$",
                   "type": "string"
                 },
-                "sharePpm": {
-                  "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
+                "bps": {
+                  "description": "Fee in basis points of what each leg receives, from 1 to 300.",
                   "format": "int32",
                   "type": "integer"
                 }
               },
               "required": [
                 "accountId",
-                "sharePpm"
+                "bps"
               ],
               "type": "object"
             },
             "type": "array"
+          },
+          "brokerBps": {
+            "description": "Broker fee in basis points of what each leg receives, charged on top of the service fee and credited to the broker's default vault; 0 for none. broker_bps and the affiliates' bps total at most 300. Fees outside these rules fail with FEES_INVALID.",
+            "format": "int32",
+            "type": "integer"
           },
           "destinationAddress": {
             "description": "Recipient of the swap output on the destination network, in its native text form without memo.",
@@ -111,7 +116,7 @@
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits, '.', '_', ':' or '-'. Scoped to the authenticated broker and retained permanently. The same key with the same request returns the same QuickSwap and deposit address; with a different request it fails with IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and memo is put in its network's canonical form, so the same address in another case or encoding is the same request; affiliate order is ignored; every other field must be equal.",
+            "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits, '.', '_', ':' or '-'. Scoped to the authenticated broker and retained permanently. The same key with the same request returns the same QuickSwap and deposit address; with a different request it fails with IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and memo is put in its network's canonical form, so the same address in another case or encoding is the same request; affiliate order is ignored; every other field, the fees included, must be equal.",
             "type": "string"
           },
           "refundAddress": {
@@ -277,26 +282,50 @@
             "additionalProperties": false,
             "description": "The QuickSwap, normally AWAITING_DEPOSIT with deposit_instructions. A retry returns its current state with the original quote and address.",
             "properties": {
-              "affiliates": {
-                "description": "Affiliate shares of the broker fee, as requested.",
+              "chargedFees": {
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public account ID of the affiliate's account, credited with the share. It must not be the broker's own payout account.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
-                    "sharePpm": {
-                      "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
+                    "amount": {
+                      "additionalProperties": false,
+                      "description": "Amount credited, in base units of 18 decimals.",
+                      "properties": {
+                        "baseUnits": {
+                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                          "type": "string"
+                        },
+                        "decimals": {
+                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "baseUnits"
+                      ],
+                      "type": "object"
+                    },
+                    "assetId": {
+                      "description": "Asset credited, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
                       "format": "int32",
                       "type": "integer"
+                    },
+                    "kind": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                        }
+                      ],
+                      "description": "BROKER or AFFILIATE."
                     }
                   },
-                  "required": [
-                    "accountId",
-                    "sharePpm"
-                  ],
+                  "required": [],
                   "type": "object"
                 },
                 "type": "array"
@@ -534,7 +563,7 @@
                   },
                   "outputAmount": {
                     "additionalProperties": false,
-                    "description": "Destination amount acquired so far after service and integrator fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
+                    "description": "Destination amount acquired so far after service, broker and affiliate fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -566,9 +595,46 @@
                 "type": "object"
               },
               "feeScheduleVersion": {
-                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service and integrator fees, whatever later versions change.",
+                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service fees, whatever later versions change.",
                 "pattern": "^[0-9]+$",
                 "type": "string"
+              },
+              "fees": {
+                "additionalProperties": false,
+                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "properties": {
+                  "affiliates": {
+                    "description": "Affiliate fees, in ascending account_id order.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "accountId": {
+                          "description": "Public sub-account ID of an active affiliate vault of the broker (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an unknown, disabled or other broker's vault, or the default vault, fails with AFFILIATE_VAULT_UNKNOWN.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
+                        "bps": {
+                          "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "accountId",
+                        "bps"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "brokerBps": {
+                    "description": "Broker fee in basis points of what each leg receives, credited to the broker's default vault.",
+                    "format": "int32",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
               },
               "idempotencyKey": {
                 "description": "The broker's idempotency key that created this QuickSwap.",
@@ -626,10 +692,15 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: service and integrator fees in route order (a bridge has one pair, charged at payout), then network fees. Zero fees are omitted.",
+                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "accountId": {
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
                         "amount": {
                           "additionalProperties": false,
                           "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
@@ -648,6 +719,11 @@
                             "baseUnits"
                           ],
                           "type": "object"
+                        },
+                        "bps": {
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "format": "int32",
+                          "type": "integer"
                         },
                         "kind": {
                           "allOf": [
@@ -713,7 +789,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is held (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1076,26 +1152,50 @@
             "additionalProperties": false,
             "description": "Current state.",
             "properties": {
-              "affiliates": {
-                "description": "Affiliate shares of the broker fee, as requested.",
+              "chargedFees": {
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public account ID of the affiliate's account, credited with the share. It must not be the broker's own payout account.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
-                    "sharePpm": {
-                      "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
+                    "amount": {
+                      "additionalProperties": false,
+                      "description": "Amount credited, in base units of 18 decimals.",
+                      "properties": {
+                        "baseUnits": {
+                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                          "type": "string"
+                        },
+                        "decimals": {
+                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "baseUnits"
+                      ],
+                      "type": "object"
+                    },
+                    "assetId": {
+                      "description": "Asset credited, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
                       "format": "int32",
                       "type": "integer"
+                    },
+                    "kind": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                        }
+                      ],
+                      "description": "BROKER or AFFILIATE."
                     }
                   },
-                  "required": [
-                    "accountId",
-                    "sharePpm"
-                  ],
+                  "required": [],
                   "type": "object"
                 },
                 "type": "array"
@@ -1333,7 +1433,7 @@
                   },
                   "outputAmount": {
                     "additionalProperties": false,
-                    "description": "Destination amount acquired so far after service and integrator fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
+                    "description": "Destination amount acquired so far after service, broker and affiliate fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1365,9 +1465,46 @@
                 "type": "object"
               },
               "feeScheduleVersion": {
-                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service and integrator fees, whatever later versions change.",
+                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service fees, whatever later versions change.",
                 "pattern": "^[0-9]+$",
                 "type": "string"
+              },
+              "fees": {
+                "additionalProperties": false,
+                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "properties": {
+                  "affiliates": {
+                    "description": "Affiliate fees, in ascending account_id order.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "accountId": {
+                          "description": "Public sub-account ID of an active affiliate vault of the broker (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an unknown, disabled or other broker's vault, or the default vault, fails with AFFILIATE_VAULT_UNKNOWN.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
+                        "bps": {
+                          "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "accountId",
+                        "bps"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "brokerBps": {
+                    "description": "Broker fee in basis points of what each leg receives, credited to the broker's default vault.",
+                    "format": "int32",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
               },
               "idempotencyKey": {
                 "description": "The broker's idempotency key that created this QuickSwap.",
@@ -1425,10 +1562,15 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: service and integrator fees in route order (a bridge has one pair, charged at payout), then network fees. Zero fees are omitted.",
+                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "accountId": {
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
                         "amount": {
                           "additionalProperties": false,
                           "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
@@ -1447,6 +1589,11 @@
                             "baseUnits"
                           ],
                           "type": "object"
+                        },
+                        "bps": {
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "format": "int32",
+                          "type": "integer"
                         },
                         "kind": {
                           "allOf": [
@@ -1512,7 +1659,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is held (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1875,26 +2022,50 @@
             "additionalProperties": false,
             "description": "Current state.",
             "properties": {
-              "affiliates": {
-                "description": "Affiliate shares of the broker fee, as requested.",
+              "chargedFees": {
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public account ID of the affiliate's account, credited with the share. It must not be the broker's own payout account.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
-                    "sharePpm": {
-                      "description": "Share of the integrator fee in parts per million, from 1 to 1000000.",
+                    "amount": {
+                      "additionalProperties": false,
+                      "description": "Amount credited, in base units of 18 decimals.",
+                      "properties": {
+                        "baseUnits": {
+                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                          "type": "string"
+                        },
+                        "decimals": {
+                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "baseUnits"
+                      ],
+                      "type": "object"
+                    },
+                    "assetId": {
+                      "description": "Asset credited, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
                       "format": "int32",
                       "type": "integer"
+                    },
+                    "kind": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                        }
+                      ],
+                      "description": "BROKER or AFFILIATE."
                     }
                   },
-                  "required": [
-                    "accountId",
-                    "sharePpm"
-                  ],
+                  "required": [],
                   "type": "object"
                 },
                 "type": "array"
@@ -2132,7 +2303,7 @@
                   },
                   "outputAmount": {
                     "additionalProperties": false,
-                    "description": "Destination amount acquired so far after service and integrator fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
+                    "description": "Destination amount acquired so far after service, broker and affiliate fees and before withdrawal network fees, in destination token units. Zero for a bridge: its destination withdrawal pays the credit less its fees.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2164,9 +2335,46 @@
                 "type": "object"
               },
               "feeScheduleVersion": {
-                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service and integrator fees, whatever later versions change.",
+                "description": "Fee schedule version fixed at creation. Every execution or bridge payout of this QuickSwap is charged that version's service fees, whatever later versions change.",
                 "pattern": "^[0-9]+$",
                 "type": "string"
+              },
+              "fees": {
+                "additionalProperties": false,
+                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "properties": {
+                  "affiliates": {
+                    "description": "Affiliate fees, in ascending account_id order.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "accountId": {
+                          "description": "Public sub-account ID of an active affiliate vault of the broker (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an unknown, disabled or other broker's vault, or the default vault, fails with AFFILIATE_VAULT_UNKNOWN.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
+                        "bps": {
+                          "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+                          "format": "int32",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "accountId",
+                        "bps"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "brokerBps": {
+                    "description": "Broker fee in basis points of what each leg receives, credited to the broker's default vault.",
+                    "format": "int32",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
               },
               "idempotencyKey": {
                 "description": "The broker's idempotency key that created this QuickSwap.",
@@ -2224,10 +2432,15 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: service and integrator fees in route order (a bridge has one pair, charged at payout), then network fees. Zero fees are omitted.",
+                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "accountId": {
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "pattern": "^[0-9]+$",
+                          "type": "string"
+                        },
                         "amount": {
                           "additionalProperties": false,
                           "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
@@ -2246,6 +2459,11 @@
                             "baseUnits"
                           ],
                           "type": "object"
+                        },
+                        "bps": {
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "format": "int32",
+                          "type": "integer"
                         },
                         "kind": {
                           "allOf": [
@@ -2311,7 +2529,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is held (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2670,6 +2888,35 @@
       "polyester.rest.QuickSwapService_QuoteQuickSwap.Request": {
         "additionalProperties": false,
         "properties": {
+          "affiliates": {
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault: at most three distinct vaults.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "accountId": {
+                  "description": "Public sub-account ID of an active affiliate vault of the broker (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an unknown, disabled or other broker's vault, or the default vault, fails with AFFILIATE_VAULT_UNKNOWN.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "bps": {
+                  "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "accountId",
+                "bps"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "brokerBps": {
+            "description": "Broker fee in basis points of what each leg receives, charged on top of the service fee and credited to the broker's default vault; 0 for none. broker_bps and the affiliates' bps total at most 300. Fees outside these rules fail with FEES_INVALID.",
+            "format": "int32",
+            "type": "integer"
+          },
           "terms": {
             "additionalProperties": false,
             "description": "Terms to price.",
@@ -2849,10 +3096,15 @@
                 "type": "string"
               },
               "fees": {
-                "description": "Quoted fee components for deposit_amount: service and integrator fees in route order (a bridge has one pair, charged at payout), then network fees. Zero fees are omitted.",
+                "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "accountId": {
+                      "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
                     "amount": {
                       "additionalProperties": false,
                       "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
@@ -2871,6 +3123,11 @@
                         "baseUnits"
                       ],
                       "type": "object"
+                    },
+                    "bps": {
+                      "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                      "format": "int32",
+                      "type": "integer"
                     },
                     "kind": {
                       "allOf": [
@@ -2936,7 +3193,7 @@
               },
               "minDepositAmount": {
                 "additionalProperties": false,
-                "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is held (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
+                "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes.",
                 "properties": {
                   "baseUnits": {
                     "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2997,21 +3254,23 @@
           "EVALUATING": "Detected; eligibility is being evaluated. A deposit can already be credited (credited_at) while it is evaluated.",
           "MANUAL_RECOVERY": "Arrived after address_retires_at. It is handled only through support-assisted recovery; recovery is not guaranteed. The broker contacts Polyester broker support with the swap_id.",
           "ON_HOLD": "Held for review; it neither executes nor returns until released.",
-          "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT) or one above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), keeps credited_at and is returned from its credit."
+          "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.FeeKind": {
         "enum": [
           "SERVICE",
-          "INTEGRATOR",
+          "BROKER",
+          "AFFILIATE",
           "DEPOSIT_NETWORK",
           "WITHDRAWAL_NETWORK"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
+          "AFFILIATE": "Affiliate fee of one trading leg, one affiliate's bps of what the leg receives, credited to that affiliate vault. Each affiliate has one per leg; on a bridge one, on the credited amount, charged at payout.",
+          "BROKER": "Broker fee of one trading leg, the request's broker_bps of what the leg receives, credited to the broker's default vault. A two-leg route has one per leg; a bridge has one, on the credited amount, charged at payout.",
           "DEPOSIT_NETWORK": "Network fee withheld from the deposit before it is credited.",
-          "INTEGRATOR": "Broker fee of one trading leg: the broker's fee on the leg's pair in basis points of what the leg receives, including any affiliate shares paid from it. A two-leg route has one per leg. On a bridge, the broker's one bridge fee in basis points of the credited amount, charged at payout.",
-          "SERVICE": "Polyester fee of one trading leg: the leg's pair fee in basis points of what the leg receives. A two-leg route has one per leg. On a bridge, the one bridge fee in basis points of the credited amount, charged at payout.",
+          "SERVICE": "Service fee of one trading leg: the leg's pair fee in basis points of what the leg receives. A two-leg route has one per leg. On a bridge, the one bridge fee in basis points of the credited amount, charged at payout.",
           "WITHDRAWAL_NETWORK": "Estimated network fee for a withdrawal. The actual fee is charged at withdrawal time and reported on the withdrawal."
         }
       },
@@ -3035,7 +3294,7 @@
         "x-poly-enum-descriptions": {
           "CAPACITY_UNAVAILABLE": "The deposit arrived and is safe, but processing capacity is temporarily unavailable. Processing resumes automatically when capacity frees up; no action is needed.",
           "DEPOSIT_ABOVE_MAXIMUM": "The deposit is above max_deposit_amount; it is returned to return_address.",
-          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount. It is held, not executed or returned automatically. The broker contacts Polyester broker support with the swap_id.",
+          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
           "EXECUTION_DEADLINE_REACHED": "The execution deadline passed before all input executed; untraded funds are refunded or returned. Shown while EXECUTING once the deadline ended trading, and on the payout statuses that follow.",
           "FUNDING_WINDOW_ENDED": "The funding window ended without an eligible deposit.",
           "LATE_DEPOSIT": "The deposit was first seen after funding_expires_at.",
@@ -3045,7 +3304,7 @@
           "SOURCE_SCREENING_BLOCKED": "Polyester's deposit screening blocked the deposit. It is held for compliance review; it is never executed or returned automatically. The broker contacts Polyester broker support with the swap_id.",
           "SOURCE_SCREENING_FAILED": "The deposit's risk screen failed with a return verdict; the deposit is not accepted and is returned to return_address.",
           "WITHDRAWAL_FAILED": "A withdrawal cannot be completed and is held for review. The broker contacts Polyester broker support with the swap_id.",
-          "WRONG_ASSET": "The deposit is not the quoted source asset. It is held, not executed or returned automatically. The broker contacts Polyester broker support with the swap_id."
+          "WRONG_ASSET": "The deposit is not the quoted source asset or network. It is not executed: it is returned to return_address on the network and in the asset it was received in, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned there, such as one received on a network where return_address is not valid, is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.QuickSwapStatus": {
@@ -3106,7 +3365,7 @@
         "x-poly-enum-descriptions": {
           "DESTINATION": "Swap output to destination_address on the destination network.",
           "REFUND": "Untraded intermediate asset of a two-leg route, including a partial refund, to refund_address on the refund route's network.",
-          "RETURN": "Source funds that were not accepted or not traded, to return_address on the source network."
+          "RETURN": "Source funds that were not accepted or not traded, to return_address on the network and in the asset they were received in: the source network, or for a wrong asset the network it was sent on."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.WithdrawalState": {
@@ -3134,7 +3393,7 @@
         "type": "http"
       },
       "BrokerApiKeyAuth": {
-        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. Polyester issues keys at broker onboarding; contact Polyester to obtain or rotate one.",
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. The broker's members create, rotate and revoke keys through the QuickSwap broker API, and a key may rotate itself.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -3158,9 +3417,10 @@
                 "affiliates": [
                   {
                     "accountId": "7563897446546",
-                    "sharePpm": 1
+                    "bps": 1
                   }
                 ],
+                "brokerBps": 1,
                 "destinationAddress": "0x3333333333333333333333333333333333333333",
                 "destinationMemo": "value",
                 "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
@@ -3199,10 +3459,15 @@
               "application/json": {
                 "example": {
                   "quickSwap": {
-                    "affiliates": [
+                    "chargedFees": [
                       {
                         "accountId": "7563897446546",
-                        "sharePpm": 1
+                        "amount": {
+                          "baseUnits": "value",
+                          "decimals": 36
+                        },
+                        "assetId": 100,
+                        "kind": "SERVICE"
                       }
                     ],
                     "createdAt": "2025-01-01T00:00:00Z",
@@ -3262,6 +3527,15 @@
                       "totalSlices": 1
                     },
                     "feeScheduleVersion": "1",
+                    "fees": {
+                      "affiliates": [
+                        {
+                          "accountId": "7563897446546",
+                          "bps": 1
+                        }
+                      ],
+                      "brokerBps": 1
+                    },
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "isTerminal": false,
                     "quote": {
@@ -3276,10 +3550,12 @@
                       "expiresAt": "2025-01-01T00:00:00Z",
                       "fees": [
                         {
+                          "accountId": "7563897446546",
                           "amount": {
                             "baseUnits": "value",
                             "decimals": 36
                           },
+                          "bps": 1,
                           "kind": "SERVICE",
                           "zippedAssetId": 100
                         }
@@ -3374,7 +3650,7 @@
                 }
               }
             },
-            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID, REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or AFFILIATES_INVALID) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED, or AFFILIATES_INVALID when affiliates are not enabled); nothing is bound to the key."
+            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID, REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN); nothing is bound to the key."
           },
           "401": {
             "content": {
@@ -3386,6 +3662,16 @@
             },
             "description": "UNAUTHENTICATED: missing or invalid broker API key."
           },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.QuickSwapService.Problem"
+                }
+              }
+            },
+            "description": "BROKER_DISABLED: the broker is disabled; quotes and creates are refused, reads and QuickSwaps already created continue."
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -3394,7 +3680,7 @@
                 }
               }
             },
-            "description": "IDEMPOTENCY_CONFLICT: the key was already used with a different request; swapId is the original QuickSwap."
+            "description": "IDEMPOTENCY_CONFLICT: the key was already used with a different request; swapId is the original QuickSwap. ADDRESS_CONFLICT: the QuickSwap (swapId) never gets a deposit address; create a new one with a new idempotency key."
           },
           "413": {
             "content": {
@@ -3414,7 +3700,7 @@
                 }
               }
             },
-            "description": "The caller is rate limited; retry after a delay."
+            "description": "BROKER_LIMIT: the broker holds its maximum of unfunded QuickSwaps or created its maximum in the last hour (a funded or expired QuickSwap frees a slot), or the API key exceeded its request rate (retry after the Retry-After header's seconds); nothing is bound to the key."
           },
           "500": {
             "content": {
@@ -3490,10 +3776,15 @@
               "application/json": {
                 "example": {
                   "quickSwap": {
-                    "affiliates": [
+                    "chargedFees": [
                       {
                         "accountId": "7563897446546",
-                        "sharePpm": 1
+                        "amount": {
+                          "baseUnits": "value",
+                          "decimals": 36
+                        },
+                        "assetId": 100,
+                        "kind": "SERVICE"
                       }
                     ],
                     "createdAt": "2025-01-01T00:00:00Z",
@@ -3553,6 +3844,15 @@
                       "totalSlices": 1
                     },
                     "feeScheduleVersion": "1",
+                    "fees": {
+                      "affiliates": [
+                        {
+                          "accountId": "7563897446546",
+                          "bps": 1
+                        }
+                      ],
+                      "brokerBps": 1
+                    },
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "isTerminal": false,
                     "quote": {
@@ -3567,10 +3867,12 @@
                       "expiresAt": "2025-01-01T00:00:00Z",
                       "fees": [
                         {
+                          "accountId": "7563897446546",
                           "amount": {
                             "baseUnits": "value",
                             "decimals": 36
                           },
+                          "bps": 1,
                           "kind": "SERVICE",
                           "zippedAssetId": 100
                         }
@@ -3695,7 +3997,7 @@
                 }
               }
             },
-            "description": "The caller is rate limited; retry after a delay."
+            "description": "BROKER_LIMIT: the API key exceeded its request rate; retry after the Retry-After header's seconds."
           },
           "500": {
             "content": {
@@ -3772,10 +4074,15 @@
               "application/json": {
                 "example": {
                   "quickSwap": {
-                    "affiliates": [
+                    "chargedFees": [
                       {
                         "accountId": "7563897446546",
-                        "sharePpm": 1
+                        "amount": {
+                          "baseUnits": "value",
+                          "decimals": 36
+                        },
+                        "assetId": 100,
+                        "kind": "SERVICE"
                       }
                     ],
                     "createdAt": "2025-01-01T00:00:00Z",
@@ -3835,6 +4142,15 @@
                       "totalSlices": 1
                     },
                     "feeScheduleVersion": "1",
+                    "fees": {
+                      "affiliates": [
+                        {
+                          "accountId": "7563897446546",
+                          "bps": 1
+                        }
+                      ],
+                      "brokerBps": 1
+                    },
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "isTerminal": false,
                     "quote": {
@@ -3849,10 +4165,12 @@
                       "expiresAt": "2025-01-01T00:00:00Z",
                       "fees": [
                         {
+                          "accountId": "7563897446546",
                           "amount": {
                             "baseUnits": "value",
                             "decimals": 36
                           },
+                          "bps": 1,
                           "kind": "SERVICE",
                           "zippedAssetId": 100
                         }
@@ -3977,7 +4295,7 @@
                 }
               }
             },
-            "description": "The caller is rate limited; retry after a delay."
+            "description": "BROKER_LIMIT: the API key exceeded its request rate; retry after the Retry-After header's seconds."
           },
           "500": {
             "content": {
@@ -4036,6 +4354,13 @@
           "content": {
             "application/json": {
               "example": {
+                "affiliates": [
+                  {
+                    "accountId": "7563897446546",
+                    "bps": 1
+                  }
+                ],
+                "brokerBps": 1,
                 "terms": {
                   "amount": {
                     "baseUnits": "value",
@@ -4076,10 +4401,12 @@
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "fees": [
                       {
+                        "accountId": "7563897446546",
                         "amount": {
                           "baseUnits": "value",
                           "decimals": 36
                         },
+                        "bps": 1,
                         "kind": "SERVICE",
                         "zippedAssetId": 100
                       }
@@ -4116,7 +4443,7 @@
                 }
               }
             },
-            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE or DECIMALS_MISMATCH) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED or PROTECTION_UNACHIEVABLE)."
+            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH or FEES_INVALID) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or AFFILIATE_VAULT_UNKNOWN)."
           },
           "401": {
             "content": {
@@ -4127,6 +4454,16 @@
               }
             },
             "description": "UNAUTHENTICATED: missing or invalid broker API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.QuickSwapService.Problem"
+                }
+              }
+            },
+            "description": "BROKER_DISABLED: the broker is disabled; quotes and creates are refused, reads and QuickSwaps already created continue."
           },
           "413": {
             "content": {
@@ -4146,7 +4483,7 @@
                 }
               }
             },
-            "description": "The caller is rate limited; retry after a delay."
+            "description": "BROKER_LIMIT: the API key exceeded its request rate; retry after the Retry-After header's seconds."
           },
           "500": {
             "content": {

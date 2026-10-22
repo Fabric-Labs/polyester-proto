@@ -1,0 +1,434 @@
+syntax = "proto3";
+
+package swap.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+import "polyester/type/v1/u128.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/v1;swapv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Swap"
+      description: "Convert one asset of an account's Trading balance into another through the spot order books."
+    }
+  ]
+};
+
+// SwapTerms are the economic terms of one Swap: spend amount_e18 of the
+// source asset from the account's Trading balance and receive the destination
+// asset there. The same terms are quoted and created. A Swap executes as spot
+// orders at the account's own spot taker fee; no other fee is charged.
+message SwapTerms {
+  option (buf.validate.message).cel = {
+    id: "swap_terms.distinct_assets"
+    message: "source and destination must differ"
+    expression: "this.source_asset_id != this.destination_asset_id"
+  };
+
+  // Optional sub-account public ID whose Trading balance funds the Swap. When
+  // omitted, the caller's root account funds it, or the sub-account an API key
+  // is bound to.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // Asset spent: a unified asset ID, as used for balances and internal
+  // transfers.
+  uint32 source_asset_id = 2 [(buf.validate.field).uint32.gt = 0];
+  // Asset received: a unified asset ID.
+  uint32 destination_asset_id = 3 [(buf.validate.field).uint32.gt = 0];
+  // How much to Swap. Exactly one; further ways to size a Swap may be added
+  // to this choice.
+  oneof amount {
+    option (buf.validate.oneof).required = true;
+    // Positive source amount to spend, in 18-decimal units (0.5 is
+    // 500000000000000000). Only whole order steps of the market are traded;
+    // the rest stays on the account.
+    polyester.type.v1.U128 amount_e18 = 4;
+  }
+}
+
+// Side is a spot order side.
+enum Side {
+  // No side.
+  SIDE_UNSPECIFIED = 0;
+  // Buy the market's base asset with its quote asset.
+  BUY = 1;
+  // Sell the market's base asset for its quote asset.
+  SELL = 2;
+}
+
+// SwapQuoteLeg is one spot market a quote trades on.
+message SwapQuoteLeg {
+  // Stable numeric pair ID from GetSpotConfig.
+  uint32 symbol_id = 1;
+  // Side of the order on the market.
+  Side side = 2;
+  // Estimated average fill price, quote asset per base asset, as a decimal
+  // string; for display.
+  string average_price = 3;
+  // Distance of average_price from the best price of the book, in basis points,
+  // rounded up: the cost of the order's size against current depth.
+  uint32 price_impact_bps = 4;
+  // The account's spot taker fee rate on the market, in percent (for example
+  // "0.1" for 0.1%), as a decimal string.
+  string taker_fee_rate_percent = 5;
+  // Estimated fee, in 18-decimal units of the asset the leg receives
+  // (fee_asset_id).
+  polyester.type.v1.U128 fee_e18 = 6;
+  // Asset the fee is charged in: the asset the leg receives.
+  uint32 fee_asset_id = 7;
+}
+
+// SwapQuote is an estimate from current order-book depth. Nothing is
+// reserved: the prices are indicative, and only min_amount_out binds once the
+// Swap is created.
+message SwapQuote {
+  // The quoted terms.
+  SwapTerms terms = 1;
+  // Markets the Swap would trade on, in order. A direct Swap has one.
+  repeated SwapQuoteLeg legs = 2;
+  // Estimated destination amount after fees, in 18-decimal units.
+  polyester.type.v1.U128 expected_amount_out_e18 = 3;
+  // Minimum destination amount after fees at the requested slippage, in
+  // 18-decimal units. Create the Swap with this value (or another accepted
+  // minimum) as min_amount_out_e18: whatever is executed then nets at least the
+  // same rate, and what cannot be stays on the account.
+  polyester.type.v1.U128 min_amount_out_e18 = 4;
+  // When the quote was priced.
+  google.protobuf.Timestamp quoted_at = 5;
+  // Last moment the quote may be accepted, 30 seconds after quoted_at. Pass it
+  // as quote_expires_at when creating the Swap.
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+// SwapStatus is the state of a Swap.
+enum SwapStatus {
+  // No status.
+  STATUS_UNSPECIFIED = 0;
+  // The Swap is accepted and its orders are being placed, filled or settled.
+  EXECUTING = 1;
+  // The whole amount was traded and settled (a remainder smaller than one
+  // order step stays on the account, unspent).
+  COMPLETED = 2;
+  // Part of the amount was traded and settled; the rest stays on the account,
+  // unspent. reason says why.
+  PARTIALLY_COMPLETED = 3;
+  // Nothing was traded and the whole amount stays on the account, or, with
+  // reason MINIMUM_NOT_MET, a fill netted less than the accepted minimum rate;
+  // reason says why, and the amounts show what was traded.
+  FAILED = 4;
+  // An order's outcome is being established. Balances already reflect any
+  // settled fill; the Swap stays here until the outcome is confirmed.
+  RECONCILING = 5;
+}
+
+// SwapReason says why a Swap did not trade its whole amount.
+enum SwapReason {
+  // No reason.
+  REASON_UNSPECIFIED = 0;
+  // The Trading balance did not cover the amount when the order was placed.
+  INSUFFICIENT_BALANCE = 1;
+  // The order books could not fill the rest at a price that meets
+  // min_amount_out.
+  PRICE_PROTECTION = 2;
+  // The market was closed, halted, restricted or without liquidity.
+  MARKET_UNAVAILABLE = 3;
+  // The order was outside the market's size limits.
+  ORDER_SIZE_OUT_OF_RANGE = 4;
+  // The account's order rate limit was reached.
+  RATE_LIMITED = 5;
+  // The order was refused, for example by the sub-account's trading policy.
+  ORDER_REJECTED = 6;
+  // The execution window ended before the order could be placed.
+  EXPIRED = 7;
+  // A fill netted less than the accepted minimum rate. The Swap failed closed:
+  // the amounts show exactly what was traded and received.
+  MINIMUM_NOT_MET = 8;
+}
+
+// SwapOrderStatus is the state of a Swap's spot order.
+enum SwapOrderStatus {
+  // No order status.
+  ORDER_STATUS_UNSPECIFIED = 0;
+  // The order is being placed.
+  PLACING = 1;
+  // The order was accepted by the market.
+  PLACED = 2;
+  // The order was refused before it reached the market.
+  REFUSED = 3;
+  // The order was not placed before the execution window ended.
+  NOT_PLACED = 4;
+  // The order's outcome is being established.
+  UNCONFIRMED = 5;
+}
+
+// SwapOrder is one spot order of a Swap: an immediate-or-cancel limit order
+// at the Swap's protection price.
+message SwapOrder {
+  // Spot order ID, once the market accepted the order; 0 before.
+  fixed64 order_id = 1;
+  // Stable numeric pair ID from GetSpotConfig.
+  uint32 symbol_id = 2;
+  // Side of the order.
+  Side side = 3;
+  // Zero-based position of the order's market in the Swap's route.
+  uint32 leg = 4;
+  // State of the order.
+  SwapOrderStatus status = 5;
+  // Limit price in quote-asset price ticks (1e-9 quote units per base unit):
+  // the worst price at which the order nets the Swap's minimum rate after fees.
+  int64 limit_price_ticks = 6;
+  // Amount the order spent in settled fills, fees in the spent asset included,
+  // in 18-decimal units.
+  polyester.type.v1.U128 spent_e18 = 7;
+  // Amount the order received in settled fills after fees, in 18-decimal
+  // units.
+  polyester.type.v1.U128 received_e18 = 8;
+  // Fee charged on settled fills, in 18-decimal units of the asset the order
+  // receives.
+  polyester.type.v1.U128 fee_e18 = 9;
+}
+
+// Swap is one signed-in Swap and its outcome. Amounts count settled fills
+// only.
+message Swap {
+  // Swap ID.
+  fixed64 swap_id = 1;
+  // Idempotency key the Swap was created with.
+  string idempotency_key = 2;
+  // Sub-account public ID funding the Swap; 0 for the root account.
+  fixed64 subaccount_id = 3;
+  // Asset spent.
+  uint32 source_asset_id = 4;
+  // Asset received.
+  uint32 destination_asset_id = 5;
+  // Source amount requested, in 18-decimal units.
+  polyester.type.v1.U128 amount_e18 = 6;
+  // Minimum destination amount after fees for the whole amount, in 18-decimal
+  // units. Each traded part nets at least this rate.
+  polyester.type.v1.U128 min_amount_out_e18 = 7;
+  // Current status.
+  SwapStatus status = 8;
+  // Why the Swap did not trade its whole amount; set with PARTIALLY_COMPLETED
+  // and FAILED.
+  SwapReason reason = 9;
+  // True once the status is final: COMPLETED, PARTIALLY_COMPLETED or FAILED.
+  bool is_terminal = 10;
+  // Source amount spent in settled fills, in 18-decimal units.
+  polyester.type.v1.U128 executed_amount_e18 = 11;
+  // Source amount not spent, in 18-decimal units; it never left the
+  // account. Final once is_terminal is true.
+  polyester.type.v1.U128 unspent_amount_e18 = 12;
+  // Destination amount received after fees, in 18-decimal units.
+  polyester.type.v1.U128 received_amount_e18 = 13;
+  // Total fee charged, in 18-decimal units of the destination asset.
+  polyester.type.v1.U128 fee_e18 = 14;
+  // The Swap's spot orders, in placement order.
+  repeated SwapOrder orders = 15;
+  // When the Swap was created.
+  google.protobuf.Timestamp created_at = 16;
+}
+
+// QuoteSwapRequest asks for a quote of terms.
+message QuoteSwapRequest {
+  // Terms to quote.
+  SwapTerms terms = 1 [(buf.validate.field).required = true];
+  // Accepted shortfall from the expected output, in basis points (1 bp =
+  // 0.01%), from 1 to 1000; sets the quote's min_amount_out.
+  uint32 max_slippage_bps = 2 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 1000
+  }];
+}
+
+// QuoteSwapResponse is the quote.
+message QuoteSwapResponse {
+  // The quote.
+  SwapQuote quote = 1;
+}
+
+// CreateSwapRequest creates and executes a Swap.
+message CreateSwapRequest {
+  // Client-chosen key, unique per caller, that makes creation idempotent: the
+  // same key and request return the same Swap; another request with the same
+  // key is IDEMPOTENCY_CONFLICT.
+  string idempotency_key = 1 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  // Terms to execute.
+  SwapTerms terms = 2 [(buf.validate.field).required = true];
+  // Positive minimum destination amount after fees for the whole amount, in
+  // 18-decimal units, usually the quote's min_amount_out_e18. Execution never
+  // nets a lower rate; what cannot be traded at it stays on the account.
+  polyester.type.v1.U128 min_amount_out_e18 = 3 [(buf.validate.field).required = true];
+  // The accepted quote's expires_at. The Swap is refused with QUOTE_EXPIRED
+  // once it has passed.
+  google.protobuf.Timestamp quote_expires_at = 4 [(buf.validate.field).required = true];
+}
+
+// CreateSwapResponse is the created (or existing) Swap.
+message CreateSwapResponse {
+  // The Swap.
+  Swap swap = 1;
+}
+
+// GetSwapRequest selects one Swap of the caller.
+message GetSwapRequest {
+  // Exactly one selector.
+  oneof selector {
+    option (buf.validate.oneof).required = true;
+    // Swap ID.
+    fixed64 swap_id = 1 [(buf.validate.field).fixed64.gt = 0];
+    // Idempotency key the Swap was created with.
+    string idempotency_key = 2 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  }
+}
+
+// GetSwapResponse is the selected Swap.
+message GetSwapResponse {
+  // The Swap.
+  Swap swap = 1;
+}
+
+// ErrorCode identifies a Swap API error.
+enum ErrorCode {
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // No spot market trades the source asset directly against the destination
+  // asset.
+  ROUTE_UNSUPPORTED = 1;
+  // The amount is outside the market's current limits. The error carries the
+  // limits (min_amount_e18, max_amount_e18) when known.
+  AMOUNT_OUT_OF_RANGE = 2;
+  // No price is currently available for the route; retry later.
+  QUOTE_UNAVAILABLE = 3;
+  // Current order-book depth cannot deliver min_amount_out_e18 (or the
+  // requested slippage): request a new quote.
+  PROTECTION_UNACHIEVABLE = 4;
+  // quote_expires_at has passed: request a new quote.
+  QUOTE_EXPIRED = 5;
+  // The idempotency key was already used with a different request. The error
+  // carries the original swap_id.
+  IDEMPOTENCY_CONFLICT = 6;
+  // No Swap of the caller matches the selector.
+  SWAP_NOT_FOUND = 7;
+  // subaccount_id is not a valid sub-account ID.
+  INVALID_SUBACCOUNT_ID = 8;
+  // The sub-account does not exist.
+  SUBACCOUNT_NOT_FOUND = 9;
+  // The sub-account is not active.
+  SUBACCOUNT_INACTIVE = 10;
+  // The caller may not Swap on the account: the role, the API key's policy or
+  // the sub-account's policy does not grant SWAP, or a root-scoped API key
+  // selected a sub-account.
+  SWAP_NOT_PERMITTED = 11;
+  // A required service is temporarily unavailable; retry the same request.
+  SERVICE_UNAVAILABLE = 12;
+  // The market trades the two assets but cannot execute a Swap in this
+  // direction: a buy there would pay its fee in the asset it spends.
+  DIRECTION_UNSUPPORTED = 13;
+}
+
+// ErrorDetail is attached to Swap errors as an error detail of type
+// swap.v1.ErrorDetail.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+  // IDEMPOTENCY_CONFLICT only: the Swap bound to the idempotency key.
+  fixed64 swap_id = 2;
+  // AMOUNT_OUT_OF_RANGE only: the smallest amount that currently quotes, in
+  // 18-decimal units of the source asset. Guidance, not a guarantee.
+  polyester.type.v1.U128 min_amount_e18 = 3;
+  // AMOUNT_OUT_OF_RANGE only: the largest amount current depth absorbs, in
+  // 18-decimal units of the source asset.
+  polyester.type.v1.U128 max_amount_e18 = 4;
+}
+
+// SwapService converts one asset of an account's Trading balance into another
+// through Polyester's spot order books. A Swap executes as immediate-or-cancel
+// spot orders on the account, at the account's spot taker fee and with no
+// other fee, protected by the end-to-end min_amount_out the caller accepts:
+// any part that trades nets at least that rate, and anything that cannot stays
+// on the account. Quotes are estimates and reserve nothing.
+//
+// Requests are authenticated with a session token or a signed API key. The
+// caller needs the SWAP permission on the account: the trading roles grant it
+// on sub-accounts, and API keys and sub-account policies must include the SWAP
+// action. A Swap's orders also remain subject to the sub-account's spot
+// trading policy.
+//
+// Follow a Swap with GetSwap until is_terminal is true; a direct Swap usually
+// completes within seconds.
+service SwapService {
+  // QuoteSwap prices terms against current order-book depth and the account's
+  // taker fee. Nothing is reserved.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE or
+  //   INVALID_SUBACCOUNT_ID.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, DIRECTION_UNSUPPORTED,
+  //   PROTECTION_UNACHIEVABLE or SUBACCOUNT_INACTIVE.
+  // - NOT_FOUND: SUBACCOUNT_NOT_FOUND.
+  // - PERMISSION_DENIED: SWAP_NOT_PERMITTED.
+  // - UNAVAILABLE: QUOTE_UNAVAILABLE or SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc QuoteSwap(QuoteSwapRequest) returns (QuoteSwapResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Quote Swap"
+      description: "Price a Swap of the account's Trading balance without reserving anything."
+      tags: "Swap"
+    };
+  }
+
+  // CreateSwap creates the Swap for idempotency_key and executes it at once.
+  // It re-prices the terms against current depth first: the Swap is created
+  // only while the quote is unexpired and min_amount_out_e18 is achievable.
+  // It is idempotent per caller and key: a repeated or concurrent request with
+  // the same body returns the same Swap, so every unknown outcome is resolved
+  // by repeating the request unchanged.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE or
+  //   INVALID_SUBACCOUNT_ID.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, DIRECTION_UNSUPPORTED,
+  //   PROTECTION_UNACHIEVABLE, QUOTE_EXPIRED or SUBACCOUNT_INACTIVE; nothing is
+  //   created.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original Swap stands.
+  // - NOT_FOUND: SUBACCOUNT_NOT_FOUND.
+  // - PERMISSION_DENIED: SWAP_NOT_PERMITTED.
+  // - UNAVAILABLE, DEADLINE_EXCEEDED: QUOTE_UNAVAILABLE, SERVICE_UNAVAILABLE
+  //   or an unknown outcome; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CreateSwap(CreateSwapRequest) returns (CreateSwapResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Swap"
+      description: "Create and execute a Swap of the account's Trading balance, or return the Swap of an idempotency key."
+      tags: "Swap"
+    };
+  }
+
+  // GetSwap returns one of the caller's Swaps by swap_id or idempotency key.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed selector.
+  // - NOT_FOUND: SWAP_NOT_FOUND.
+  // - PERMISSION_DENIED: SWAP_NOT_PERMITTED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetSwap(GetSwapRequest) returns (GetSwapResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Swap"
+      description: "Get one Swap by identifier or by idempotency key."
+      tags: "Swap"
+    };
+  }
+}
