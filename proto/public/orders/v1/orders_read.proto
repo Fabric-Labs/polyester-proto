@@ -166,7 +166,9 @@ message AttachedRisk {
   AttachedRiskStopLoss stop_loss = 2;
   // Trailing-stop leg, if configured or if state exists.
   AttachedRiskTrailingStop trailing_stop = 3;
-  // True when the take-profit and stop leg are linked as one-cancels-the-other.
+  // True while both the take-profit and a stop leg (stop-loss or trailing
+  // stop) are present and linked as one-cancels-the-other. False once either
+  // leg is removed; a leg canceled because the other fired stays present.
   bool oco = 4;
 }
 
@@ -240,7 +242,10 @@ message Order {
   // Empty for non-terminal orders.
   string terminal_reason = 19;
   // Attached risk controls + runtime state on the parent order.
-  // Empty when no attached risk exists.
+  // Empty when no attached risk exists. Order reads include it only when the
+  // request asks for it (include_attached_risk, include_attached_risk_state):
+  // an omission on request, never a removal. The private WebSocket always
+  // carries it in full, as a read asking for both does.
   AttachedRisk attached_risk = 21;
   // Runtime lineage metadata (why the order exists and what generated it).
   OrderOrigin origin = 22;
@@ -252,10 +257,13 @@ message Order {
   int64 market_max_slippage_ticks = 24;
   // Optional MARKET max slippage in basis points (1 bp = 0.01%).
   int32 market_max_slippage_bps = 25;
-  // Per-order state version. Starts at 1 and increases for every published
-  // state change. Use this field to reconcile API and realtime updates.
+  // Per-order state version: 0 while the order is accepted but not yet on
+  // the book (status PENDING), then 1 from its first book state and higher
+  // for every later published state change. A higher version is always
+  // newer, and two copies of an order with the same version are identical,
+  // so use this field to reconcile API and realtime updates.
   uint32 version = 26 [(buf.validate.field).uint32 = {
-    gte: 1
+    gte: 0
     lte: 2147483647
   }];
   // Batch-replace identity that admitted this order. Zero for other origins.
