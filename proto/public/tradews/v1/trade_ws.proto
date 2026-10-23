@@ -26,6 +26,20 @@ message ClientFrame {
     orders.v1.ModifyOrderRequest modify_order = 13;
     // Cancel-all command using the public Orders API request contract.
     orders.v1.CancelAllOrdersRequest cancel_all_orders = 14;
+    // Batch create command using the public Orders API request contract: up
+    // to 20 orders, each admitted or rejected on its own. request_id is the
+    // same account-scoped idempotency key as the Orders API's: resending the
+    // same request_id and items, over this WebSocket or the Orders API,
+    // replays the original per-item results instead of creating orders again.
+    orders.v1.BatchCreateOrdersRequest batch_create_orders = 15;
+    // Batch replace command using the public Orders API request contract: up
+    // to 50 replacements of orders on one trading pair, under the same
+    // request_id idempotency as the Orders API.
+    orders.v1.BatchReplaceOrdersRequest batch_replace_orders = 16;
+    // Batch cancel command using the public Orders API request contract: up
+    // to 50 cancellations, each accepted or rejected on its own, under the
+    // same request_id idempotency as the Orders API.
+    orders.v1.BatchCancelOrdersRequest batch_cancel_orders = 17;
   }
 }
 
@@ -45,9 +59,14 @@ message ServerFrame {
   oneof payload {
     // Liveness response for PingRequest.
     PongResponse pong = 10;
-    // Successful command acknowledgement.
+    // Successful command acknowledgement. A batch acknowledgement carries
+    // each item's own result, accepted or rejected.
     AckResponse ack = 11;
-    // Command-level reject with a stable machine-readable code.
+    // Command-level reject with a stable machine-readable code. A batch
+    // rejected as busy (ENGINE_BUSY or UNAVAILABLE), or one whose
+    // acknowledgement never arrived, may have taken effect for some items:
+    // resend it with the same request_id and items to resolve or replay it,
+    // and do not assume it placed or canceled no orders.
     CommandReject reject = 12;
     // Server overload response when the session cannot admit more work.
     OverloadResponse overload = 13;
@@ -73,6 +92,15 @@ message AckResponse {
     orders.v1.ModifyOrderResponse modify_order = 3;
     // Accepted cancel-all response.
     orders.v1.CancelAllOrdersResponse cancel_all_orders = 4;
+    // Batch create response with one result per requested order, in request
+    // order. A rejected item carries its typed error; the others still count.
+    orders.v1.BatchCreateOrdersResponse batch_create_orders = 5;
+    // Batch replace admission receipt with one result per requested
+    // replacement, in request order.
+    orders.v1.BatchReplaceOrdersResponse batch_replace_orders = 6;
+    // Batch cancel response with one result per requested cancellation, in
+    // request order.
+    orders.v1.BatchCancelOrdersResponse batch_cancel_orders = 7;
   }
 }
 

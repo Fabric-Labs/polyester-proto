@@ -1,0 +1,504 @@
+syntax = "proto3";
+
+package privatews.v1;
+
+import "buf/validate/validate.proto";
+import "orders/v1/orders.proto";
+import "orders/v1/orders_read.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/privatews/v1;privatewsv1";
+
+// ClientMessage is one frame a client sends on the private WebSocket,
+// `GET /v1/ws/private`, which streams the client's own orders.
+//
+// Encoding: the client offers one WebSocket subprotocol.
+// `polyester.v1.proto` (the default when none is offered) sends one binary
+// protobuf message per frame. `polyester.v1.json` sends one text frame of
+// the message's canonical JSON form, with lowerCamelCase field names and
+// 64-bit integers as strings. A frame of the other encoding closes the
+// connection with code 4400.
+//
+// Authentication: the first frame is an Auth with the connect token from
+// `GET /v1/rt/token`, within 5 seconds. Each account subscription carries a
+// subscribe token from
+// `GET /v1/rt/subscribe?channel=private:spot:orders:<account>`, where access
+// to the account is checked. `<account>` is the account's public ID written
+// in base58: its integer value in the Bitcoin alphabet
+// (`123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz`), most
+// significant digit first, with no padding; the same string the REST API
+// shows for the account.
+message ClientMessage {
+  // Exactly one operation.
+  oneof op {
+    // Authenticates the connection, or refreshes its token.
+    Auth auth = 1;
+    // Subscribes one account's orders.
+    Subscribe subscribe = 2;
+    // Renews a subscription's authorization before its token expires.
+    SubscribeRefresh subscribe_refresh = 3;
+    // Ends a subscription.
+    Unsubscribe unsubscribe = 4;
+    // Asks a subscription to confirm it reflects every acknowledgement given
+    // before the request.
+    Sync sync = 5;
+    // Liveness request, answered with Pong.
+    Ping ping = 6;
+  }
+}
+
+// Auth carries a realtime connect token.
+message Auth {
+  // The connect token from `GET /v1/rt/token`, valid for 5 minutes. Send a
+  // new one for the same user before it expires to keep the connection open.
+  string token = 1;
+}
+
+// Channel names what a subscription streams.
+enum Channel {
+  // Not set; refused.
+  CHANNEL_UNSPECIFIED = 0;
+  // The account's orders.
+  ORDERS = 1;
+}
+
+// Subscribe subscribes one account's orders.
+message Subscribe {
+  // Client request ID, echoed in Subscribed or RequestError.
+  string id = 1;
+  // What to stream; required.
+  Channel channel = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // The sub-account's public ID, or the root account's. The subscribe token
+  // must be for exactly this account's channel,
+  // `private:spot:orders:<account>`, with the ID in base58 as ClientMessage
+  // describes.
+  fixed64 account = 3;
+  // The subscribe token from
+  // `GET /v1/rt/subscribe?channel=private:spot:orders:<account>`, valid for
+  // 1 minute.
+  string token = 4;
+  // Optional resume position: the last cursor the client applied, from
+  // SnapshotEnd, Unit or Covered. Empty for a fresh snapshot.
+  string cursor = 5;
+}
+
+// SubscribeRefresh renews a subscription's authorization.
+message SubscribeRefresh {
+  // Client request ID, echoed in SubscribeRefreshed or RequestError.
+  string id = 1;
+  // The subscription.
+  string sub = 2;
+  // A fresh subscribe token for the same account.
+  string token = 3;
+}
+
+// Unsubscribe ends a subscription.
+message Unsubscribe {
+  // Client request ID, echoed in Unsubscribed or RequestError.
+  string id = 1;
+  // The subscription.
+  string sub = 2;
+}
+
+// Sync asks a subscription to catch up with every acknowledgement given
+// before the request.
+message Sync {
+  // Client request ID, echoed in Synced or RequestError.
+  string id = 1;
+  // The subscription.
+  string sub = 2;
+}
+
+// Ping is a liveness request.
+message Ping {
+  // Client request ID, echoed in Pong.
+  string id = 1;
+}
+
+// ServerMessage is one frame the server sends.
+//
+// Sequence: each frame of a subscription's stream (SnapshotBegin,
+// SnapshotPage, SnapshotEnd, Unit, Covered, Ready, Synced, ResyncRequired,
+// Unavailable, Available) carries the subscription's `sub` and a `seq` that
+// starts at 1 and increases by exactly 1 per such frame. On a gap or a
+// repeat, drop the subscription and subscribe again. Subscribed,
+// SubscribeRefreshed, Unsubscribed, SubscribeExpiring, and a RequestError
+// about a subscription carry its `sub` with `seq` 0. Authenticated,
+// TokenExpiring, Heartbeat, Pong, and a RequestError about no subscription
+// carry neither.
+//
+// Compatibility: skip a frame kind you do not know, but still count its
+// `seq`. JSON clients ignore unknown fields and enum names.
+//
+// Close codes: 1001 the server is draining (reconnect, then resubscribe
+// with cursors); 4400 a malformed frame, an unknown operation, or a frame
+// of the other encoding; 4401 the connect token expired without a refresh;
+// 4403 a bad connect token, another user's, or none within 5 seconds; 4408
+// the client did not read its frames fast enough (reconnect, then
+// resubscribe with cursors). Reconnects should back off from 0.5 seconds,
+// doubling to 10 seconds, with jitter.
+message ServerMessage {
+  // The subscription the frame concerns; empty for a connection-wide frame.
+  string sub = 1;
+  // The frame's position in the subscription's stream; 0 for a frame
+  // outside it.
+  uint64 seq = 2;
+  // Exactly one frame.
+  oneof frame {
+    // An Auth was accepted.
+    Authenticated authenticated = 10;
+    // The connect token expires in 30 seconds.
+    TokenExpiring token_expiring = 11;
+    // A Subscribe was accepted.
+    Subscribed subscribed = 12;
+    // A SubscribeRefresh was accepted.
+    SubscribeRefreshed subscribe_refreshed = 13;
+    // A subscription ended.
+    Unsubscribed unsubscribed = 14;
+    // A subscription's token expires in 15 seconds.
+    SubscribeExpiring subscribe_expiring = 15;
+    // A snapshot begins.
+    SnapshotBegin snapshot_begin = 16;
+    // A page of a snapshot.
+    SnapshotPage snapshot_page = 17;
+    // A snapshot ends; install it.
+    SnapshotEnd snapshot_end = 18;
+    // One change to the account.
+    Unit unit = 19;
+    // The account moved on with no change.
+    Covered covered = 20;
+    // The subscription reflects every acknowledgement given before it
+    // subscribed.
+    Ready ready = 21;
+    // A Sync was satisfied.
+    Synced synced = 22;
+    // The subscription's state is replaced by the snapshot that follows.
+    ResyncRequired resync_required = 23;
+    // The account's live view is behind for now.
+    Unavailable unavailable = 24;
+    // The account's live view caught up again after Unavailable.
+    Available available = 25;
+    // A request failed.
+    RequestError error = 26;
+    // Liveness signal, sent every second.
+    Heartbeat heartbeat = 27;
+    // Answer to Ping.
+    Pong pong = 28;
+  }
+}
+
+// Authenticated confirms an Auth.
+message Authenticated {
+  // When the connect token expires, seconds since epoch (UTC).
+  int64 expires_ts_sec = 1;
+}
+
+// TokenExpiring warns that the connect token expires soon. Without a new
+// Auth by then, the connection closes with code 4401.
+message TokenExpiring {
+  // When the connect token expires, seconds since epoch (UTC).
+  int64 expires_ts_sec = 1;
+}
+
+// Subscribed confirms a Subscribe; the frame's `sub` names the new
+// subscription. A snapshot, or the units after the resume cursor, follow.
+message Subscribed {
+  // The request ID.
+  string id = 1;
+  // The account's public ID.
+  fixed64 account = 2;
+  // When the subscribe token expires, seconds since epoch (UTC). Send a
+  // SubscribeRefresh before then.
+  int64 expires_ts_sec = 3;
+}
+
+// SubscribeRefreshed confirms a SubscribeRefresh; the frame's `sub` names
+// the subscription. A refused refresh is a RequestError FORBIDDEN with the
+// refresh's `id`, and the subscription keeps its current expiry.
+message SubscribeRefreshed {
+  // The request ID.
+  string id = 1;
+  // When the new subscribe token expires, seconds since epoch (UTC).
+  int64 expires_ts_sec = 2;
+}
+
+// Unsubscribed says a subscription ended. The connection stays open.
+message Unsubscribed {
+  // Why a subscription ended.
+  enum Reason {
+    // Not set.
+    REASON_UNSPECIFIED = 0;
+    // The client asked with Unsubscribe.
+    REQUESTED = 1;
+    // Its token expired without a SubscribeRefresh. Subscribe again with a
+    // fresh token.
+    TOKEN_EXPIRED = 2;
+  }
+  // The request ID, when the client asked.
+  string id = 1;
+  // Why it ended.
+  Reason reason = 2;
+}
+
+// SubscribeExpiring warns that a subscription's token expires soon.
+message SubscribeExpiring {
+  // When its token expires, seconds since epoch (UTC).
+  int64 expires_ts_sec = 1;
+}
+
+// SnapshotBegin starts a snapshot. Stage its pages and install them
+// atomically at SnapshotEnd.
+message SnapshotBegin {
+  // The account history's generation. A new value means the account's
+  // history restarted.
+  uint64 epoch = 1;
+}
+
+// SnapshotPage carries up to 256 of a snapshot's orders, ascending by
+// order ID across pages.
+message SnapshotPage {
+  // Every order the live view holds for the account: open orders, orders
+  // accepted but not yet on the book, and recently ended orders still
+  // retained. Each is complete, with its attached risk in full.
+  repeated orders.v1.Order orders = 1;
+}
+
+// SnapshotEnd ends a snapshot.
+message SnapshotEnd {
+  // Opaque resume cursor at the snapshot's position.
+  string cursor = 1;
+  // The number of orders in the snapshot's pages.
+  uint32 count = 2;
+  // A checksum of the snapshot, for diagnostics.
+  fixed64 digest = 3;
+}
+
+// Unit is one change to the account, applied whole.
+message Unit {
+  // The cursor the client held before this unit.
+  string prev_cursor = 1;
+  // The resume cursor after this unit.
+  string next_cursor = 2;
+  // Each changed order, complete, as it now is, with its attached risk in
+  // full (every leg's policy and state). A higher `version` is newer, and an
+  // equal `version` is the identical order, also across the Orders API's
+  // reads; version 0 is an order accepted but not yet on the book. The reads
+  // omit attached risk unless asked for it: an omission on request, never a
+  // removal.
+  repeated orders.v1.Order orders = 3;
+  // Public IDs of orders that left the live view: ended orders now kept in
+  // history, or orders that never got past admission. Not a cancellation.
+  repeated fixed64 removed_order_ids = 4;
+  // What caused the change, in order. Never coalesced.
+  repeated UnitEvent events = 5;
+}
+
+// Covered says the account moved on with no change.
+message Covered {
+  // The resume cursor at the new position.
+  string cursor = 1;
+}
+
+// Ready says the subscription reflects every acknowledgement given before
+// it subscribed, including every order read made before it.
+message Ready {}
+
+// Synced answers a Sync.
+message Synced {
+  // The request ID.
+  string id = 1;
+}
+
+// ResyncRequired replaces the subscription's state with the snapshot that
+// follows it.
+message ResyncRequired {
+  // Why the state is replaced.
+  enum Reason {
+    // Not set.
+    REASON_UNSPECIFIED = 0;
+    // The resume cursor is not from this connection's server or history.
+    CURSOR_UNKNOWN = 1;
+    // The resume cursor is older than the server's replay window (about the
+    // last 1,024 changes or 30 seconds).
+    CURSOR_EXPIRED = 2;
+    // The account's history restarted.
+    HISTORY_RESET = 3;
+  }
+  // Why. The events between the old state and the snapshot are not
+  // delivered: amend, cancel and rejection outcomes in between are lost, and
+  // fills stay available from trade history.
+  Reason reason = 1;
+}
+
+// UnavailableReason names why an account's live view is behind.
+enum UnavailableReason {
+  // Not set.
+  UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  // The view is catching up with recent activity.
+  VIEW_BEHIND = 1;
+  // The account's view is still loading.
+  NOT_READY = 2;
+  // The service is failing over; the view resumes after it.
+  FAILOVER = 3;
+  // The read fence could not be established for now.
+  BOUNDARY_UNAVAILABLE = 4;
+}
+
+// Unavailable says the account's live view is behind for now. Show it as
+// stale until Available. The subscription stays and always recovers by
+// itself; the client does nothing.
+// Ready and Synced may still arrive meanwhile: they describe the position
+// already delivered, which is unchanged.
+message Unavailable {
+  // Why.
+  UnavailableReason reason = 1;
+}
+
+// Available says the account's live view caught up after Unavailable.
+message Available {}
+
+// RequestError answers a failed request. It does not close the connection.
+message RequestError {
+  // A request failure.
+  enum Code {
+    // Not set.
+    CODE_UNSPECIFIED = 0;
+    // The subscribe token does not authorize this account for this
+    // connection.
+    FORBIDDEN = 1;
+    // A field is missing or malformed.
+    INVALID_REQUEST = 2;
+    // No such subscription.
+    SUBSCRIPTION_UNKNOWN = 3;
+    // The resume cursor cannot be read.
+    CURSOR_INVALID = 4;
+    // The connection already holds 64 subscriptions.
+    TOO_MANY_SUBSCRIPTIONS = 5;
+    // The account's live view did not catch up in time (Sync: 10 seconds).
+    BEHIND = 6;
+  }
+  // The request ID, when the error answers a request.
+  string id = 1;
+  // The failure.
+  Code code = 2;
+  // A human-readable explanation.
+  string message = 3;
+}
+
+// Heartbeat is sent every second. Treat the connection as stale after 3
+// seconds without one.
+message Heartbeat {
+  // Server time, nanoseconds since epoch (UTC).
+  int64 server_ts_ns = 1;
+}
+
+// Pong answers a Ping.
+message Pong {
+  // The request ID.
+  string id = 1;
+}
+
+// UnitEvent is what caused a change.
+message UnitEvent {
+  // Exactly one kind.
+  oneof kind {
+    // Something happened to an order.
+    OrderEvent order = 1;
+    // A command was answered without changing any order.
+    CommandOutcome outcome = 2;
+  }
+}
+
+// OrderEvent is something that happened to an order.
+message OrderEvent {
+  // What happened.
+  enum Kind {
+    // Not set.
+    KIND_UNSPECIFIED = 0;
+    // The order, or an amend of it, was accepted.
+    ACCEPTED = 1;
+    // The order filled, partly or fully.
+    FILLED = 2;
+    // The order ended without filling its remainder.
+    CANCELED = 3;
+    // The order was refused.
+    REJECTED = 4;
+    // A replace ended the order, or created it as the successor.
+    REPLACED = 5;
+    // One of the order's attached take-profit, stop-loss or trailing-stop
+    // legs changed.
+    ATTACHED_RISK = 6;
+  }
+  // The order's public ID.
+  fixed64 order_id = 1;
+  // The order's version after the event.
+  uint32 version = 2;
+  // What happened.
+  Kind kind = 3;
+  // For CANCELED, REJECTED and REPLACED: the reason code, as the order's
+  // terminal_reason_code; 0 otherwise.
+  uint32 reason_code = 4;
+  // For REPLACED: the successor's public ID; 0 otherwise.
+  fixed64 replacement_order_id = 5;
+  // For FILLED: the fill.
+  Fill fill = 6;
+}
+
+// Fill is one fill of an order.
+message Fill {
+  // Whether the order provided or took liquidity.
+  enum Role {
+    // Not set.
+    ROLE_UNSPECIFIED = 0;
+    // The order was resting.
+    MAKER = 1;
+    // The order took resting liquidity.
+    TAKER = 2;
+  }
+  // The match's identifier, equal to the trade's match_id in the Orders
+  // API's user trades.
+  uint64 match_id = 1;
+  // The fill's ordinal among this order's fills, from 1.
+  uint32 ordinal = 2;
+  // Maker or taker.
+  Role role = 3;
+  // Filled quantity, scaled by the pair's base_quantity_scale from
+  // GetSpotConfig for the order's symbol_id.
+  int64 qty_scaled = 4;
+  // Fill price, in quote units scaled by 1e9.
+  int64 price_ticks = 5;
+}
+
+// CommandOutcome answers a command that changed no order.
+message CommandOutcome {
+  // The answer.
+  enum Kind {
+    // Not set.
+    KIND_UNSPECIFIED = 0;
+    // An amend was refused; the order is unchanged.
+    AMEND_REJECTED = 1;
+    // A cancel was refused.
+    CANCEL_REJECTED = 2;
+    // A replace's successor was refused; the original order is unchanged.
+    REPLACE_REJECTED = 3;
+    // An order was refused before it existed, such as a duplicate.
+    REJECTED = 4;
+    // A cancel by criteria completed; its cancels came earlier as order
+    // events. It names no request: with several cancels by criteria in
+    // flight, a client cannot tell which one completed.
+    CANCEL_ALL_DONE = 5;
+  }
+  // The answer.
+  Kind kind = 1;
+  // The command's order public ID; 0 for a cancel by criteria.
+  fixed64 order_id = 2;
+  // A replace's successor public ID; 0 otherwise.
+  fixed64 new_order_id = 3;
+  // The command's client order ID; empty when none.
+  string client_order_id = 4;
+  // The refusal, as the Orders API names the same refusal in its errors;
+  // ERROR_CODE_UNSPECIFIED for CANCEL_ALL_DONE.
+  orders.v1.ErrorCode reason = 5;
+}
