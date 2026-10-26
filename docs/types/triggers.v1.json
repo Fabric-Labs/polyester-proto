@@ -78,7 +78,7 @@
     {
       "name": "triggers.v1.ConditionalChildExecution",
       "kind": "message",
-      "doc": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. BUY market children are not supported in spot.",
+      "doc": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. Either side may use any child.",
       "message": {
         "oneofs": [
           {
@@ -133,13 +133,6 @@
       "kind": "message",
       "doc": "ConditionalTrigger configures a standalone stop-loss or take-profit.",
       "message": {
-        "cel": [
-          {
-            "id": "conditional_trigger.buy_requires_limit",
-            "message": "BUY stop-loss and take-profit triggers require a limit child",
-            "expression": "this.side != 1 || !has(this.child.market_ioc)"
-          }
-        ],
         "fields": [
           {
             "name": "trigger_price_ticks",
@@ -766,7 +759,7 @@
             "name": "limit_price_ticks",
             "jsonName": "limitPriceTicks",
             "number": 11,
-            "doc": "Updated limit price in quote units scaled by 1e9 for LIMIT child orders.",
+            "doc": "Not modifiable: a trigger's child limit price is fixed at create. Setting\n this field rejects the whole request with\n ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE (InvalidArgument, HTTP 400)\n and leaves the trigger unchanged; cancel the trigger and create a new one\n to change the child limit price.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -835,7 +828,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 16,
-            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
+            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A buy stop-loss or take-profit with a market\n child accepts 1 to 10000, as at creation. A trailing stop on either\n side, and a sell stop-loss or take-profit, accept 1 to 9999: 10000 is\n rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would\n leave a sell no positive price, and a trailing stop takes none on\n either side.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -1192,7 +1185,7 @@
     {
       "name": "triggers.v1.TrailingStopTrigger",
       "kind": "message",
-      "doc": "TrailingStopTrigger configures a spot trailing-stop strategy.\n Standalone triggers currently support SELL market-IOC children. Attached\n trailing stops may use either side, opposite their parent order.",
+      "doc": "TrailingStopTrigger configures a spot trailing-stop strategy. A trailing\n stop that sells tracks the highest price since it activated and fires a\n market IOC child when the price falls the trailing distance from it. A\n trailing stop that buys tracks the lowest price since it activated and\n fires when the price rises the trailing distance from it; its child is an\n IOC limit order at its maximum price, or at its slippage cap above the fire\n price when that is lower, so it never buys above the maximum price. Without\n an activation price, tracking starts when the trigger is placed. Attached\n trailing stops may use either side, opposite their parent order.",
       "message": {
         "oneofs": [
           {
@@ -1276,7 +1269,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 5,
-            "doc": "Maximum slippage in basis points (1 bp = 0.01%). A trailing stop that\n sells accepts values below 10000; a 100% cap would leave it no positive\n price to sell at.",
+            "doc": "Maximum slippage in basis points (1 bp = 0.01%). Values below 10000\n are accepted; a 100% cap would leave a trailing stop that sells no\n positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -1300,6 +1293,20 @@
                 "notIn": [
                   0
                 ]
+              }
+            }
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 7,
+            "doc": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the last trade price when no activation price is set. A rise that\n fires above it still fires, and the child fills only at or below it. Must\n be unset when `side` is SELL. Fixed at create.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
               }
             }
           }
@@ -1533,7 +1540,7 @@
             "name": "completed_at",
             "jsonName": "completedAt",
             "number": 64,
-            "doc": "Timestamp when the trigger reached a terminal successful state.",
+            "doc": "Instant the trigger became terminal, matching its terminal event timestamp.\n Set for completed, canceled (for any reason), or failed triggers,\n including terminal expiry or rejection. Absent while the trigger is live.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -1555,7 +1562,7 @@
           {
             "name": "TRIGGER_CANCEL_REASON_OCO",
             "number": 2,
-            "doc": "A linked one-cancels-the-other trigger fired."
+            "doc": "An attached leg ended because its parent order is terminal and another of\n the parent's legs made the last exit, leaving no position to protect."
           },
           {
             "name": "TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL",
@@ -2006,7 +2013,7 @@
           {
             "name": "TRIGGER_FAILURE_REASON_LIMIT_PRICE_INVALID",
             "number": 104,
-            "doc": "The trigger's limit price was not valid."
+            "doc": "The trigger's limit price was not valid, including a buy trailing stop's\n maximum price below the last trade price when it was placed without an\n activation price."
           },
           {
             "name": "TRIGGER_FAILURE_REASON_TWAP_INTERVAL_INVALID",
@@ -2189,6 +2196,11 @@
             "doc": "The market had no room for another TWAP order."
           },
           {
+            "name": "TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT",
+            "number": 235,
+            "doc": "The trigger's child order did not match the order the trigger requested,\n so the trigger failed and the child order was canceled."
+          },
+          {
             "name": "TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE",
             "number": 238,
             "doc": "The market's order limits weren't set yet when the trigger fired."
@@ -2310,7 +2322,7 @@
             "name": "trailing_stop",
             "jsonName": "trailingStop",
             "number": 12,
-            "doc": "SELL market-IOC trailing stop.",
+            "doc": "Trailing stop: a market-IOC sell or a maximum-price IOC buy.",
             "protoRef": "triggers.v1.TrailingStopTrigger",
             "oneof": "strategy"
           },
@@ -2413,9 +2425,50 @@
     {
       "name": "triggers.v1.TriggerMarketIoc",
       "kind": "message",
-      "doc": "TriggerMarketIoc configures an immediate market child.",
+      "doc": "TriggerMarketIoc configures an immediate market child. When the trigger\n fires, the child is protected like a market order: it fills only within its\n slippage cap of the price that fired it. A market child with a cap never\n fills worse than the cap; on a gap past it, it may fill partly or not at all.\n A buy reserves its funds when it is created, at the trigger price raised by\n the cap, and its child never buys above that price.",
       "message": {
-        "fields": []
+        "oneofs": [
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 1,
+            "doc": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 2,
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%). A sell child\n accepts values below 10000; a 100% cap would leave it no positive price\n to sell at.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "max_slippage"
+          }
+        ]
       }
     },
     {
@@ -2447,7 +2500,7 @@
           {
             "name": "STATUS_CANCELED",
             "number": 5,
-            "doc": "Trigger was canceled. The cancel reason states why, for example a user\n request, a linked one-cancels-the-other trigger, self-trade prevention, or,\n for a ladder, the cancellation of its child orders."
+            "doc": "Trigger was canceled. The cancel reason states why, for example a user\n request, another attached leg's exit closing its parent's position,\n self-trade prevention, or, for a ladder, the cancellation of its child\n orders."
           },
           {
             "name": "STATUS_FAILED",

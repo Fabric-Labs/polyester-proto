@@ -245,12 +245,46 @@
       "polyester.rest.MarketDataService_GetTrades.Response": {
         "additionalProperties": false,
         "properties": {
+          "completeThroughTradeId": {
+            "description": "With afterTradeId only: every trade with matchId at or below it exists and is returned by this endpoint.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "epochEnds": {
+            "description": "Set only with after_trade_id. Every epoch whose last trade (or, for an epoch without trades, its start) lies between after_trade_id and next_after_trade_id, both inclusive, ascending by epoch. A page that ends exactly on an epoch's last trade is followed by a page that still reports that epoch's end.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "epoch": {
+                  "description": "The epoch.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "lastTradeId": {
+                  "description": "match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch ended without trades.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "epoch",
+                "lastTradeId"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextAfterTradeId": {
+            "description": "With afterTradeId only: the afterTradeId of the next call. It never moves backwards; equal to the request's afterTradeId when nothing newer is available yet.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
           "nextPageToken": {
-            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "description": "Opaque cursor for the next page. Empty when no more results exist, and always empty with after_trade_id.",
             "type": "string"
           },
           "trades": {
-            "description": "Trades ordered newest-first by execution timestamp, with match_id as a tie-breaker.",
+            "description": "Trades ordered newest-first by execution timestamp, with match_id as a tie-breaker; with after_trade_id, ascending by match_id.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -338,13 +372,18 @@
         "enum": [
           "1s",
           "1m",
+          "3m",
           "5m",
           "15m",
           "30m",
           "1h",
+          "2h",
           "4h",
-          "1d",
+          "6h",
+          "8h",
           "12h",
+          "1d",
+          "3d",
           "1w",
           "1mo"
         ],
@@ -357,10 +396,15 @@
           "1m": "1 minute",
           "1mo": "1 month (calendar month, UTC)",
           "1s": "1 second",
-          "1w": "1 week",
+          "1w": "1 week, starting Monday 00:00 UTC",
+          "2h": "2 hours",
           "30m": "30 minutes",
+          "3d": "3 days, counted from 1970-01-01 UTC",
+          "3m": "3 minutes",
           "4h": "4 hours",
-          "5m": "5 minutes"
+          "5m": "5 minutes",
+          "6h": "6 hours",
+          "8h": "8 hours"
         }
       }
     },
@@ -604,7 +648,7 @@
     },
     "/v1/spot/markets/{symbol}/trades": {
       "get": {
-        "description": "Retrieve recent public trades for a spot symbol, ordered newest first. Supports optional aggressor side, inclusive time-range, and opaque page-token pagination filters.",
+        "description": "Retrieve recent public trades for a spot symbol, ordered newest first. Supports optional aggressor side, inclusive time-range, and opaque page-token pagination filters. With afterTradeId, walks the symbol's trades by trade identifier, oldest first and gap-free, to backfill trades missed on a live stream.",
         "operationId": "MarketDataService_GetTrades",
         "parameters": [
           {
@@ -614,6 +658,16 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive trade-identifier cursor (unsigned 64-bit decimal string) for gap-free backfill: returns trades with matchId above it, ascending, up to completeThroughTradeId. Use 0 to start from the first trade, then nextAfterTradeId. Cannot be combined with side, startTime, endTime or pageToken.",
+            "in": "query",
+            "name": "afterTradeId",
+            "required": false,
+            "schema": {
+              "example": "1",
               "type": "string"
             }
           },
@@ -679,6 +733,14 @@
             "content": {
               "application/json": {
                 "example": {
+                  "completeThroughTradeId": "1",
+                  "epochEnds": [
+                    {
+                      "epoch": "1",
+                      "lastTradeId": "1"
+                    }
+                  ],
+                  "nextAfterTradeId": "1",
                   "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
                   "trades": [
                     {

@@ -372,7 +372,7 @@ enum ErrorCode {
   ERROR_CODE_QTY_STEP_SIZE = 8;
   // Client order ID is already in use on this account, by an open order or by
   // an order that ended recently; an ended order keeps its client order ID
-  // reserved for at least 15 minutes. Reuse returns this code even with the
+  // reserved for at least 60 seconds. Reuse returns this code even with the
   // same payload. Use GetOrder to reconcile, then retry with a new client
   // order ID.
   ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID = 9;
@@ -530,8 +530,8 @@ enum ErrorCode {
   ERROR_CODE_GATEWAY_MISCONFIGURED = 77;
   // The order identifier or the replacement order identifier is not valid.
   ERROR_CODE_INVALID_ORDER_ID = 80;
-  // The quantity of a trigger's child order, a TWAP slice or a ladder order
-  // can't be raised above its planned quantity. Nothing changed.
+  // The quantity of a trigger's child order or a ladder order can't be raised
+  // above its planned quantity. Nothing changed.
   ERROR_CODE_CHILD_QTY_RAISE_NOT_ALLOWED = 81;
   // Attached take-profit, stop-loss or trailing legs can't be applied here:
   // this market takes none, an attached trailing stop isn't offered yet, or
@@ -671,8 +671,8 @@ enum ErrorCode {
   ERROR_CODE_TRIGGER_DIRECTION_INVALID = 242;
   // The trigger's child order quantity is not positive.
   ERROR_CODE_TRIGGER_QTY_INVALID = 243;
-  // A buy trigger's child order is not a LIMIT order; its funds are reserved at
-  // the limit price.
+  // A buy trailing stop's child order is not a LIMIT order with a maximum
+  // price; its funds are reserved at that price.
   ERROR_CODE_TRIGGER_BUY_REQUIRES_LIMIT = 244;
   // The account's trading route is not configured for triggers, so the trigger
   // was not admitted. Contact support if it persists.
@@ -722,10 +722,10 @@ enum ErrorCode {
   // New orders, changes and trigger orders on this account are suspended until
   // a balance issue is resolved; cancels still work. Nothing changed.
   ERROR_CODE_ACCOUNT_ORDERS_SUSPENDED = 263;
-  // A standalone trailing stop must sell; a standalone buy trailing stop is not
-  // supported. Attached trailing stops take the side opposite their parent.
+  // A trailing stop's side is not supported. Trailing stops accept either
+  // side, so this code is not currently returned.
   ERROR_CODE_TRAILING_SIDE_NOT_SUPPORTED = 264;
-  // A trailing stop's child order must be a MARKET order.
+  // A trailing stop that sells must have a MARKET child order.
   ERROR_CODE_TRAILING_CHILD_NOT_MARKET = 265;
   // The TWAP duration is shorter than 1 second or longer than about 292 years,
   // the longest the venue's clock represents.
@@ -768,6 +768,8 @@ enum ErrorCode {
   ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE = 280;
   // The broker's fee account isn't available yet; retry shortly.
   ERROR_CODE_QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE = 281;
+  // The QuickSwap account is not ready yet; no order was placed. Retry shortly.
+  ERROR_CODE_QUICKSWAP_ACCOUNT_OWNER_UNKNOWN = 301;
   // QuickSwap isn't enabled for this account's trading.
   ERROR_CODE_QUICKSWAP_DISABLED = 282;
   // QuickSwap orders can't carry take-profit or stop-loss legs.
@@ -803,6 +805,29 @@ enum ErrorCode {
   // The account already has the most ladder orders one account may have on
   // this market. Nothing changed; retry once one of them ends.
   ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED = 295;
+  // The new quantity of a TWAP order's slice would leave more than the TWAP's
+  // remaining quantity. Nothing changed; a slice can be raised up to what the
+  // TWAP still has to execute.
+  ERROR_CODE_CHILD_QTY_EXCEEDS_REMAINING = 296;
+  // The order cancellation was sent but not confirmed in time. Its outcome is
+  // unknown and it may still apply; read the order before retrying. For a batch
+  // cancellation, every item's outcome is unknown; read them back. For a cancel
+  // all, some or all of the matching orders may be canceled; read open orders.
+  // For a cancel all after heartbeat, the switch may or may not have been armed,
+  // refreshed or disabled; send the heartbeat again.
+  ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN = 297;
+  // The order modification was sent but not confirmed in time. Its outcome is
+  // unknown and it may still apply; read the order before retrying. For a batch
+  // replacement, every item's outcome is unknown; read them back.
+  ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN = 298;
+  // This order is being canceled while the account's balances are brought back
+  // in line, so it can't be changed. Nothing changed; cancels still work, and
+  // the account's other orders can still be changed.
+  ERROR_CODE_ORDER_REPAIRING = 299;
+  // This account's orders are being canceled while its balances are brought
+  // back in line, so new orders, changes and trigger orders are paused for a
+  // short time. Nothing changed; cancels still work. Try again shortly.
+  ERROR_CODE_ACCOUNT_REPAIRING = 300;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -920,9 +945,10 @@ message TrailingStopPolicy {
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 6 [(buf.validate.field).int64.gt = 0];
-    // Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop
-    // that sells, which is the case when the parent order buys, accepts values
-    // below 10000; a 100% cap would leave it no positive price to sell at.
+    // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999
+    // whichever side the exit trades. An order whose trailing stop sets 10000
+    // is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap
+    // would leave an exit that sells no positive price to sell at.
     int32 max_slippage_bps = 7 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -934,10 +960,25 @@ message TrailingStopPolicy {
   int64 activation_price_ticks = 3;
 }
 
-// RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an
-// order. These arm after the parent order fills and fire when conditions are
-// met. If the parent order is canceled before any fill, attached risk controls
-// are discarded.
+// RiskPolicy defines optional risk controls (take-profit, stop-loss or
+// trailing stop) attached to an order. The legs protect the parent order's
+// filled position: they arm as the parent fills and follow its later fills.
+//
+// The legs of one parent share that position, whether or not oco is set, and
+// only one exit works at a time. The first leg whose condition is met submits
+// an exit for the whole remaining position, rounded down to the pair's step
+// size; a remainder below one step stays in the balance. If another leg's
+// condition is met while that exit works, the working exit is canceled; once
+// it ends, that leg is checked again against the latest trade and, if its
+// condition still holds, exits what remains. After an exit ends, the legs keep
+// protecting whatever position remains.
+//
+// The legs end once the parent order is terminal and no position they can
+// exit remains: the leg whose exit ended last completes, and the others are
+// canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a
+// fill, the legs are canceled with
+// TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the
+// parent's whole fill is below one step, the legs fail.
 message RiskPolicy {
   option (buf.validate.message).cel = {
     id: "risk_policy.oco_requires_tp_and_one_stop"
@@ -956,9 +997,11 @@ message RiskPolicy {
     TrailingStopPolicy trailing_stop = 3;
   }
 
-  // If true, take-profit and the configured stop leg (stop-loss or trailing-stop)
-  // form an OCO pair: when one fires, the other is canceled.
-  // Default is false (no mutual cancellation).
+  // If true, the take-profit and the configured stop leg (stop-loss or
+  // trailing stop) are linked and shown as one-cancels-the-other. Requires a
+  // take-profit and exactly one stop leg. The legs of every parent share one
+  // position and end together as described on RiskPolicy, so this setting
+  // does not change when exits are submitted or canceled. Default is false.
   bool oco = 4;
 }
 
@@ -1035,7 +1078,19 @@ message CancelAllOrdersRequest {
   ];
 }
 
+// CancelledOrder identifies one order whose cancellation a cancel-all
+// requested.
+message CancelledOrder {
+  // Order ID.
+  fixed64 order_id = 1;
+  // The order's client order ID; empty when the order has none.
+  string client_order_id = 2;
+}
+
 // CancelAllOrdersResponse returns the result of a cancel-all operation.
+// The response confirms that cancellation was requested for every matching
+// order; each order's final state is reported on the order update stream and
+// read paths.
 message CancelAllOrdersResponse {
   // Cancel-all submission outcome.
   enum Status {
@@ -1067,6 +1122,19 @@ message CancelAllOrdersResponse {
   google.protobuf.Timestamp ts = 5;
   // Server timestamp as epoch nanoseconds (for bots).
   uint64 ts_ns = 6;
+  // Orders whose cancellation was requested, oldest first (the order in
+  // which they were created), at most 200. When more orders were canceled,
+  // these are the 200 oldest and `truncated` is true; the order update stream
+  // and read paths report every one. Empty when `dry_run` is set. Retrying
+  // with the same `request_id` and criteria within the replay window returns
+  // the same list.
+  repeated CancelledOrder cancelled_orders = 7 [(buf.validate.field).repeated.max_items = 200];
+  // Number of orders whose cancellation was requested, including those not
+  // listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when
+  // `dry_run` is set.
+  uint32 total_cancelled = 8;
+  // True when more orders were canceled than `cancelled_orders` lists.
+  bool truncated = 9;
 }
 
 // =============================================================================
@@ -1233,7 +1301,8 @@ message ModifyOrderRequest {
       (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
     ];
   }
-  // Idempotency key (required).
+  // Idempotency key (required). Outstanding modifications retain this key;
+  // identical retries replay the final result for 60 seconds after the answer.
   string request_id = 4 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,
@@ -1350,6 +1419,8 @@ message BatchReplaceAdmissionItem {
 }
 
 // BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.
+// Identical retries replay the admission result for 60 seconds from acceptance;
+// a different payload under the same key conflicts. Use a fresh key for a new batch.
 message BatchReplaceOrdersRequest {
   // Prevent duplicate order targets in the same batch.
   option (buf.validate.message).cel = {
@@ -1508,14 +1579,17 @@ service OrdersService {
   }
 
   // Cancels all matching open orders for an account (kill switch).
-  // Evaluates matching orders from a consistent snapshot at request start.
+  // Evaluates matching orders from a consistent snapshot at request start and
+  // requests cancellation of every one, however many match. The response
+  // lists up to 200 of them, oldest first, with the total count.
   // Final state is confirmed via the order update stream or read path.
   rpc CancelAllOrders(CancelAllOrdersRequest) returns (CancelAllOrdersResponse) {
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel All Orders"
       description:
         "Cancel all matching open orders for an account. "
-        "Supports optional symbol and side filters plus dry-run preview."
+        "Supports optional symbol and side filters plus dry-run preview. "
+        "Returns up to 200 canceled order IDs, oldest first, with the total count."
       tags: "Orders Service"
     };
   }

@@ -75,7 +75,20 @@ message Protection {
 // more immediate orders, within the service's market execution window.
 message MarketExecution {}
 
-// TwapExecution spreads execution evenly over a duration.
+// TwapExecution spreads execution evenly over a duration, one slice per
+// slot. Slot k starts k slice intervals after execution starts. Each slice
+// trades what is left of the credited deposit over the slots left, and is
+// protected by the quote's min_rate on what it trades. A slice is sent only
+// within its slot: a slot missed is skipped, never sent late. On a two-leg
+// route, each slice's second leg converts that slice's intermediate funds
+// before the next slice. Intermediate funds below the smallest order the
+// second leg's market accepts do not end the TWAP: they are added to the
+// next slice's conversion, and what is still unconverted when execution
+// ends is refunded to refund_address (INTERMEDIATE_BELOW_MINIMUM). Only the
+// second leg's market closing ends a TWAP early. A TWAP needs a larger
+// deposit than a market execution, since every slice must be a valid order
+// (see QuickSwapQuote.min_deposit_amount). A bridge takes market execution
+// only.
 message TwapExecution {
   option (buf.validate.message).cel = {
     id: "twap_execution.interval_within_duration"
@@ -245,7 +258,8 @@ message QuickSwapQuote {
   // network's minimum
   // (AssetChainVariant.deposit_min_amount in the config), and differs from
   // ErrorDetail.min_deposit_amount, the smallest deposit that currently
-  // quotes.
+  // quotes. For a TWAP it is the slice count times the smallest deposit one
+  // slice takes, and at least a market execution's minimum.
   TokenAmount min_deposit_amount = 5;
   // Largest deposit that is eligible to execute, in source token units,
   // compared with the deposit before its network fee. Fixed when the
@@ -331,10 +345,13 @@ message DepositInstructions {
   google.protobuf.Timestamp address_retires_at = 6;
   // Current lifecycle state of the address.
   DepositAddressState address_state = 7;
-  // A native-coin deposit (for example ETH) needs at least this gas limit, in
-  // gas units; a plain 21000-gas transfer is not enough and fails without
-  // depositing. Unused gas is refunded, so a higher limit is safe. Zero for
-  // token deposits and non-EVM networks.
+  // Recommended gas limit, in gas units, for native-coin deposits on EVM
+  // networks: 250000. Polyester does not enforce this limit. On some networks,
+  // depositing to an address that has never received funds requires far more
+  // than 21000 gas. If the limit is too low, the transaction fails on chain
+  // without depositing funds, and the network fee is still charged. Use at
+  // least the recommended limit. Unused gas is not charged. Zero for token
+  // deposits and non-EVM networks.
   uint64 min_native_gas_limit = 8;
 }
 
@@ -423,6 +440,23 @@ enum QuickSwapReason {
   // for it. Its withdrawal is NOT_SENT with the amount in unsent_amount.
   // Other withdrawals are unaffected.
   REFUND_BELOW_MINIMUM = 21;
+  // The QuickSwap could not be issued a deposit address and never gets one:
+  // it is EXPIRED without deposit_instructions, and nothing can be deposited
+  // to it. Create a new QuickSwap with a new idempotency key, and report the
+  // swap_id to Polyester broker support.
+  DEPOSIT_ADDRESS_CONFLICT = 22;
+  // The address already accepted its one eligible deposit; this deposit is
+  // returned to return_address and never executes.
+  DEPOSIT_ADDRESS_ALREADY_USED = 23;
+  // The address was retired; this observed deposit is returned and never executes.
+  DEPOSIT_ADDRESS_RETIRED = 24;
+  // The address had not been issued when this deposit was observed; it never executes.
+  DEPOSIT_ADDRESS_NOT_ISSUED = 25;
+  // On a two-leg route, intermediate funds were below the smallest order the
+  // second leg's market accepts, so they could not be converted to the
+  // destination asset; they are refunded to refund_address. Shown on the
+  // payout statuses that follow.
+  INTERMEDIATE_BELOW_MINIMUM = 26;
 }
 
 // Deposit is one deposit detected on the QuickSwap's deposit address.
@@ -483,9 +517,12 @@ message ExecutionProgress {
   // the refund route's token units; unset for a direct route and a bridge.
   TokenAmount intermediate_remainder = 4;
   // Completed slices: a market execution's one slice completes when
-  // execution finishes. Zero for a bridge.
+  // execution finishes; a TWAP slice completes once it has traded and is
+  // over, so a slot that traded nothing or was skipped never completes.
+  // Zero for a bridge.
   uint32 completed_slices = 5;
-  // Planned slices: a market execution has one once it is planned. Zero
+  // Planned slices: a market execution has one once it is planned; a TWAP
+  // has its slice count, duration_ms over slice_interval_ms rounded up. Zero
   // until then, and for a bridge, which trades nothing.
   uint32 total_slices = 6;
   // When execution started.
@@ -595,11 +632,12 @@ message Withdrawal {
 //
 // Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |
 // PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a
-// bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. HELD can
-// be entered from any non-terminal status and is not terminal. The terminal
-// statuses are COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status
-// never changes. Accept status values added later; is_terminal is
-// authoritative.
+// bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A
+// QuickSwap that cannot be issued a deposit address goes from ALLOCATING
+// straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from
+// any non-terminal status and is not terminal. The terminal statuses are
+// COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status never
+// changes. Accept status values added later; is_terminal is authoritative.
 enum QuickSwapStatus {
   reserved 1, 17;
   reserved "SCREENING", "CANCELLED";
@@ -649,7 +687,9 @@ enum QuickSwapStatus {
   // Terminal: every withdrawal is final and all are RETURN (FINALIZED or
   // NOT_SENT).
   RETURNED = 15;
-  // Terminal: the funding window ended without an eligible deposit.
+  // Terminal: the funding window ended without an eligible deposit
+  // (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address
+  // (DEPOSIT_ADDRESS_CONFLICT).
   EXPIRED = 16;
 }
 
@@ -676,7 +716,9 @@ message QuickSwap {
   // added later. Polling can stop at a terminal status. A terminal status
   // never changes. Shortly after it, address_retires_at can still move later,
   // and withdrawal details can be corrected as documented on Withdrawal;
-  // another deposit reaching the address also shows. Read it again if the end
+  // another deposit reaching the address also shows as RETURN_ONLY. Returns
+  // made directly for such deposits are not yet reported in
+  // withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end
   // user reports such a deposit or needs the final retirement time.
   bool is_terminal = 5;
   // Accepted economic terms.
@@ -701,7 +743,9 @@ message QuickSwap {
   string refund_memo = 13;
   // Quote and protection fixed at creation. Not refreshed on retries.
   QuickSwapQuote quote = 14;
-  // Where and until when to deposit; absent while ALLOCATING.
+  // Where and until when to deposit; absent while ALLOCATING and on a
+  // QuickSwap that never got an address (EXPIRED with
+  // DEPOSIT_ADDRESS_CONFLICT).
   DepositInstructions deposit_instructions = 15;
   // Risk screening.
   Screening screening = 16;
@@ -723,8 +767,9 @@ message QuickSwap {
   // When status became terminal; unset while not terminal.
   google.protobuf.Timestamp terminal_at = 25;
   // Monotonic state version: a snapshot with a lower version is older. Zero
-  // while ALLOCATING; 1 once the deposit address is issued
-  // (AWAITING_DEPOSIT); every later change increments it.
+  // while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT)
+  // or allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT);
+  // every later change increments it.
   uint64 version = 26;
   // Fee schedule version fixed at creation. Every execution or bridge payout
   // of this QuickSwap is charged that version's service fees, whatever later
@@ -983,9 +1028,9 @@ enum ErrorCode {
   // broker support with the swap_id.
   STATS_INCOMPLETE = 33;
   // The QuickSwap (swap_id in the error) cannot be issued a deposit address
-  // and never gets one, so nothing can be deposited to it. Create a new
-  // QuickSwap with a new idempotency key, and report the swap_id to Polyester
-  // broker support.
+  // and never gets one, so nothing can be deposited to it; it is EXPIRED with
+  // reason DEPOSIT_ADDRESS_CONFLICT. Create a new QuickSwap with a new
+  // idempotency key, and report the swap_id to Polyester broker support.
   ADDRESS_CONFLICT = 34;
 }
 
@@ -1082,8 +1127,9 @@ service QuickSwapService {
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.
   // - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its
   //   address automatically; follow it with GetQuickSwap or the same request.
-  // - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address; create
-  //   a new one with a new idempotency key.
+  // - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address and is
+  //   EXPIRED (DEPOSIT_ADDRESS_CONFLICT); every repeat returns this error;
+  //   create a new one with a new idempotency key.
   // - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;
   //   retry the same request.
   // - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.

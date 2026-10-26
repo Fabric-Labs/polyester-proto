@@ -560,7 +560,7 @@
           },
           "lastUsedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Last time in UTC when this key authenticated a request. Omitted when the\n key has not been used.",
+            "description": "Approximate last time in UTC when this key authenticated a request,\n recorded at most about once a minute; it may lag recent use by a few\n minutes. Omitted when no use has been recorded.",
             "title": "last_used_at"
           },
           "policyId": {
@@ -658,7 +658,7 @@
             "uniqueItems": true
           },
           "label": {
-            "description": "Human-friendly label for the key. Empty clears the label when selected.",
+            "description": "Human-friendly label for the key. Empty clears the label when selected.\n Must not contain '<' or '>'.\nlabel.no_angle_brackets = true // label must not contain '<' or '>'\n",
             "maxLength": 64,
             "title": "label",
             "type": "string"
@@ -1395,7 +1395,7 @@
             "uniqueItems": true
           },
           "label": {
-            "description": "Human-readable label for the key. Required; 1 to 64 characters.",
+            "description": "Human-readable label for the key. Required; 1 to 64 characters, and must\n not contain '<' or '>'.\nlabel.no_angle_brackets = true // label must not contain '<' or '>'\n",
             "maxLength": 64,
             "minLength": 1,
             "title": "label",
@@ -1594,7 +1594,7 @@
             "type": "string"
           },
           "label": {
-            "description": "Optional human label for display in UI.\nlabel.no_angle_brackets // label must not contain '<' or '>'\n",
+            "description": "Optional human label for display in UI.\nlabel.no_angle_brackets = true // label must not contain '<' or '>'\n",
             "examples": [
               "Treasury"
             ],
@@ -5178,7 +5178,7 @@
             "type": "string"
           },
           "label": {
-            "description": "Label for the sub-account. Empty clears the label when selected.\nlabel.no_angle_brackets // label must not contain '<' or '>'\n",
+            "description": "Label for the sub-account. Empty clears the label when selected.\nlabel.no_angle_brackets = true // label must not contain '<' or '>'\n",
             "examples": [
               "Treasury"
             ],
@@ -9207,7 +9207,8 @@
           "CLAIM_AVAILABLE",
           "CLAIM_PROCESSING",
           "CLAIM_CLAIMED",
-          "CLAIM_UNAVAILABLE"
+          "CLAIM_UNAVAILABLE",
+          "CLAIM_PAYOUT_DELAYED"
         ],
         "title": "DailyClaimState",
         "type": "string"
@@ -9230,6 +9231,29 @@
         "title": "DailyClaimTransfer",
         "type": "object"
       },
+      "claims.v1.ErrorCode": {
+        "description": "ErrorCode identifies stable, machine-readable Claims API errors.\n Values mirror the REST problem+json code field after removing ERROR_CODE_.",
+        "enum": [
+          "ERROR_CODE_UNSPECIFIED",
+          "ERROR_CODE_CLAIM_TEMPORARILY_UNAVAILABLE",
+          "ERROR_CODE_UNAUTHENTICATED",
+          "ERROR_CODE_RATE_LIMIT_EXCEEDED",
+          "ERROR_CODE_CLAIM_UNAVAILABLE",
+          "ERROR_CODE_CONFLICT",
+          "ERROR_CODE_INVALID_REQUEST",
+          "ERROR_CODE_REQUEST_TOO_LARGE",
+          "ERROR_CODE_SERVICE_UNAVAILABLE",
+          "ERROR_CODE_INTERNAL_ERROR",
+          "ERROR_CODE_PERMISSION_DENIED",
+          "ERROR_CODE_FAILED_PRECONDITION",
+          "ERROR_CODE_SOCIAL_VERIFICATION_REQUIRED",
+          "ERROR_CODE_SUBACCOUNT_NOT_FOUND",
+          "ERROR_CODE_SUBACCOUNT_INACTIVE",
+          "ERROR_CODE_CLAIM_PAYOUT_UNAVAILABLE"
+        ],
+        "title": "ErrorCode",
+        "type": "string"
+      },
       "claims.v1.GetDailyClaimStatusRequest": {
         "additionalProperties": false,
         "description": "GetDailyClaimStatusRequest retrieves today's reward and claim status for the authenticated root account.",
@@ -9249,6 +9273,11 @@
             "description": "Claim identifier. Empty until a claim has been created.",
             "title": "claim_id",
             "type": "string"
+          },
+          "payoutDelayReason": {
+            "$ref": "#/components/schemas/claims.v1.ErrorCode",
+            "description": "Why the payout of today's claim is delayed: the claim reward is temporarily unavailable, or\n reward payouts for this campaign are paused. Set only while the state is payout delayed;\n unspecified or omitted otherwise.",
+            "title": "payout_delay_reason"
           },
           "resetAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -12328,7 +12357,7 @@
             ]
           },
           "isClosed": {
-            "description": "True only for WebSocket terminal updates of a closed bucket.\n Historical API rows and current open-candle rows set this to false.",
+            "description": "True for a closed candle bucket, including historical API rows and\n WebSocket terminal updates. False only while the bucket is still open.",
             "title": "is_closed",
             "type": "boolean"
           },
@@ -12652,8 +12681,18 @@
       },
       "marketdata.v1.GetTradesRequest": {
         "additionalProperties": false,
-        "description": "GetTradesRequest selects recent public trades for one spot market.\n\n Results are ordered newest-first by execution timestamp, with match_id as a\n tie-breaker. When both start_time and end_time are set, both bounds are\n inclusive.\nget_trades.time_not_future // start_time and end_time must not be more than 5 minutes in the future\nget_trades.time_range_valid // end_time must be >= start_time when both are set\n",
+        "description": "GetTradesRequest selects recent public trades for one spot market.\n\n Results are ordered newest-first by execution timestamp, with match_id as a\n tie-breaker. When both start_time and end_time are set, both bounds are\n inclusive.\n\n With after_trade_id set, the request instead walks the symbol's trades by\n trade identifier (match_id), oldest first and gap-free, to backfill trades\n missed on a live stream: see after_trade_id.\nget_trades.after_trade_id_exclusive // after_trade_id cannot be combined with start_time, end_time, side or page_token\nget_trades.time_not_future // start_time and end_time must not be more than 5 minutes in the future\nget_trades.time_range_valid // end_time must be >= start_time when both are set\n",
         "properties": {
+          "afterTradeId": {
+            "description": "Exclusive trade-identifier cursor for gap-free backfill. When set, the\n results are the symbol's trades with match_id greater than\n after_trade_id, ascending by match_id, up to limit, and only trades at or\n below the response's complete_through_trade_id: every page is gap-free.\n Trade identifiers order trades across epochs too, so a walk crosses\n epoch ends without a gap. Pass 0 to start from the symbol's first trade,\n then the response's next_after_trade_id. Cannot be combined with\n start_time, end_time, side or page_token.",
+            "format": "int64",
+            "nullable": true,
+            "title": "after_trade_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "Inclusive upper bound for trade execution time. Must be greater than or\n equal to start_time when both are set, and must not be more than 5 minutes\n in the future.",
@@ -12695,14 +12734,40 @@
         "additionalProperties": false,
         "description": "GetTradesResponse contains public trades for one spot market.",
         "properties": {
+          "completeThroughTradeId": {
+            "description": "Set only with after_trade_id; 0 otherwise. Every trade of the symbol\n with match_id at or below this value exists and is returned by this\n method. Identifiers in that range that no trade has, the rest of an\n ended epoch and every identifier below a later epoch's first, are\n covered too. Newer trades may exist that are not available here yet; it\n only grows.",
+            "format": "int64",
+            "title": "complete_through_trade_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "epochEnds": {
+            "description": "Set only with after_trade_id. Every epoch whose last trade (or, for an\n epoch without trades, its start) lies between after_trade_id and\n next_after_trade_id, both inclusive, ascending by epoch. A page that\n ends exactly on an epoch's last trade is followed by a page that still\n reports that epoch's end.",
+            "items": {
+              "$ref": "#/components/schemas/marketdata.v1.TradeEpochEnd"
+            },
+            "title": "epoch_ends",
+            "type": "array"
+          },
+          "nextAfterTradeId": {
+            "description": "Set only with after_trade_id; 0 otherwise. The after_trade_id of the\n next call; it never moves backwards. On a full page (limit trades) it is\n the last trade's match_id. Otherwise it is the greater of after_trade_id\n and complete_through_trade_id, so a walk progresses across epoch ends\n and empty epochs without trades to carry it. When it equals the\n request's after_trade_id, nothing newer is available yet: retry later\n with backoff.",
+            "format": "int64",
+            "title": "next_after_trade_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "nextPageToken": {
-            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "description": "Opaque cursor for the next page. Empty when no more results exist, and\n always empty with after_trade_id.",
             "maxLength": 512,
             "title": "next_page_token",
             "type": "string"
           },
           "trades": {
-            "description": "Trades ordered newest-first by execution timestamp, with match_id as a\n tie-breaker.",
+            "description": "Trades ordered newest-first by execution timestamp, with match_id as a\n tie-breaker; with after_trade_id, ascending by match_id.",
             "items": {
               "$ref": "#/components/schemas/marketdata.v1.MarketTrade"
             },
@@ -13258,23 +13323,54 @@
         "type": "string"
       },
       "marketdata.v1.Timeframe": {
-        "description": "Timeframe represents an OHLCV candle bucket.\n\n Most values are fixed-duration buckets. `MONTH_1` is calendar-based (UTC\n month boundaries).",
+        "description": "Timeframe represents an OHLCV candle bucket.\n\n All buckets are in UTC; daylight saving time never shifts a boundary.\n Fixed-duration buckets start at whole multiples of their duration since\n 1970-01-01T00:00:00Z, so every bucket up to 1 day starts on a UTC midnight\n boundary and `DAY_3` buckets start every third day counted from\n 1970-01-01. `WEEK_1` buckets start on Monday 00:00 UTC. `MONTH_1` is\n calendar-based (UTC month boundaries). Values are listed shortest first.",
         "enum": [
           "TIMEFRAME_UNSPECIFIED",
           "SEC_1",
           "MIN_1",
+          "MIN_3",
           "MIN_5",
           "MIN_15",
           "MIN_30",
           "HOUR_1",
+          "HOUR_2",
           "HOUR_4",
-          "DAY_1",
+          "HOUR_6",
+          "HOUR_8",
           "HOUR_12",
+          "DAY_1",
+          "DAY_3",
           "WEEK_1",
           "MONTH_1"
         ],
         "title": "Timeframe",
         "type": "string"
+      },
+      "marketdata.v1.TradeEpochEnd": {
+        "additionalProperties": false,
+        "description": "TradeEpochEnd reports where one epoch of a symbol's trade identifiers\n ended. Trade identifiers of epoch e are greater than (e-1) * 2^40 and less\n than e * 2^40; a later epoch's identifiers are greater than every earlier\n epoch's.",
+        "properties": {
+          "epoch": {
+            "description": "The epoch.",
+            "format": "int64",
+            "title": "epoch",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "lastTradeId": {
+            "description": "match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch\n ended without trades.",
+            "format": "int64",
+            "title": "last_trade_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "TradeEpochEnd",
+        "type": "object"
       },
       "marketoverview.v1.CurrencyMetadata": {
         "additionalProperties": false,
@@ -13941,7 +14037,7 @@
         "description": "AttachedRisk is the single parent-side view for attached-risk configuration\n and runtime status.",
         "properties": {
           "oco": {
-            "description": "True while both the take-profit and a stop leg (stop-loss or trailing\n stop) are present and linked as one-cancels-the-other. False once either\n leg is removed; a leg canceled because the other fired stays present.",
+            "description": "True while the parent's legs were placed with oco and both the\n take-profit and a stop leg (stop-loss or trailing stop) are present.\n False once either leg is removed. A leg that ended, including one\n canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
             "title": "oco",
             "type": "boolean"
           },
@@ -14608,7 +14704,7 @@
       },
       "orders.v1.BatchReplaceOrdersRequest": {
         "additionalProperties": false,
-        "description": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.\nbatch_replace_orders.unique_targets // each item target must be unique within a batch\n",
+        "description": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\nbatch_replace_orders.unique_targets // each item target must be unique within a batch\n",
         "properties": {
           "items": {
             "description": "Replacement items.",
@@ -14916,8 +15012,17 @@
       },
       "orders.v1.CancelAllOrdersResponse": {
         "additionalProperties": false,
-        "description": "CancelAllOrdersResponse returns the result of a cancel-all operation.",
+        "description": "CancelAllOrdersResponse returns the result of a cancel-all operation.\n The response confirms that cancellation was requested for every matching\n order; each order's final state is reported on the order update stream and\n read paths.",
         "properties": {
+          "cancelledOrders": {
+            "description": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within the replay window returns\n the same list.",
+            "items": {
+              "$ref": "#/components/schemas/orders.v1.CancelledOrder"
+            },
+            "maxItems": 200,
+            "title": "cancelled_orders",
+            "type": "array"
+          },
           "failedCancels": {
             "description": "Number of matched orders that could not be submitted for cancellation\n because the cancel-all could not be recorded for their symbol. This\n request does not cancel them; send a new cancel-all with a new\n `request_id` if they are still open. Zero when `dry_run` is set.",
             "title": "failed_cancels",
@@ -14937,6 +15042,16 @@
             "description": "Number of matched orders submitted for cancellation, including orders\n whose cancellation was already in progress. Each moves to `CANCELED`\n asynchronously after the response. Zero when `dry_run` is set.",
             "title": "submitted_cancels",
             "type": "integer"
+          },
+          "totalCancelled": {
+            "description": "Number of orders whose cancellation was requested, including those not\n listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when\n `dry_run` is set.",
+            "title": "total_cancelled",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when more orders were canceled than `cancelled_orders` lists.",
+            "title": "truncated",
+            "type": "boolean"
           },
           "ts": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -15075,6 +15190,28 @@
         ],
         "title": "Status",
         "type": "string"
+      },
+      "orders.v1.CancelledOrder": {
+        "additionalProperties": false,
+        "description": "CancelledOrder identifies one order whose cancellation a cancel-all\n requested.",
+        "properties": {
+          "clientOrderId": {
+            "description": "The order's client order ID; empty when the order has none.",
+            "title": "client_order_id",
+            "type": "string"
+          },
+          "orderId": {
+            "description": "Order ID.",
+            "format": "int64",
+            "title": "order_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "CancelledOrder",
+        "type": "object"
       },
       "orders.v1.CreateOrderRequest": {
         "additionalProperties": false,
@@ -15374,6 +15511,7 @@
           "ERROR_CODE_QUICKSWAP_FEE_RECIPIENT_IS_PAYER",
           "ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE",
           "ERROR_CODE_QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE",
+          "ERROR_CODE_QUICKSWAP_ACCOUNT_OWNER_UNKNOWN",
           "ERROR_CODE_QUICKSWAP_DISABLED",
           "ERROR_CODE_QUICKSWAP_ATTACHED_RISK_NOT_ALLOWED",
           "ERROR_CODE_QUICKSWAP_ORDER_NOT_MODIFIABLE",
@@ -15387,7 +15525,12 @@
           "ERROR_CODE_ATTACHED_EXIT_WORKING",
           "ERROR_CODE_MARKET_TRIGGER_LIMIT_EXCEEDED",
           "ERROR_CODE_MARKET_TWAP_LIMIT_EXCEEDED",
-          "ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED"
+          "ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED",
+          "ERROR_CODE_CHILD_QTY_EXCEEDS_REMAINING",
+          "ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN",
+          "ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN",
+          "ERROR_CODE_ORDER_REPAIRING",
+          "ERROR_CODE_ACCOUNT_REPAIRING"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -15453,7 +15596,7 @@
       },
       "orders.v1.GetBatchReplaceStatusRequest": {
         "additionalProperties": false,
-        "description": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.",
+        "description": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.\n Batch admission replay lasts 60 seconds from acceptance. If status is\n unavailable, reconcile the individual orders; absence does not prove rejection.",
         "properties": {
           "batchRequestId": {
             "description": "Server-issued batch identity from BatchReplaceOrders.",
@@ -16260,7 +16403,7 @@
                 ]
               },
               "requestId": {
-                "description": "Idempotency key (required).",
+                "description": "Idempotency key (required). Outstanding modifications retain this key;\n identical retries replay the final result for 60 seconds after the answer.",
                 "maxLength": 64,
                 "minLength": 1,
                 "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -17099,7 +17242,7 @@
           {
             "properties": {
               "oco": {
-                "description": "If true, take-profit and the configured stop leg (stop-loss or trailing-stop)\n form an OCO pair: when one fires, the other is canceled.\n Default is false (no mutual cancellation).",
+                "description": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted or canceled. Default is false.",
                 "title": "oco",
                 "type": "boolean"
               },
@@ -17141,7 +17284,7 @@
             ]
           }
         ],
-        "description": "RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an\n order. These arm after the parent order fills and fire when conditions are\n met. If the parent order is canceled before any fill, attached risk controls\n are discarded.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
+        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest trade and, if its\n condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
         "title": "RiskPolicy",
         "type": "object"
       },
@@ -17238,7 +17381,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop\n that sells, which is the case when the parent order buys, accepts values\n below 10000; a 100% cap would leave it no positive price to sell at.",
+                    "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999\n whichever side the exit trades. An order whose trailing stop sets 10000\n is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap\n would leave an exit that sells no positive price to sell at.",
                     "exclusiveMinimum": 0,
                     "format": "int32",
                     "maximum": 10000,
@@ -19520,7 +19663,7 @@
             "type": "string"
           },
           "minNativeGasLimit": {
-            "description": "A native-coin deposit (for example ETH) needs at least this gas limit, in\n gas units; a plain 21000-gas transfer is not enough and fails without\n depositing. Unused gas is refunded, so a higher limit is safe. Zero for\n token deposits and non-EVM networks.",
+            "description": "Recommended gas limit, in gas units, for native-coin deposits on EVM\n networks: 250000. Polyester does not enforce this limit. On some networks,\n depositing to an address that has never received funds requires far more\n than 21000 gas. If the limit is too low, the transaction fails on chain\n without depositing funds, and the network fee is still charged. Use at\n least the recommended limit. Unused gas is not charged. Zero for token\n deposits and non-EVM networks.",
             "format": "int64",
             "title": "min_native_gas_limit",
             "type": [
@@ -19576,7 +19719,7 @@
         "description": "ExecutionProgress is the trading progress of a QuickSwap.",
         "properties": {
           "completedSlices": {
-            "description": "Completed slices: a market execution's one slice completes when\n execution finishes. Zero for a bridge.",
+            "description": "Completed slices: a market execution's one slice completes when\n execution finishes; a TWAP slice completes once it has traded and is\n over, so a slot that traded nothing or was skipped never completes.\n Zero for a bridge.",
             "title": "completed_slices",
             "type": "integer"
           },
@@ -19616,7 +19759,7 @@
             "title": "started_at"
           },
           "totalSlices": {
-            "description": "Planned slices: a market execution has one once it is planned. Zero\n until then, and for a bridge, which trades nothing.",
+            "description": "Planned slices: a market execution has one once it is planned; a TWAP\n has its slice count, duration_ms over slice_interval_ms rounded up. Zero\n until then, and for a bridge, which trades nothing.",
             "title": "total_slices",
             "type": "integer"
           }
@@ -20407,7 +20550,7 @@
           },
           "depositInstructions": {
             "$ref": "#/components/schemas/swap.quickswap.v1.DepositInstructions",
-            "description": "Where and until when to deposit; absent while ALLOCATING.",
+            "description": "Where and until when to deposit; absent while ALLOCATING and on a\n QuickSwap that never got an address (EXPIRED with\n DEPOSIT_ADDRESS_CONFLICT).",
             "title": "deposit_instructions"
           },
           "deposits": {
@@ -20458,7 +20601,7 @@
             "type": "string"
           },
           "isTerminal": {
-            "description": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows. Read it again if the end\n user reports such a deposit or needs the final retirement time.",
+            "description": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY. Returns\n made directly for such deposits are not yet reported in\n withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end\n user reports such a deposit or needs the final retirement time.",
             "title": "is_terminal",
             "type": "boolean"
           },
@@ -20532,7 +20675,7 @@
             "title": "updated_at"
           },
           "version": {
-            "description": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued\n (AWAITING_DEPOSIT); every later change increments it.",
+            "description": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT)\n or allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT);\n every later change increments it.",
             "format": "int64",
             "title": "version",
             "type": [
@@ -20555,6 +20698,43 @@
           }
         },
         "title": "QuickSwap",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapRequest": {
+        "additionalProperties": false,
+        "description": "QuickSwapBrokerServiceGetQuickSwapRequest reads one QuickSwap belonging to this broker.",
+        "properties": {
+          "broker": {
+            "description": "Broker name. A broker API key may name only its own broker.",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "broker",
+            "type": "string"
+          },
+          "swapId": {
+            "description": "Public QuickSwap ID. Another broker's swap is indistinguishable from an\n unknown ID.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "swap_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "QuickSwapBrokerServiceGetQuickSwapRequest",
+        "type": "object"
+      },
+      "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapResponse": {
+        "additionalProperties": false,
+        "description": "QuickSwapBrokerServiceGetQuickSwapResponse carries the broker's full swap detail.",
+        "properties": {
+          "quickSwap": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwap",
+            "description": "The broker-owned QuickSwap, including its quote, addresses, progress and fees.",
+            "title": "quick_swap"
+          }
+        },
+        "title": "QuickSwapBrokerServiceGetQuickSwapResponse",
         "type": "object"
       },
       "swap.quickswap.v1.QuickSwapQuote": {
@@ -20601,7 +20781,7 @@
           },
           "minDepositAmount": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
+            "description": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes. For a TWAP it is the slice count times the smallest deposit one\n slice takes, and at least a market execution's minimum.",
             "title": "min_deposit_amount"
           },
           "minRate": {
@@ -20634,13 +20814,18 @@
           "WITHDRAWAL_FAILED",
           "OUTCOME_RECONCILING",
           "SOURCE_SCREENING_BLOCKED",
-          "REFUND_BELOW_MINIMUM"
+          "REFUND_BELOW_MINIMUM",
+          "DEPOSIT_ADDRESS_CONFLICT",
+          "DEPOSIT_ADDRESS_ALREADY_USED",
+          "DEPOSIT_ADDRESS_RETIRED",
+          "DEPOSIT_ADDRESS_NOT_ISSUED",
+          "INTERMEDIATE_BELOW_MINIMUM"
         ],
         "title": "QuickSwapReason",
         "type": "string"
       },
       "swap.quickswap.v1.QuickSwapStatus": {
-        "description": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING \u2192 AWAITING_DEPOSIT \u2192 (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) \u2192 CREDITED \u2192 EXECUTING (skipped for a\n bridge) \u2192 PAYING_OUT | REFUNDING | RETURNING \u2192 a terminal status. HELD can\n be entered from any non-terminal status and is not terminal. The terminal\n statuses are COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status\n never changes. Accept status values added later; is_terminal is\n authoritative.",
+        "description": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING \u2192 AWAITING_DEPOSIT \u2192 (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) \u2192 CREDITED \u2192 EXECUTING (skipped for a\n bridge) \u2192 PAYING_OUT | REFUNDING | RETURNING \u2192 a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from\n any non-terminal status and is not terminal. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status never\n changes. Accept status values added later; is_terminal is authoritative.",
         "enum": [
           "STATUS_UNSPECIFIED",
           "ALLOCATING",
@@ -21221,7 +21406,7 @@
       },
       "swap.quickswap.v1.TwapExecution": {
         "additionalProperties": false,
-        "description": "TwapExecution spreads execution evenly over a duration.\ntwap_execution.interval_within_duration // slice_interval_ms must not exceed duration_ms\n",
+        "description": "TwapExecution spreads execution evenly over a duration, one slice per\n slot. Slot k starts k slice intervals after execution starts. Each slice\n trades what is left of the credited deposit over the slots left, and is\n protected by the quote's min_rate on what it trades. A slice is sent only\n within its slot: a slot missed is skipped, never sent late. On a two-leg\n route, each slice's second leg converts that slice's intermediate funds\n before the next slice. Intermediate funds below the smallest order the\n second leg's market accepts do not end the TWAP: they are added to the\n next slice's conversion, and what is still unconverted when execution\n ends is refunded to refund_address (INTERMEDIATE_BELOW_MINIMUM). Only the\n second leg's market closing ends a TWAP early. A TWAP needs a larger\n deposit than a market execution, since every slice must be a valid order\n (see QuickSwapQuote.min_deposit_amount). A bridge takes market execution\n only.\ntwap_execution.interval_within_duration // slice_interval_ms must not exceed duration_ms\n",
         "properties": {
           "durationMs": {
             "description": "Total execution duration in milliseconds, from 60000 (1 minute) to\n 86400000 (24 hours). The duration starts when execution starts, not when\n the QuickSwap is created.",
@@ -22098,7 +22283,7 @@
       },
       "triggers.v1.ConditionalChildExecution": {
         "additionalProperties": false,
-        "description": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. BUY market children are not supported in spot.",
+        "description": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. Either side may use any child.",
         "oneOf": [
           {
             "properties": {
@@ -22158,7 +22343,7 @@
       },
       "triggers.v1.ConditionalTrigger": {
         "additionalProperties": false,
-        "description": "ConditionalTrigger configures a standalone stop-loss or take-profit.\nconditional_trigger.buy_requires_limit // BUY stop-loss and take-profit triggers require a limit child\n",
+        "description": "ConditionalTrigger configures a standalone stop-loss or take-profit.",
         "properties": {
           "child": {
             "$ref": "#/components/schemas/triggers.v1.ConditionalChildExecution",
@@ -22565,7 +22750,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
+                    "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A buy stop-loss or take-profit with a market\n child accepts 1 to 10000, as at creation. A trailing stop on either\n side, and a sell stop-loss or take-profit, accept 1 to 9999: 10000 is\n rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would\n leave a sell no positive price, and a trailing stop takes none on\n either side.",
                     "format": "int32",
                     "maximum": 10000,
                     "minimum": 0,
@@ -22651,7 +22836,7 @@
             ]
           },
           "limitPriceTicks": {
-            "description": "Updated limit price in quote units scaled by 1e9 for LIMIT child orders.",
+            "description": "Not modifiable: a trigger's child limit price is fixed at create. Setting\n this field rejects the whole request with\n ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE (InvalidArgument, HTTP 400)\n and leaves the trigger unchanged; cancel the trigger and create a new one\n to change the child limit price.",
             "format": "int64",
             "nullable": true,
             "title": "limit_price_ticks",
@@ -22998,7 +23183,7 @@
               {
                 "properties": {
                   "maxSlippageBps": {
-                    "description": "Maximum slippage in basis points (1 bp = 0.01%). A trailing stop that\n sells accepts values below 10000; a 100% cap would leave it no positive\n price to sell at.",
+                    "description": "Maximum slippage in basis points (1 bp = 0.01%). Values below 10000\n are accepted; a 100% cap would leave a trailing stop that sells no\n positive price to sell at.",
                     "exclusiveMinimum": 0,
                     "format": "int32",
                     "maximum": 10000,
@@ -23070,13 +23255,23 @@
             ]
           }
         ],
-        "description": "TrailingStopTrigger configures a spot trailing-stop strategy.\n Standalone triggers currently support SELL market-IOC children. Attached\n trailing stops may use either side, opposite their parent order.",
+        "description": "TrailingStopTrigger configures a spot trailing-stop strategy. A trailing\n stop that sells tracks the highest price since it activated and fires a\n market IOC child when the price falls the trailing distance from it. A\n trailing stop that buys tracks the lowest price since it activated and\n fires when the price rises the trailing distance from it; its child is an\n IOC limit order at its maximum price, or at its slippage cap above the fire\n price when that is lower, so it never buys above the maximum price. Without\n an activation price, tracking starts when the trigger is placed. Attached\n trailing stops may use either side, opposite their parent order.",
         "properties": {
           "activationPriceTicks": {
             "description": "Optional activation price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "activation_price_ticks",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "limitPriceTicks": {
+            "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the last trade price when no activation price is set. A rise that\n fires above it still fires, and the child fills only at or below it. Must\n be unset when `side` is SELL. Fixed at create.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "limit_price_ticks",
             "type": [
               "integer",
               "string"
@@ -23269,7 +23464,7 @@
           },
           "completedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Timestamp when the trigger reached a terminal successful state.",
+            "description": "Instant the trigger became terminal, matching its terminal event timestamp.\n Set for completed, canceled (for any reason), or failed triggers,\n including terminal expiry or rejection. Absent while the trigger is live.",
             "title": "completed_at"
           },
           "createdAt": {
@@ -23571,6 +23766,7 @@
           "TRIGGER_FAILURE_REASON_ORDER_TYPE_NOT_ALLOWED_IN_AUCTION",
           "TRIGGER_FAILURE_REASON_POST_ONLY_NOT_ALLOWED_IN_AUCTION",
           "TRIGGER_FAILURE_REASON_TWAP_CAPACITY_REACHED",
+          "TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT",
           "TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE",
           "TRIGGER_FAILURE_REASON_MISSING_REASON_CODE",
           "TRIGGER_FAILURE_REASON_INTERNAL_ERROR"
@@ -23662,7 +23858,7 @@
                 "properties": {
                   "trailingStop": {
                     "$ref": "#/components/schemas/triggers.v1.TrailingStopTrigger",
-                    "description": "SELL market-IOC trailing stop.",
+                    "description": "Trailing stop: a market-IOC sell or a maximum-price IOC buy.",
                     "title": "trailing_stop"
                   }
                 },
@@ -23757,7 +23953,43 @@
       },
       "triggers.v1.TriggerMarketIoc": {
         "additionalProperties": false,
-        "description": "TriggerMarketIoc configures an immediate market child.",
+        "description": "TriggerMarketIoc configures an immediate market child. When the trigger\n fires, the child is protected like a market order: it fills only within its\n slippage cap of the price that fired it. A market child with a cap never\n fills worse than the cap; on a gap past it, it may fill partly or not at all.\n A buy reserves its funds when it is created, at the trigger price raised by\n the cap, and its child never buys above that price.",
+        "oneOf": [
+          {
+            "properties": {
+              "maxSlippageBps": {
+                "description": "Maximum allowed slippage in basis points (1 bp = 0.01%). A sell child\n accepts values below 10000; a 100% cap would leave it no positive price\n to sell at.",
+                "exclusiveMinimum": 0,
+                "format": "int32",
+                "maximum": 10000,
+                "title": "max_slippage_bps",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "maxSlippageBps"
+            ],
+            "title": "max_slippage_bps"
+          },
+          {
+            "properties": {
+              "maxSlippageTicks": {
+                "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                "exclusiveMinimum": 0,
+                "format": "int64",
+                "title": "max_slippage_ticks",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "maxSlippageTicks"
+            ],
+            "title": "max_slippage_ticks"
+          }
+        ],
         "title": "TriggerMarketIoc",
         "type": "object"
       },
@@ -23983,13 +24215,18 @@
             "type": "integer"
           },
           "averageAop30dUsd": {
-            "description": "Rolling 30-day average portfolio value in USD, encoded as a non-negative\n base-10 decimal string without separators or a currency symbol. Omitted\n when complete qualification metrics are unavailable for the assignment.",
+            "description": "Rolling 30-day average portfolio value in USD, encoded as a non-negative\n base-10 decimal string without separators or a currency symbol. Omitted\n unless average_aop_quality.status is COMPLETE.",
             "maxLength": 40,
             "minLength": 1,
             "nullable": true,
             "pattern": "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$",
             "title": "average_aop_30d_usd",
             "type": "string"
+          },
+          "averageAopQuality": {
+            "$ref": "#/components/schemas/vip.v1.VIPMetricQuality",
+            "description": "Completeness of the rolling 30-day average portfolio value. An incomplete\n average portfolio value keeps its previous tier. Omitted when the\n assignment carries no automatic qualification evidence, such as the\n default VIP0 tier of a new account.",
+            "title": "average_aop_quality"
           },
           "effectiveFrom": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -24005,7 +24242,7 @@
           },
           "metricsAsOf": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "UTC cutoff of the rolling metrics used for this assignment. Omitted when\n complete qualification metrics are unavailable.",
+            "description": "UTC cutoff of the rolling metrics used for this assignment. Omitted when\n neither settled_volume_30d_usd nor average_aop_30d_usd is present.",
             "nullable": true,
             "title": "metrics_as_of"
           },
@@ -24031,13 +24268,18 @@
             ]
           },
           "settledVolume30dUsd": {
-            "description": "Rolling 30-day settled spot volume in USD, encoded as a non-negative\n base-10 decimal string without separators or a currency symbol. Omitted\n when complete qualification metrics are unavailable for the assignment.",
+            "description": "Rolling 30-day settled spot volume in USD, encoded as a non-negative\n base-10 decimal string without separators or a currency symbol. When\n settled_volume_quality.status is PRICE_UNAVAILABLE, this is a lower bound\n that excludes executions without an admissible USD reference price.\n Omitted when settled_volume_quality is omitted or its status is\n INCOMPLETE_HISTORY.",
             "maxLength": 40,
             "minLength": 1,
             "nullable": true,
             "pattern": "^(0|[1-9][0-9]{0,20})([.][0-9]{1,18})?$",
             "title": "settled_volume_30d_usd",
             "type": "string"
+          },
+          "settledVolumeQuality": {
+            "$ref": "#/components/schemas/vip.v1.VIPMetricQuality",
+            "description": "Completeness of the rolling 30-day settled spot volume. An incomplete\n volume metric can raise the volume tier when its proven lower bound meets\n a higher threshold, but it never lowers the tier. Omitted when the\n assignment carries no automatic qualification evidence, such as the\n default VIP0 tier of a new account.",
+            "title": "settled_volume_quality"
           },
           "tier": {
             "description": "Effective VIP tier in the inclusive range 0 through 10.",
@@ -24137,6 +24379,41 @@
         },
         "title": "NextVIPTierThresholds",
         "type": "object"
+      },
+      "vip.v1.VIPMetricQuality": {
+        "additionalProperties": false,
+        "description": "VIPMetricQuality explains the completeness of one rolling 30-day\n qualification metric.",
+        "properties": {
+          "incompleteHours": {
+            "description": "Number of hourly buckets in the rolling 720-hour window that are missing\n or incomplete. Zero when status is COMPLETE.",
+            "maximum": 720,
+            "title": "incomplete_hours",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/vip.v1.VIPMetricStatus",
+            "description": "Completeness status of the metric.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "status"
+          }
+        },
+        "title": "VIPMetricQuality",
+        "type": "object"
+      },
+      "vip.v1.VIPMetricStatus": {
+        "description": "VIPMetricStatus describes how complete one rolling 30-day qualification\n metric is.",
+        "enum": [
+          "METRIC_UNSPECIFIED",
+          "COMPLETE",
+          "PRICE_UNAVAILABLE",
+          "INCOMPLETE_HISTORY"
+        ],
+        "title": "VIPMetricStatus",
+        "type": "string"
       },
       "vip.v1.VIPTier": {
         "additionalProperties": false,
@@ -25466,7 +25743,7 @@
     },
     "/marketdata.v1.MarketDataService/GetTrades": {
       "post": {
-        "description": "Retrieve recent public trades for a spot market.\n Results are ordered newest-first and support optional aggressor side,\n inclusive time-range, and opaque keyset pagination filters.",
+        "description": "Retrieve recent public trades for a spot market.\n Results are ordered newest-first and support optional aggressor side,\n inclusive time-range, and opaque keyset pagination filters. With\n after_trade_id, it walks the symbol's trades by trade identifier,\n oldest first and gap-free, to backfill trades missed on a live stream.",
         "operationId": "MarketDataService_GetTrades",
         "parameters": [
           {
@@ -25532,7 +25809,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve recent public trades for a spot market.  Results are ordered newest-first and support optional aggressor side,  inclusive time-range, and opaque keyset pagination filters.",
+        "summary": "Retrieve recent public trades for a spot market.  Results are ordered newest-first and support optional aggressor side,  inclusive time-range, and opaque keyset pagination filters. With  after_trade_id, it walks the symbol's trades by trade identifier,  oldest first and gap-free, to backfill trades missed on a live stream.",
         "tags": [
           "MarketDataService"
         ]
@@ -26285,7 +26562,7 @@
     },
     "/orders.v1.OrdersService/CancelAllOrders": {
       "post": {
-        "description": "Cancel all matching open orders for an account. Supports optional symbol and side filters plus dry-run preview.",
+        "description": "Cancel all matching open orders for an account. Supports optional symbol and side filters plus dry-run preview. Returns up to 200 canceled order IDs, oldest first, with the total count.",
         "operationId": "OrdersService_CancelAllOrders",
         "parameters": [
           {
@@ -27027,6 +27304,81 @@
           }
         },
         "summary": "Get fee totals",
+        "tags": [
+          "QuickSwap Broker",
+          "QuickSwapBrokerService"
+        ]
+      }
+    },
+    "/swap.quickswap.v1.QuickSwapBrokerService/GetQuickSwap": {
+      "post": {
+        "description": "Read the full detail of a QuickSwap belonging to this broker.",
+        "operationId": "QuickSwapBrokerService_GetQuickSwap",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get broker QuickSwap",
         "tags": [
           "QuickSwap Broker",
           "QuickSwapBrokerService"
@@ -35998,7 +36350,7 @@
                       {
                         "properties": {
                           "maxSlippageBps": {
-                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
+                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A buy stop-loss or take-profit with a market\n child accepts 1 to 10000, as at creation. A trailing stop on either\n side, and a sell stop-loss or take-profit, accept 1 to 9999: 10000 is\n rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would\n leave a sell no positive price, and a trailing stop takes none on\n either side.",
                             "format": "int32",
                             "maximum": 10000,
                             "minimum": 0,
@@ -36084,7 +36436,7 @@
                     ]
                   },
                   "limitPriceTicks": {
-                    "description": "Updated limit price in quote units scaled by 1e9 for LIMIT child orders.",
+                    "description": "Not modifiable: a trigger's child limit price is fixed at create. Setting\n this field rejects the whole request with\n ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE (InvalidArgument, HTTP 400)\n and leaves the trigger unchanged; cancel the trigger and create a new one\n to change the child limit price.",
                     "format": "int64",
                     "nullable": true,
                     "title": "limit_price_ticks",
@@ -36137,7 +36489,7 @@
                       {
                         "properties": {
                           "maxSlippageBps": {
-                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A trailing stop that sells accepts values below\n 10000; a 100% cap would leave it no positive price to sell at.",
+                            "description": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A buy stop-loss or take-profit with a market\n child accepts 1 to 10000, as at creation. A trailing stop on either\n side, and a sell stop-loss or take-profit, accept 1 to 9999: 10000 is\n rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would\n leave a sell no positive price, and a trailing stop takes none on\n either side.",
                             "format": "int32",
                             "maximum": 10000,
                             "minimum": 0,
@@ -36223,7 +36575,7 @@
                     ]
                   },
                   "limitPriceTicks": {
-                    "description": "Updated limit price in quote units scaled by 1e9 for LIMIT child orders.",
+                    "description": "Not modifiable: a trigger's child limit price is fixed at create. Setting\n this field rejects the whole request with\n ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE (InvalidArgument, HTTP 400)\n and leaves the trigger unchanged; cancel the trigger and create a new one\n to change the child limit price.",
                     "format": "int64",
                     "nullable": true,
                     "title": "limit_price_ticks",
@@ -36838,7 +37190,7 @@
       "name": "QuickSwap Broker"
     },
     {
-      "description": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n\n A member managing keys or members must also send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
+      "description": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n\n A member managing keys or members must also send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
       "name": "QuickSwapBrokerService"
     },
     {

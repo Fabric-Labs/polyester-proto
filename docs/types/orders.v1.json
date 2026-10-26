@@ -31,7 +31,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "True while both the take-profit and a stop leg (stop-loss or trailing\n stop) are present and linked as one-cancels-the-other. False once either\n leg is removed; a leg canceled because the other fired stays present.",
+            "doc": "True while the parent's legs were placed with oco and both the\n take-profit and a stop leg (stop-loss or trailing stop) are present.\n False once either leg is removed. A leg that ended, including one\n canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -815,7 +815,7 @@
     {
       "name": "orders.v1.BatchReplaceOrdersRequest",
       "kind": "message",
-      "doc": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.",
+      "doc": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.",
       "message": {
         "cel": [
           {
@@ -1255,7 +1255,7 @@
     {
       "name": "orders.v1.CancelAllOrdersResponse",
       "kind": "message",
-      "doc": "CancelAllOrdersResponse returns the result of a cancel-all operation.",
+      "doc": "CancelAllOrdersResponse returns the result of a cancel-all operation.\n The response confirms that cancellation was requested for every matching\n order; each order's final state is reported on the order update stream and\n read paths.",
       "message": {
         "fields": [
           {
@@ -1314,6 +1314,36 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "cancelled_orders",
+            "jsonName": "cancelledOrders",
+            "number": 7,
+            "doc": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within the replay window returns\n the same list.",
+            "repeated": true,
+            "protoRef": "orders.v1.CancelledOrder",
+            "validate": {
+              "repeated": {
+                "maxItems": 200
+              }
+            }
+          },
+          {
+            "name": "total_cancelled",
+            "jsonName": "totalCancelled",
+            "number": 8,
+            "doc": "Number of orders whose cancellation was requested, including those not\n listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when\n `dry_run` is set.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "truncated",
+            "jsonName": "truncated",
+            "number": 9,
+            "doc": "True when more orders were canceled than `cancelled_orders` lists.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -1436,6 +1466,32 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.CancelledOrder",
+      "kind": "message",
+      "doc": "CancelledOrder identifies one order whose cancellation a cancel-all\n requested.",
+      "message": {
+        "fields": [
+          {
+            "name": "order_id",
+            "jsonName": "orderId",
+            "number": 1,
+            "doc": "Order ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "client_order_id",
+            "jsonName": "clientOrderId",
+            "number": 2,
+            "doc": "The order's client order ID; empty when the order has none.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -1606,7 +1662,7 @@
           {
             "name": "ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID",
             "number": 9,
-            "doc": "Client order ID is already in use on this account, by an open order or by\n an order that ended recently; an ended order keeps its client order ID\n reserved for at least 15 minutes. Reuse returns this code even with the\n same payload. Use GetOrder to reconcile, then retry with a new client\n order ID."
+            "doc": "Client order ID is already in use on this account, by an open order or by\n an order that ended recently; an ended order keeps its client order ID\n reserved for at least 60 seconds. Reuse returns this code even with the\n same payload. Use GetOrder to reconcile, then retry with a new client\n order ID."
           },
           {
             "name": "ERROR_CODE_UNAVAILABLE",
@@ -1936,7 +1992,7 @@
           {
             "name": "ERROR_CODE_CHILD_QTY_RAISE_NOT_ALLOWED",
             "number": 81,
-            "doc": "The quantity of a trigger's child order, a TWAP slice or a ladder order\n can't be raised above its planned quantity. Nothing changed."
+            "doc": "The quantity of a trigger's child order or a ladder order can't be raised\n above its planned quantity. Nothing changed."
           },
           {
             "name": "ERROR_CODE_ATTACHED_RISK_NOT_SUPPORTED",
@@ -2176,7 +2232,7 @@
           {
             "name": "ERROR_CODE_TRIGGER_BUY_REQUIRES_LIMIT",
             "number": 244,
-            "doc": "A buy trigger's child order is not a LIMIT order; its funds are reserved at\n the limit price."
+            "doc": "A buy trailing stop's child order is not a LIMIT order with a maximum\n price; its funds are reserved at that price."
           },
           {
             "name": "ERROR_CODE_ACCOUNT_ROUTING_INVALID",
@@ -2276,12 +2332,12 @@
           {
             "name": "ERROR_CODE_TRAILING_SIDE_NOT_SUPPORTED",
             "number": 264,
-            "doc": "A standalone trailing stop must sell; a standalone buy trailing stop is not\n supported. Attached trailing stops take the side opposite their parent."
+            "doc": "A trailing stop's side is not supported. Trailing stops accept either\n side, so this code is not currently returned."
           },
           {
             "name": "ERROR_CODE_TRAILING_CHILD_NOT_MARKET",
             "number": 265,
-            "doc": "A trailing stop's child order must be a MARKET order."
+            "doc": "A trailing stop that sells must have a MARKET child order."
           },
           {
             "name": "ERROR_CODE_TWAP_DURATION_INVALID",
@@ -2364,6 +2420,11 @@
             "doc": "The broker's fee account isn't available yet; retry shortly."
           },
           {
+            "name": "ERROR_CODE_QUICKSWAP_ACCOUNT_OWNER_UNKNOWN",
+            "number": 301,
+            "doc": "The QuickSwap account is not ready yet; no order was placed. Retry shortly."
+          },
+          {
             "name": "ERROR_CODE_QUICKSWAP_DISABLED",
             "number": 282,
             "doc": "QuickSwap isn't enabled for this account's trading."
@@ -2432,6 +2493,31 @@
             "name": "ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED",
             "number": 295,
             "doc": "The account already has the most ladder orders one account may have on\n this market. Nothing changed; retry once one of them ends."
+          },
+          {
+            "name": "ERROR_CODE_CHILD_QTY_EXCEEDS_REMAINING",
+            "number": 296,
+            "doc": "The new quantity of a TWAP order's slice would leave more than the TWAP's\n remaining quantity. Nothing changed; a slice can be raised up to what the\n TWAP still has to execute."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN",
+            "number": 297,
+            "doc": "The order cancellation was sent but not confirmed in time. Its outcome is\n unknown and it may still apply; read the order before retrying. For a batch\n cancellation, every item's outcome is unknown; read them back. For a cancel\n all, some or all of the matching orders may be canceled; read open orders.\n For a cancel all after heartbeat, the switch may or may not have been armed,\n refreshed or disabled; send the heartbeat again."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN",
+            "number": 298,
+            "doc": "The order modification was sent but not confirmed in time. Its outcome is\n unknown and it may still apply; read the order before retrying. For a batch\n replacement, every item's outcome is unknown; read them back."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_REPAIRING",
+            "number": 299,
+            "doc": "This order is being canceled while the account's balances are brought back\n in line, so it can't be changed. Nothing changed; cancels still work, and\n the account's other orders can still be changed."
+          },
+          {
+            "name": "ERROR_CODE_ACCOUNT_REPAIRING",
+            "number": 300,
+            "doc": "This account's orders are being canceled while its balances are brought\n back in line, so new orders, changes and trigger orders are paused for a\n short time. Nothing changed; cancels still work. Try again shortly."
           }
         ]
       }
@@ -2522,7 +2608,7 @@
     {
       "name": "orders.v1.GetBatchReplaceStatusRequest",
       "kind": "message",
-      "doc": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.",
+      "doc": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.\n Batch admission replay lasts 60 seconds from acceptance. If status is\n unavailable, reconcile the individual orders; absence does not prove rejection.",
       "message": {
         "fields": [
           {
@@ -3637,7 +3723,7 @@
             "name": "request_id",
             "jsonName": "requestId",
             "number": 4,
-            "doc": "Idempotency key (required).",
+            "doc": "Idempotency key (required). Outstanding modifications retain this key;\n identical retries replay the final result for 60 seconds after the answer.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -4722,7 +4808,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an\n order. These arm after the parent order fills and fire when conditions are\n met. If the parent order is canceled before any fill, attached risk controls\n are discarded.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest trade and, if its\n condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.",
       "message": {
         "cel": [
           {
@@ -4768,7 +4854,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "If true, take-profit and the configured stop leg (stop-loss or trailing-stop)\n form an OCO pair: when one fires, the other is canceled.\n Default is false (no mutual cancellation).",
+            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted or canceled. Default is false.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -4985,7 +5071,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 7,
-            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%). A trailing stop\n that sells, which is the case when the parent order buys, accepts values\n below 10000; a 100% cap would leave it no positive price to sell at.",
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999\n whichever side the exit trades. An order whose trailing stop sets 10000\n is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap\n would leave an exit that sells no positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
