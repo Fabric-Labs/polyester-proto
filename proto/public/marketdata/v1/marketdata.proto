@@ -22,20 +22,29 @@ enum SideFilter {
 
 // Timeframe represents an OHLCV candle bucket.
 //
-// Most values are fixed-duration buckets. `MONTH_1` is calendar-based (UTC
-// month boundaries).
+// All buckets are in UTC; daylight saving time never shifts a boundary.
+// Fixed-duration buckets start at whole multiples of their duration since
+// 1970-01-01T00:00:00Z, so every bucket up to 1 day starts on a UTC midnight
+// boundary and `DAY_3` buckets start every third day counted from
+// 1970-01-01. `WEEK_1` buckets start on Monday 00:00 UTC. `MONTH_1` is
+// calendar-based (UTC month boundaries). Values are listed shortest first.
 enum Timeframe {
   TIMEFRAME_UNSPECIFIED = 0;
   SEC_1 = 1; // 1 second
   MIN_1 = 2; // 1 minute
+  MIN_3 = 12; // 3 minutes
   MIN_5 = 3; // 5 minutes
   MIN_15 = 4; // 15 minutes
   MIN_30 = 5; // 30 minutes
   HOUR_1 = 6; // 1 hour
+  HOUR_2 = 13; // 2 hours
   HOUR_4 = 7; // 4 hours
-  DAY_1 = 8; // 1 day
+  HOUR_6 = 14; // 6 hours
+  HOUR_8 = 15; // 8 hours
   HOUR_12 = 9; // 12 hours
-  WEEK_1 = 10; // 1 week
+  DAY_1 = 8; // 1 day
+  DAY_3 = 16; // 3 days, counted from 1970-01-01 UTC
+  WEEK_1 = 10; // 1 week, starting Monday 00:00 UTC
   MONTH_1 = 11; // 1 month (calendar month, UTC)
 }
 
@@ -49,6 +58,10 @@ enum Timeframe {
 // Results are ordered newest-first by execution timestamp, with match_id as a
 // tie-breaker. When both start_time and end_time are set, both bounds are
 // inclusive.
+//
+// With after_trade_id set, the request instead walks the symbol's trades by
+// trade identifier (match_id), oldest first and gap-free, to backfill trades
+// missed on a live stream: see after_trade_id.
 message GetTradesRequest {
   option (buf.validate.message).cel = {
     id: "get_trades.time_range_valid"
@@ -59,6 +72,11 @@ message GetTradesRequest {
     id: "get_trades.time_not_future"
     message: "start_time and end_time must not be more than 5 minutes in the future"
     expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_trades.after_trade_id_exclusive"
+    message: "after_trade_id cannot be combined with start_time, end_time, side or page_token"
+    expression: "!has(this.after_trade_id) || (!has(this.start_time) && !has(this.end_time) && this.side == 0 && this.page_token == '')"
   };
 
   // Stable numeric pair id from GetSpotConfig.
@@ -82,6 +100,16 @@ message GetTradesRequest {
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
   // bound to symbol, time bounds, side filter, and newest-first sort order.
   string page_token = 6 [(buf.validate.field).string.max_len = 512];
+
+  // Exclusive trade-identifier cursor for gap-free backfill. When set, the
+  // results are the symbol's trades with match_id greater than
+  // after_trade_id, ascending by match_id, up to limit, and only trades at or
+  // below the response's complete_through_trade_id: every page is gap-free.
+  // Trade identifiers order trades across epochs too, so a walk crosses
+  // epoch ends without a gap. Pass 0 to start from the symbol's first trade,
+  // then the response's next_after_trade_id. Cannot be combined with
+  // start_time, end_time, side or page_token.
+  optional uint64 after_trade_id = 7;
 }
 
 // MarketTrade is one public trade print represented with scaled integers.
@@ -122,14 +150,52 @@ message MarketTradeBatch {
   repeated MarketTrade events = 1;
 }
 
+// TradeEpochEnd reports where one epoch of a symbol's trade identifiers
+// ended. Trade identifiers of epoch e are greater than (e-1) * 2^40 and less
+// than e * 2^40; a later epoch's identifiers are greater than every earlier
+// epoch's.
+message TradeEpochEnd {
+  // The epoch.
+  uint64 epoch = 1;
+
+  // match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch
+  // ended without trades.
+  uint64 last_trade_id = 2;
+}
+
 // GetTradesResponse contains public trades for one spot market.
 message GetTradesResponse {
   // Trades ordered newest-first by execution timestamp, with match_id as a
-  // tie-breaker.
+  // tie-breaker; with after_trade_id, ascending by match_id.
   repeated MarketTrade trades = 1;
 
-  // Opaque cursor for the next page. Empty when no more results exist.
+  // Opaque cursor for the next page. Empty when no more results exist, and
+  // always empty with after_trade_id.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+
+  // Set only with after_trade_id; 0 otherwise. Every trade of the symbol
+  // with match_id at or below this value exists and is returned by this
+  // method. Identifiers in that range that no trade has, the rest of an
+  // ended epoch and every identifier below a later epoch's first, are
+  // covered too. Newer trades may exist that are not available here yet; it
+  // only grows.
+  uint64 complete_through_trade_id = 3;
+
+  // Set only with after_trade_id; 0 otherwise. The after_trade_id of the
+  // next call; it never moves backwards. On a full page (limit trades) it is
+  // the last trade's match_id. Otherwise it is the greater of after_trade_id
+  // and complete_through_trade_id, so a walk progresses across epoch ends
+  // and empty epochs without trades to carry it. When it equals the
+  // request's after_trade_id, nothing newer is available yet: retry later
+  // with backoff.
+  uint64 next_after_trade_id = 4;
+
+  // Set only with after_trade_id. Every epoch whose last trade (or, for an
+  // epoch without trades, its start) lies between after_trade_id and
+  // next_after_trade_id, both inclusive, ascending by epoch. A page that
+  // ends exactly on an epoch's last trade is followed by a page that still
+  // reports that epoch's end.
+  repeated TradeEpochEnd epoch_ends = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,8 +320,8 @@ message CandlePoint {
   // Traded base-asset quantity scaled by the base asset's
   // market_data_volume_scale from GetSpotConfig.
   int64 volume = 6;
-  // True only for WebSocket terminal updates of a closed bucket.
-  // Historical API rows and current open-candle rows set this to false.
+  // True for a closed candle bucket, including historical API rows and
+  // WebSocket terminal updates. False only while the bucket is still open.
   bool is_closed = 7;
   // Exact traded quote-asset volume as a human-readable decimal string.
   // This is sum(execution price × execution quantity), not close × base volume.
@@ -493,7 +559,9 @@ message GetSpotConfigResponse {
 service MarketDataService {
   // Retrieve recent public trades for a spot market.
   // Results are ordered newest-first and support optional aggressor side,
-  // inclusive time-range, and opaque keyset pagination filters.
+  // inclusive time-range, and opaque keyset pagination filters. With
+  // after_trade_id, it walks the symbol's trades by trade identifier,
+  // oldest first and gap-free, to backfill trades missed on a live stream.
   rpc GetTrades(GetTradesRequest) returns (GetTradesResponse) {
     option (polyester.api.public) = true;
   }

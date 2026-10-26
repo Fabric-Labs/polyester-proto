@@ -955,7 +955,7 @@
             "name": "min_native_gas_limit",
             "jsonName": "minNativeGasLimit",
             "number": 8,
-            "doc": "A native-coin deposit (for example ETH) needs at least this gas limit, in\n gas units; a plain 21000-gas transfer is not enough and fails without\n depositing. Unused gas is refunded, so a higher limit is safe. Zero for\n token deposits and non-EVM networks.",
+            "doc": "Recommended gas limit, in gas units, for native-coin deposits on EVM\n networks: 250000. Polyester does not enforce this limit. On some networks,\n depositing to an address that has never received funds requires far more\n than 21000 gas. If the limit is too low, the transaction fails on chain\n without depositing funds, and the network fee is still charged. Use at\n least the recommended limit. Unused gas is not charged. Zero for token\n deposits and non-EVM networks.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1117,7 +1117,7 @@
           {
             "name": "ADDRESS_CONFLICT",
             "number": 34,
-            "doc": "The QuickSwap (swap_id in the error) cannot be issued a deposit address\n and never gets one, so nothing can be deposited to it. Create a new\n QuickSwap with a new idempotency key, and report the swap_id to Polyester\n broker support."
+            "doc": "The QuickSwap (swap_id in the error) cannot be issued a deposit address\n and never gets one, so nothing can be deposited to it; it is EXPIRED with\n reason DEPOSIT_ADDRESS_CONFLICT. Create a new QuickSwap with a new\n idempotency key, and report the swap_id to Polyester broker support."
           }
         ]
       }
@@ -1234,7 +1234,7 @@
             "name": "completed_slices",
             "jsonName": "completedSlices",
             "number": 5,
-            "doc": "Completed slices: a market execution's one slice completes when\n execution finishes. Zero for a bridge.",
+            "doc": "Completed slices: a market execution's one slice completes when\n execution finishes; a TWAP slice completes once it has traded and is\n over, so a slot that traded nothing or was skipped never completes.\n Zero for a bridge.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1243,7 +1243,7 @@
             "name": "total_slices",
             "jsonName": "totalSlices",
             "number": 6,
-            "doc": "Planned slices: a market execution has one once it is planned. Zero\n until then, and for a bridge, which trades nothing.",
+            "doc": "Planned slices: a market execution has one once it is planned; a TWAP\n has its slice count, duration_ms over slice_interval_ms rounded up. Zero\n until then, and for a bridge, which trades nothing.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -2412,7 +2412,7 @@
             "name": "is_terminal",
             "jsonName": "isTerminal",
             "number": 5,
-            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows. Read it again if the end\n user reports such a deposit or needs the final retirement time.",
+            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY. Returns\n made directly for such deposits are not yet reported in\n withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end\n user reports such a deposit or needs the final retirement time.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -2491,7 +2491,7 @@
             "name": "deposit_instructions",
             "jsonName": "depositInstructions",
             "number": 15,
-            "doc": "Where and until when to deposit; absent while ALLOCATING.",
+            "doc": "Where and until when to deposit; absent while ALLOCATING and on a\n QuickSwap that never got an address (EXPIRED with\n DEPOSIT_ADDRESS_CONFLICT).",
             "protoRef": "swap.quickswap.v1.DepositInstructions"
           },
           {
@@ -2571,7 +2571,7 @@
             "name": "version",
             "jsonName": "version",
             "number": 26,
-            "doc": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued\n (AWAITING_DEPOSIT); every later change increments it.",
+            "doc": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT)\n or allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT);\n every later change increments it.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -2599,6 +2599,58 @@
             "doc": "Broker and affiliate fees charged so far, as settled: one entry per fee\n kind, credited vault and asset, in kind, then account_id, then asset_id\n order. Grows while the QuickSwap executes or pays out a bridge.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ChargedFee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapRequest",
+      "kind": "message",
+      "doc": "QuickSwapBrokerServiceGetQuickSwapRequest reads one QuickSwap belonging to this broker.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 2,
+            "doc": "Public QuickSwap ID. Another broker's swap is indistinguishable from an\n unknown ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapResponse",
+      "kind": "message",
+      "doc": "QuickSwapBrokerServiceGetQuickSwapResponse carries the broker's full swap detail.",
+      "message": {
+        "fields": [
+          {
+            "name": "quick_swap",
+            "jsonName": "quickSwap",
+            "number": 1,
+            "doc": "The broker-owned QuickSwap, including its quote, addresses, progress and fees.",
+            "protoRef": "swap.quickswap.v1.QuickSwap"
           }
         ]
       }
@@ -2642,7 +2694,7 @@
             "name": "min_deposit_amount",
             "jsonName": "minDepositAmount",
             "number": 5,
-            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes.",
+            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes. For a TWAP it is the slice count times the smallest deposit one\n slice takes, and at least a market execution's minimum.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -2760,6 +2812,31 @@
             "name": "REFUND_BELOW_MINIMUM",
             "number": 21,
             "doc": "Refund not possible: an amount left to refund or return was below the\n withdrawal minimum of its asset and network, so no withdrawal was made\n for it. Its withdrawal is NOT_SENT with the amount in unsent_amount.\n Other withdrawals are unaffected."
+          },
+          {
+            "name": "DEPOSIT_ADDRESS_CONFLICT",
+            "number": 22,
+            "doc": "The QuickSwap could not be issued a deposit address and never gets one:\n it is EXPIRED without deposit_instructions, and nothing can be deposited\n to it. Create a new QuickSwap with a new idempotency key, and report the\n swap_id to Polyester broker support."
+          },
+          {
+            "name": "DEPOSIT_ADDRESS_ALREADY_USED",
+            "number": 23,
+            "doc": "The address already accepted its one eligible deposit; this deposit is\n returned to return_address and never executes."
+          },
+          {
+            "name": "DEPOSIT_ADDRESS_RETIRED",
+            "number": 24,
+            "doc": "The address was retired; this observed deposit is returned and never executes."
+          },
+          {
+            "name": "DEPOSIT_ADDRESS_NOT_ISSUED",
+            "number": 25,
+            "doc": "The address had not been issued when this deposit was observed; it never executes."
+          },
+          {
+            "name": "INTERMEDIATE_BELOW_MINIMUM",
+            "number": 26,
+            "doc": "On a two-leg route, intermediate funds were below the smallest order the\n second leg's market accepts, so they could not be converted to the\n destination asset; they are refunded to refund_address. Shown on the\n payout statuses that follow."
           }
         ]
       }
@@ -2767,7 +2844,7 @@
     {
       "name": "swap.quickswap.v1.QuickSwapStatus",
       "kind": "enum",
-      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. HELD can\n be entered from any non-terminal status and is not terminal. The terminal\n statuses are COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status\n never changes. Accept status values added later; is_terminal is\n authoritative.",
+      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from\n any non-terminal status and is not terminal. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status never\n changes. Accept status values added later; is_terminal is authoritative.",
       "enum": {
         "values": [
           {
@@ -2843,7 +2920,7 @@
           {
             "name": "EXPIRED",
             "number": 16,
-            "doc": "Terminal: the funding window ended without an eligible deposit."
+            "doc": "Terminal: the funding window ended without an eligible deposit\n (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address\n (DEPOSIT_ADDRESS_CONFLICT)."
           }
         ]
       }
@@ -3672,7 +3749,7 @@
     {
       "name": "swap.quickswap.v1.TwapExecution",
       "kind": "message",
-      "doc": "TwapExecution spreads execution evenly over a duration.",
+      "doc": "TwapExecution spreads execution evenly over a duration, one slice per\n slot. Slot k starts k slice intervals after execution starts. Each slice\n trades what is left of the credited deposit over the slots left, and is\n protected by the quote's min_rate on what it trades. A slice is sent only\n within its slot: a slot missed is skipped, never sent late. On a two-leg\n route, each slice's second leg converts that slice's intermediate funds\n before the next slice. Intermediate funds below the smallest order the\n second leg's market accepts do not end the TWAP: they are added to the\n next slice's conversion, and what is still unconverted when execution\n ends is refunded to refund_address (INTERMEDIATE_BELOW_MINIMUM). Only the\n second leg's market closing ends a TWAP early. A TWAP needs a larger\n deposit than a market execution, since every slice must be a valid order\n (see QuickSwapQuote.min_deposit_amount). A bridge takes market execution\n only.",
       "message": {
         "cel": [
           {
