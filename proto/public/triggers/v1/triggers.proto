@@ -98,6 +98,23 @@ enum TriggerCancelReason {
   // no child order was canceled by the user, and the first child order to be
   // canceled was canceled by self-trade prevention.
   TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION = 4;
+  // Ended by the exchange while it recovered your account. The account's
+  // open orders on the market were canceled at the same time; place new
+  // orders and triggers once the account trades again.
+  TRIGGER_CANCEL_REASON_ACCOUNT_REPAIR = 8;
+  // The market was disabled: the exchange ended the stop-loss, take-profit or
+  // trailing stop and released its reserved funds. The market's open orders
+  // were canceled at the same time.
+  TRIGGER_CANCEL_REASON_PAIR_DRAIN_TRIGGER = 9;
+  // The market was disabled: the exchange ended the TWAP and canceled its
+  // resting slice, releasing its reserved funds.
+  TRIGGER_CANCEL_REASON_PAIR_DRAIN_TWAP = 10;
+  // The market was disabled: the exchange ended the ladder and canceled its
+  // resting levels, releasing their reserved funds.
+  TRIGGER_CANCEL_REASON_PAIR_DRAIN_LADDER = 11;
+  // The market was disabled: the exchange ended the order's attached
+  // take-profit or stop-loss and canceled the order and its working exit.
+  TRIGGER_CANCEL_REASON_PAIR_DRAIN_ATTACHED_LEG = 12;
   // The terminal state did not contain a cancellation reason.
   TRIGGER_CANCEL_REASON_MISSING_REASON_CODE = 998;
   // An internal invariant or processing failure canceled the trigger.
@@ -211,8 +228,8 @@ enum TriggerFailureReason {
   // The trigger's quantity was not valid.
   TRIGGER_FAILURE_REASON_QTY_INVALID = 103;
   // The trigger's limit price was not valid, including a buy trailing stop's
-  // maximum price below the last trade price when it was placed without an
-  // activation price.
+  // maximum price below the price it watches (the last traded price or the
+  // index price) when it was placed without an activation price.
   TRIGGER_FAILURE_REASON_LIMIT_PRICE_INVALID = 104;
   // The TWAP interval was not valid.
   TRIGGER_FAILURE_REASON_TWAP_INTERVAL_INVALID = 105;
@@ -296,6 +313,14 @@ enum TriggerFailureReason {
   TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT = 235;
   // The market's order limits weren't set yet when the trigger fired.
   TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE = 238;
+  // The trigger watches the index price and the market has no index price.
+  TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE = 241;
+  // The trigger price was already reached by the price the trigger watches
+  // when the trigger was submitted (at or past it), so the trigger would have
+  // fired at once. It never armed and sent no order; its reserved funds were
+  // released. A price that reaches the trigger price after submission fires
+  // the trigger normally.
+  TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 244;
   // The terminal state did not contain a failure reason.
   TRIGGER_FAILURE_REASON_MISSING_REASON_CODE = 998;
   // An internal invariant or processing failure caused the trigger to fail.
@@ -390,6 +415,13 @@ message ConditionalTrigger {
   ];
   // Child execution.
   ConditionalChildExecution child = 3 [(buf.validate.field).required = true];
+  // Price the trigger watches. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; a market
+  // without an index price fails the trigger with
+  // TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not
+  // supported. Fixed at create: to change it, cancel the trigger and create a
+  // new one.
+  orders.v1.TriggerPriceSource trigger_price_source = 4 [(buf.validate.field).enum.defined_only = true];
 }
 
 // TrailingStopTrigger configures a spot trailing-stop strategy. A trailing
@@ -442,13 +474,21 @@ message TrailingStopTrigger {
   // Maximum price of a trailing stop that buys, in quote units scaled by 1e9:
   // the most its child pays per unit. Required when `side` is BUY and set
   // aside for it with the child's fee; at least the activation price, or at
-  // least the last trade price when no activation price is set. A rise that
-  // fires above it still fires, and the child fills only at or below it. Must
-  // be unset when `side` is SELL. Fixed at create.
+  // least the price it watches (trigger_price_source) when no activation price
+  // is set. A rise that fires above it still fires, and the child fills only
+  // at or below it. Must be unset when `side` is SELL. Fixed at create.
   int64 limit_price_ticks = 7 [
     (buf.validate.field).int64.gt = 0,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
+  // Price the trailing stop watches: its activation, its peak or trough and
+  // its fire all follow this price. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; a market
+  // without an index price fails the trigger with
+  // TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not
+  // supported. Fixed at create: to change it, cancel the trigger and create a
+  // new one.
+  orders.v1.TriggerPriceSource trigger_price_source = 8 [(buf.validate.field).enum.defined_only = true];
 }
 
 // TwapMarketIoc configures server-priced market-IOC slices.
@@ -479,8 +519,8 @@ message TwapLimitGtc {
 message TwapTrigger {
   option (buf.validate.message).cel = {
     id: "twap_trigger.window"
-    message: "slice_interval_ms must be between 100 and duration_ms"
-    expression: "this.duration_ms >= 1000 && this.slice_interval_ms >= 100 && this.slice_interval_ms <= this.duration_ms"
+    message: "slice_interval_ms must not exceed duration_ms"
+    expression: "this.slice_interval_ms <= this.duration_ms"
   };
 
   // Child side.
@@ -490,10 +530,11 @@ message TwapTrigger {
       not_in: [0]
     }
   ];
-  // Total execution duration in milliseconds.
-  int64 duration_ms = 2;
-  // Interval between slices in milliseconds.
-  int64 slice_interval_ms = 3;
+  // Total execution duration in milliseconds, at least 1000.
+  int64 duration_ms = 2 [(buf.validate.field).int64.gte = 1000];
+  // Interval between slices in milliseconds, at least 100 and at most
+  // duration_ms.
+  int64 slice_interval_ms = 3 [(buf.validate.field).int64.gte = 100];
   // Proven slice execution behavior.
   oneof execution {
     option (buf.validate.oneof).required = true;
@@ -547,10 +588,18 @@ message TriggerIntent {
   ];
   // Fee asset for BUY children. SELL children must use QUOTE.
   orders.v1.FeeAsset fee_asset = 3 [(buf.validate.field).enum.defined_only = true];
-  // Child self-trade prevention mode. Defaults to EXPIRE_MAKER.
+  // Child self-trade prevention mode against orders of the same root account,
+  // including all its subaccounts. Defaults to EXPIRE_MAKER.
   orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 4 [(buf.validate.field).enum.defined_only = true];
-  // Client-provided trigger ID for idempotency. Retrying an accepted create
-  // with the identical intent returns the same trigger. After a create fails
+  // Client-provided trigger ID for idempotency, unique per sub-account, pair
+  // and trigger type. While the trigger is active and for 60 seconds after it
+  // reaches a terminal status, retrying the create with the identical intent
+  // returns the same trigger, and a different intent with the same ID returns
+  // CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is
+  // free: a create that uses it is a new intent and creates a new trigger. To
+  // learn the outcome of an earlier create after that window, read the
+  // triggers with ListTriggers, which return each trigger's
+  // client_trigger_id, instead of retrying the create. After a create fails
   // with INTERNAL_ERROR, the ID may already be used: a retry then returns
   // CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.
   // At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected
@@ -577,6 +626,10 @@ message TriggerIntent {
 }
 
 // CreateTriggerRequest submits one standalone trigger intent for admission.
+// A create sent but not confirmed in time fails with
+// TRIGGER_CREATE_OUTCOME_UNKNOWN: the trigger may have been created, so read
+// the triggers for its client_trigger_id before retrying. UNAVAILABLE means
+// the trigger was not created.
 message CreateTriggerRequest {
   // Target sub-account. When omitted, uses the caller's root account.
   optional fixed64 subaccount_id = 1;
@@ -773,12 +826,12 @@ message ModifyTriggerRequest {
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional sub-account for authorization.
   optional fixed64 subaccount_id = 2;
-  // Trading symbol numeric identifier. Required for API-key market policy and
-  // must match the stored trigger.
-  uint32 symbol_id = 3 [
-    (buf.validate.field).uint32.gt = 0,
-    (google.api.field_behavior) = REQUIRED
-  ];
+  // Optional trading symbol numeric identifier. Zero or omitted means the
+  // trigger's own pair. When set, it must be the trigger's pair: another pair
+  // is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger
+  // unchanged. An API key limited to specific markets must name the trigger's
+  // pair.
+  uint32 symbol_id = 3;
 
   // Patch fields for safe price, trailing-distance, and slippage edits.
   // For stop/take-profit:
@@ -867,12 +920,12 @@ message ResumeTriggerRequest {
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional sub-account for authorization.
   optional fixed64 subaccount_id = 2;
-  // Trading symbol numeric identifier. Required for API-key market policy and
-  // must match the stored trigger.
-  uint32 symbol_id = 3 [
-    (buf.validate.field).uint32.gt = 0,
-    (google.api.field_behavior) = REQUIRED
-  ];
+  // Optional trading symbol numeric identifier. Zero or omitted means the
+  // trigger's own pair. When set, it must be the trigger's pair: another pair
+  // is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger
+  // unchanged. An API key limited to specific markets must name the trigger's
+  // pair.
+  uint32 symbol_id = 3;
 }
 
 // ResumeTriggerResponse returns the trigger status after resuming.

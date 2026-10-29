@@ -43,7 +43,7 @@
             "description": "Trigger to admit.",
             "properties": {
               "clientTriggerId": {
-                "description": "Client-provided trigger ID for idempotency. Retrying an accepted create with the identical intent returns the same trigger. After a create fails with INTERNAL_ERROR, the ID may already be used: a retry then returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID. At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected with INVALID_ARGUMENT.",
+                "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair and trigger type. While the trigger is active and for 60 seconds after it reaches a terminal status, retrying the create with the identical intent returns the same trigger, and a different intent with the same ID returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is free: a create that uses it is a new intent and creates a new trigger. To learn the outcome of an earlier create after that window, read the triggers with ListTriggers, which return each trigger's client_trigger_id, instead of retrying the create. After a create fails with INTERNAL_ERROR, the ID may already be used: a retry then returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID. At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected with INVALID_ARGUMENT.",
                 "type": "string"
               },
               "feeAsset": {
@@ -106,7 +106,7 @@
                     "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.SelfTradePreventionMode"
                   }
                 ],
-                "description": "Child self-trade prevention mode. Defaults to EXPIRE_MAKER."
+                "description": "Child self-trade prevention mode against orders of the same root account, including all its subaccounts. Defaults to EXPIRE_MAKER."
               },
               "stopLoss": {
                 "additionalProperties": false,
@@ -200,6 +200,14 @@
                     "description": "Trigger threshold in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
@@ -304,6 +312,14 @@
                     "description": "Trigger threshold in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
@@ -322,7 +338,7 @@
                     "type": "string"
                   },
                   "limitPrice": {
-                    "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the last trade price when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
+                    "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the price it watches (trigger_price_source) when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
                   },
@@ -344,15 +360,23 @@
                     ],
                     "description": "Child order side."
                   },
+                  "trailingDistance": {
+                    "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
                   "trailingDistanceBps": {
                     "description": "Distance in basis points (1 bp = 0.01%).",
                     "format": "int32",
                     "type": "integer"
                   },
-                  "trailingDistanceTicks": {
-                    "description": "Distance as a price delta in 1e-9 quote-unit ticks.",
-                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                    "type": "string"
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trailing stop watches: its activation, its peak or trough and its fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
@@ -365,7 +389,7 @@
                 "description": "TWAP strategy.",
                 "properties": {
                   "durationMs": {
-                    "description": "Total execution duration in milliseconds.",
+                    "description": "Total execution duration in milliseconds, at least 1000.",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -411,7 +435,7 @@
                     "description": "Child side."
                   },
                   "sliceIntervalMs": {
-                    "description": "Interval between slices in milliseconds.",
+                    "description": "Interval between slices in milliseconds, at least 100 and at most duration_ms.",
                     "format": "int64",
                     "type": "integer"
                   }
@@ -757,11 +781,20 @@
                     "description": "Trigger threshold in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
                   "side",
-                  "triggerPrice"
+                  "triggerPrice",
+                  "triggerPriceSource"
                 ],
                 "type": "object"
               },
@@ -869,11 +902,20 @@
                     "description": "Trigger threshold in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
                   "side",
-                  "triggerPrice"
+                  "triggerPrice",
+                  "triggerPriceSource"
                 ],
                 "type": "object"
               },
@@ -901,15 +943,15 @@
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
                   },
+                  "trailingDistance": {
+                    "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
                   "trailingDistanceBps": {
                     "description": "Trailing distance in basis points (1 bp = 0.01%).",
                     "format": "int32",
                     "type": "integer"
-                  },
-                  "trailingDistanceTicks": {
-                    "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                    "type": "string"
                   },
                   "triggerDirection": {
                     "allOf": [
@@ -943,8 +985,8 @@
                   "maxSlippageBps",
                   "maxSlippageTicks",
                   "peakPrice",
+                  "trailingDistance",
                   "trailingDistanceBps",
-                  "trailingDistanceTicks",
                   "triggerDirection",
                   "triggerPriceSource",
                   "troughPrice"
@@ -961,7 +1003,7 @@
                     "type": "string"
                   },
                   "limitPrice": {
-                    "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the last trade price when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
+                    "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the price it watches (trigger_price_source) when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
                   },
@@ -983,15 +1025,23 @@
                     ],
                     "description": "Child order side."
                   },
+                  "trailingDistance": {
+                    "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
                   "trailingDistanceBps": {
                     "description": "Distance in basis points (1 bp = 0.01%).",
                     "format": "int32",
                     "type": "integer"
                   },
-                  "trailingDistanceTicks": {
-                    "description": "Distance as a price delta in 1e-9 quote-unit ticks.",
-                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                    "type": "string"
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trailing stop watches: its activation, its peak or trough and its fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                   }
                 },
                 "required": [
@@ -1000,8 +1050,9 @@
                   "maxSlippageBps",
                   "maxSlippageTicks",
                   "side",
+                  "trailingDistance",
                   "trailingDistanceBps",
-                  "trailingDistanceTicks"
+                  "triggerPriceSource"
                 ],
                 "type": "object"
               },
@@ -1015,7 +1066,7 @@
                 "description": "TWAP configuration.",
                 "properties": {
                   "durationMs": {
-                    "description": "Total execution duration in milliseconds.",
+                    "description": "Total execution duration in milliseconds, at least 1000.",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -1064,7 +1115,7 @@
                     "description": "Child side."
                   },
                   "sliceIntervalMs": {
-                    "description": "Interval between slices in milliseconds.",
+                    "description": "Interval between slices in milliseconds, at least 100 and at most duration_ms.",
                     "format": "int64",
                     "type": "integer"
                   }
@@ -1527,11 +1578,20 @@
                       "description": "Trigger threshold in quote units scaled by 1e9.",
                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                       "type": "string"
+                    },
+                    "triggerPriceSource": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                        }
+                      ],
+                      "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                     }
                   },
                   "required": [
                     "side",
-                    "triggerPrice"
+                    "triggerPrice",
+                    "triggerPriceSource"
                   ],
                   "type": "object"
                 },
@@ -1647,11 +1707,20 @@
                       "description": "Trigger threshold in quote units scaled by 1e9.",
                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                       "type": "string"
+                    },
+                    "triggerPriceSource": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                        }
+                      ],
+                      "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                     }
                   },
                   "required": [
                     "side",
-                    "triggerPrice"
+                    "triggerPrice",
+                    "triggerPriceSource"
                   ],
                   "type": "object"
                 },
@@ -1679,15 +1748,15 @@
                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                       "type": "string"
                     },
+                    "trailingDistance": {
+                      "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
                     "trailingDistanceBps": {
                       "description": "Trailing distance in basis points (1 bp = 0.01%).",
                       "format": "int32",
                       "type": "integer"
-                    },
-                    "trailingDistanceTicks": {
-                      "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                      "type": "string"
                     },
                     "triggerDirection": {
                       "allOf": [
@@ -1721,8 +1790,8 @@
                     "maxSlippageBps",
                     "maxSlippageTicks",
                     "peakPrice",
+                    "trailingDistance",
                     "trailingDistanceBps",
-                    "trailingDistanceTicks",
                     "triggerDirection",
                     "triggerPriceSource",
                     "troughPrice"
@@ -1739,7 +1808,7 @@
                       "type": "string"
                     },
                     "limitPrice": {
-                      "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the last trade price when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
+                      "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9: the most its child pays per unit. Required when `side` is BUY and set aside for it with the child's fee; at least the activation price, or at least the price it watches (trigger_price_source) when no activation price is set. A rise that fires above it still fires, and the child fills only at or below it. Must be unset when `side` is SELL. Fixed at create.",
                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                       "type": "string"
                     },
@@ -1761,15 +1830,23 @@
                       ],
                       "description": "Child order side."
                     },
+                    "trailingDistance": {
+                      "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
                     "trailingDistanceBps": {
                       "description": "Distance in basis points (1 bp = 0.01%).",
                       "format": "int32",
                       "type": "integer"
                     },
-                    "trailingDistanceTicks": {
-                      "description": "Distance as a price delta in 1e-9 quote-unit ticks.",
-                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                      "type": "string"
+                    "triggerPriceSource": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                        }
+                      ],
+                      "description": "Price the trailing stop watches: its activation, its peak or trough and its fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; a market without an index price fails the trigger with TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not supported. Fixed at create: to change it, cancel the trigger and create a new one."
                     }
                   },
                   "required": [
@@ -1778,8 +1855,9 @@
                     "maxSlippageBps",
                     "maxSlippageTicks",
                     "side",
+                    "trailingDistance",
                     "trailingDistanceBps",
-                    "trailingDistanceTicks"
+                    "triggerPriceSource"
                   ],
                   "type": "object"
                 },
@@ -1793,7 +1871,7 @@
                   "description": "TWAP configuration.",
                   "properties": {
                     "durationMs": {
-                      "description": "Total execution duration in milliseconds.",
+                      "description": "Total execution duration in milliseconds, at least 1000.",
                       "format": "int64",
                       "type": "integer"
                     },
@@ -1842,7 +1920,7 @@
                       "description": "Child side."
                     },
                     "sliceIntervalMs": {
-                      "description": "Interval between slices in milliseconds.",
+                      "description": "Interval between slices in milliseconds, at least 100 and at most duration_ms.",
                       "format": "int64",
                       "type": "integer"
                     }
@@ -1953,18 +2031,18 @@
             "type": "string"
           },
           "symbol": {
-            "description": "Trading pair symbol, e.g. BTC-USDT.",
+            "description": "Optional trading pair symbol, e.g. BTC-USDT. Omit it to use the trigger's own pair; another pair is rejected with UNKNOWN_SYMBOL.",
+            "type": "string"
+          },
+          "trailingDistance": {
+            "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+            "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
           },
           "trailingDistanceBps": {
             "description": "Updated trailing distance in basis points (1 bp = 0.01%).",
             "format": "int32",
             "type": "integer"
-          },
-          "trailingDistanceTicks": {
-            "description": "Updated trailing distance as a price delta in 1e-9 quote-unit ticks.",
-            "pattern": "^[0-9]+(\\.[0-9]+)?$",
-            "type": "string"
           },
           "triggerId": {
             "description": "Trigger ID to modify.",
@@ -1978,7 +2056,6 @@
           }
         },
         "required": [
-          "symbol",
           "trailingDistanceBps",
           "triggerId"
         ],
@@ -2070,7 +2147,7 @@
             "type": "string"
           },
           "symbol": {
-            "description": "Trading pair symbol, e.g. BTC-USDT.",
+            "description": "Optional trading pair symbol, e.g. BTC-USDT. Omit it to use the trigger's own pair; another pair is rejected with UNKNOWN_SYMBOL.",
             "type": "string"
           },
           "triggerId": {
@@ -2080,7 +2157,6 @@
           }
         },
         "required": [
-          "symbol",
           "triggerId"
         ],
         "type": "object"
@@ -2168,9 +2244,9 @@
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
-          "INDEX_PRICE": "Index price aggregated from external exchanges (future).",
-          "LAST_PRICE": "Last traded price (default for spot).",
-          "MARK_PRICE": "Mark price for perpetuals (future)."
+          "INDEX_PRICE": "The market's index price, aggregated from external exchanges. A trigger that watches it acts only on a current index value: while the index is stale or unavailable the trigger stays armed and waits, and never fires on an outdated value.",
+          "LAST_PRICE": "Last traded price on the market (default for spot).",
+          "MARK_PRICE": "Mark price for perpetuals; not supported on spot markets."
         }
       },
       "polyester.rest.enum.triggers.v1.LadderDistribution": {
@@ -2192,14 +2268,24 @@
           "OCO",
           "PARENT_CANCELED_NO_FILL",
           "SELF_TRADE_PREVENTION",
+          "ACCOUNT_REPAIR",
+          "PAIR_DRAIN_TRIGGER",
+          "PAIR_DRAIN_TWAP",
+          "PAIR_DRAIN_LADDER",
+          "PAIR_DRAIN_ATTACHED_LEG",
           "MISSING_REASON_CODE",
           "INTERNAL_ERROR"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
+          "ACCOUNT_REPAIR": "Ended by the exchange while it recovered your account. The account's open orders on the market were canceled at the same time; place new orders and triggers once the account trades again.",
           "INTERNAL_ERROR": "An internal invariant or processing failure canceled the trigger.",
           "MISSING_REASON_CODE": "The terminal state did not contain a cancellation reason.",
           "OCO": "An attached leg ended because its parent order is terminal and another of the parent's legs made the last exit, leaving no position to protect.",
+          "PAIR_DRAIN_ATTACHED_LEG": "The market was disabled: the exchange ended the order's attached take-profit or stop-loss and canceled the order and its working exit.",
+          "PAIR_DRAIN_LADDER": "The market was disabled: the exchange ended the ladder and canceled its resting levels, releasing their reserved funds.",
+          "PAIR_DRAIN_TRIGGER": "The market was disabled: the exchange ended the stop-loss, take-profit or trailing stop and released its reserved funds. The market's open orders were canceled at the same time.",
+          "PAIR_DRAIN_TWAP": "The market was disabled: the exchange ended the TWAP and canceled its resting slice, releasing its reserved funds.",
           "PARENT_CANCELED_NO_FILL": "The parent order ended without a fill, so its attached trigger was canceled.",
           "SELF_TRADE_PREVENTION": "Self-trade prevention canceled the trigger's child orders. For a ladder, no child order was canceled by the user, and the first child order to be canceled was canceled by self-trade prevention.",
           "USER_REQUEST": "The user explicitly canceled the trigger."
@@ -2313,6 +2399,8 @@
           "TWAP_CAPACITY_REACHED",
           "CHILD_ORDER_INCONSISTENT",
           "ORDER_LIMITS_UNAVAILABLE",
+          "INDEX_PRICE_UNAVAILABLE",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "MISSING_REASON_CODE",
           "INTERNAL_ERROR"
         ],
@@ -2338,6 +2426,7 @@
           "FEE_CEILING_INVALID": "The trigger's maximum fee rate was not valid.",
           "FEE_SCHEDULE_UNAVAILABLE": "The fees that apply to the child order could not be determined.",
           "FOK_INSUFFICIENT_LIQUIDITY": "The order book could not fill the entire fill-or-kill child order.",
+          "INDEX_PRICE_UNAVAILABLE": "The trigger watches the index price and the market has no index price.",
           "INSUFFICIENT_FUNDS": "The account did not have enough available funds for the child order.",
           "INTERNAL_ERROR": "An internal invariant or processing failure caused the trigger to fail.",
           "INVALID_ORDER_FLAGS": "The child order's flags were not valid.",
@@ -2350,7 +2439,7 @@
           "LADDER_LEVELS_INVALID": "The ladder's number of levels was not valid.",
           "LADDER_RANGE_TOO_NARROW": "The ladder's price range was too narrow for its number of levels.",
           "LIMIT_CHILD_SLIPPAGE_SET": "The trigger set a slippage bound on a LIMIT child order.",
-          "LIMIT_PRICE_INVALID": "The trigger's limit price was not valid, including a buy trailing stop's maximum price below the last trade price when it was placed without an activation price.",
+          "LIMIT_PRICE_INVALID": "The trigger's limit price was not valid, including a buy trailing stop's maximum price below the price it watches (the last traded price or the index price) when it was placed without an activation price.",
           "MARKET_CAP_VIOLATION": "The market child order exceeded the configured execution cap.",
           "MARKET_HALTED": "Trading was halted for the requested market.",
           "MARKET_PRICE_UNAVAILABLE": "A current market price was unavailable for sizing or validation.",
@@ -2405,6 +2494,7 @@
           "TRIGGER_FIRE_LIMIT_REACHED": "The trigger could not fire again.",
           "TRIGGER_PRICE_INVALID": "The configured trigger price was invalid.",
           "TRIGGER_PRICE_SOURCE_UNSUPPORTED": "The selected trigger price source was not supported.",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The trigger price was already reached by the price the trigger watches when the trigger was submitted (at or past it), so the trigger would have fired at once. It never armed and sent no order; its reserved funds were released. A price that reaches the trigger price after submission fires the trigger normally.",
           "TWAP_CAPACITY_REACHED": "The market had no room for another TWAP order.",
           "TWAP_INTERVAL_INVALID": "The TWAP interval was not valid.",
           "UNKNOWN_SYMBOL": "The requested trading pair was not recognized.",
@@ -2592,7 +2682,8 @@
                           }
                         },
                         "side": "BUY",
-                        "triggerPrice": "0.005"
+                        "triggerPrice": "0.005",
+                        "triggerPriceSource": "LAST_PRICE"
                       },
                       "stpMode": "EXPIRE_MAKER",
                       "subaccountId": "45LUmqjT",
@@ -2646,7 +2737,8 @@
                       }
                     },
                     "side": "BUY",
-                    "triggerPrice": "0.005"
+                    "triggerPrice": "0.005",
+                    "triggerPriceSource": "LAST_PRICE"
                   },
                   "symbol": "BTC-USDT"
                 }
@@ -2812,7 +2904,8 @@
                         }
                       },
                       "side": "BUY",
-                      "triggerPrice": "0.005"
+                      "triggerPrice": "0.005",
+                      "triggerPriceSource": "LAST_PRICE"
                     },
                     "subaccountId": "45LUmqjT",
                     "symbol": "BTC-USDT",
@@ -2858,6 +2951,16 @@
               "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "type": "string"
             }
+          },
+          {
+            "description": "Optional trading pair symbol, e.g. BTC-USDT, as an alternative to symbol in the body. When both are given they must be the same.",
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "example": "BTC-USDT",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -2869,7 +2972,7 @@
                 "maxSlippageTicks": 0,
                 "subaccountId": "45LUmqjT",
                 "symbol": "BTC-USDT",
-                "trailingDistanceTicks": "0.000000001",
+                "trailingDistance": "0.000000001",
                 "triggerId": "59VD7Lar",
                 "triggerPrice": "0.005"
               },
@@ -3096,6 +3199,16 @@
             "required": true,
             "schema": {
               "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional trading pair symbol, e.g. BTC-USDT, as an alternative to symbol in the body. When both are given they must be the same.",
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "example": "BTC-USDT",
               "type": "string"
             }
           }

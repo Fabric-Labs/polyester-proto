@@ -68,8 +68,10 @@ enum FeeAsset {
   BASE = 2;
 }
 
-// SelfTradePreventionMode controls which orders expire when they would trade
-// against another order from the same account.
+// SelfTradePreventionMode controls which orders expire when an order would
+// trade against another order of the same root account, including all its
+// subaccounts: two subaccounts of one root never trade with each other. The
+// incoming order's mode decides which orders expire.
 enum SelfTradePreventionMode {
   // Self-trade prevention mode was not provided; create requests default to EXPIRE_MAKER.
   SELF_TRADE_PREVENTION_MODE_UNSPECIFIED = 0;
@@ -220,7 +222,8 @@ message OrderIntent {
   // Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY
   // orders; SELL orders must use QUOTE.
   FeeAsset fee_asset = 21 [(buf.validate.field).enum.defined_only = true];
-  // Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.
+  // Self-trade prevention mode against orders of the same root account,
+  // including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified.
   SelfTradePreventionMode self_trade_prevention_mode = 22 [(buf.validate.field).enum.defined_only = true];
   // Optional attached risk controls that arm after the parent order fills.
   RiskPolicy attached_risk = 30;
@@ -231,6 +234,9 @@ message OrderIntent {
 // after an ambiguous transport timeout. Supply client_order_id to reconcile
 // through GetOrder; without it, a lost acknowledgement may leave the outcome
 // unknown. An immediate lookup miss does not prove that admission failed.
+// A create sent but not confirmed in time fails with
+// ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it
+// back before retrying. UNAVAILABLE means the order was not accepted.
 message CreateOrderRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
@@ -284,6 +290,7 @@ message PreviewOrderRequest {
 
 // PreviewOrderResponse reports whether an order is currently admissible and
 // returns any sizing and price-protection values resolved during evaluation.
+// Quote debit and fees are not returned.
 // The result is advisory: account, market, and policy inputs may change, and
 // CreateOrder always evaluates the intent again.
 message PreviewOrderResponse {
@@ -293,11 +300,14 @@ message PreviewOrderResponse {
   // Typed reason the order is not currently admissible. Omitted when
   // admissible is true.
   ErrorDetail rejection = 2;
-  // Gross base quantity resolved for execution, scaled by the pair's
-  // base_quantity_scale from GetSpotConfig. Present when sizing was resolved.
+  // Gross base quantity resolved for execution. REST returns resolvedBaseQty as
+  // a decimal string in base asset units, for example "0.005". Protobuf uses the
+  // pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.
   optional int64 resolved_base_qty_scaled = 3;
-  // Protective execution boundary in quote units scaled by 1e9. This is not an
-  // expected fill price. Present when price protection was resolved.
+  // Protective execution boundary. REST returns protectedPriceBound as a decimal
+  // string in quote asset units per base asset unit, for example "2751.6".
+  // Protobuf uses quote units scaled by 1e9. This is not an expected fill price.
+  // Present when price protection was resolved.
   optional int64 protected_price_bound_ticks = 4;
   // Time at which this admission evaluation completed.
   google.protobuf.Timestamp evaluated_at = 5;
@@ -466,7 +476,7 @@ enum ErrorCode {
   ERROR_CODE_EMPTY_BOOK = 62;
   // FOK order rejected due to insufficient immediate liquidity.
   ERROR_CODE_FOK_INSUFFICIENT_LIQUIDITY = 63;
-  // Client order ID points to an order that already reached terminal state.
+  // The order has already ended (filled, canceled or expired).
   ERROR_CODE_ORDER_ALREADY_TERMINAL = 64;
 
   // Trigger-specific error codes (40-49 range).
@@ -792,7 +802,8 @@ enum ErrorCode {
   // placed.
   ERROR_CODE_QUICKSWAP_CAPACITY_REACHED = 291;
   // An exit order placed by one of the order's attached take-profit or stop
-  // legs is still working, so attached legs can't be added now. Nothing
+  // legs is still working, so the order's attached legs can't be added,
+  // edited, paused or resumed now; removing a leg is still accepted. Nothing
   // changed; retry once the exit completes.
   ERROR_CODE_ATTACHED_EXIT_WORKING = 292;
   // The account already has the most triggers one account may have on this
@@ -828,6 +839,24 @@ enum ErrorCode {
   // back in line, so new orders, changes and trigger orders are paused for a
   // short time. Nothing changed; cancels still work. Try again shortly.
   ERROR_CODE_ACCOUNT_REPAIRING = 300;
+  // The new trigger price of a stop-loss or take-profit is already reached by
+  // the price the trigger watches (at or past it), so the trigger would fire at
+  // once and send its order. Nothing changed; the trigger keeps its previous
+  // trigger price. Returned by ModifyTrigger, and by an order modify that moves
+  // an attached take-profit or stop-loss of an order with a fill. Choose a
+  // trigger price the market has not reached.
+  ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 302;
+  // The order was sent but not confirmed in time. Its outcome is unknown and
+  // it may have been accepted; read the order by its client order ID, or read
+  // open orders, before retrying. For a batch create, every item's outcome is
+  // unknown; read them back, or repeat the batch with the same request ID and
+  // payload within 15 minutes, which returns decided items' original results
+  // and retries the rest without admitting any item twice.
+  ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN = 303;
+  // The trigger was sent but not confirmed in time. Its outcome is unknown and
+  // it may have been created; read the triggers for its client trigger ID
+  // before retrying.
+  ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN = 304;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -855,17 +884,20 @@ message ErrorDetail {
 // Trigger System: Risk Controls + Conditional Orders
 // =============================================================================
 
-// TriggerPriceSource defines which price feed to use for trigger evaluation.
-// v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for
-// future.
+// TriggerPriceSource defines which price a trigger watches. Standalone
+// stop-loss, take-profit and trailing-stop triggers watch LAST_PRICE unless
+// INDEX_PRICE is requested; MARK_PRICE is not supported on spot markets.
 enum TriggerPriceSource {
   // Trigger price source was not provided; spot triggers default to LAST_PRICE.
   TRIGGER_PRICE_SOURCE_UNSPECIFIED = 0;
-  // Last traded price (default for spot).
+  // Last traded price on the market (default for spot).
   LAST_PRICE = 1;
-  // Index price aggregated from external exchanges (future).
+  // The market's index price, aggregated from external exchanges. A trigger
+  // that watches it acts only on a current index value: while the index is
+  // stale or unavailable the trigger stays armed and waits, and never fires on
+  // an outdated value.
   INDEX_PRICE = 2;
-  // Mark price for perpetuals (future).
+  // Mark price for perpetuals; not supported on spot markets.
   MARK_PRICE = 3;
 }
 
@@ -905,22 +937,40 @@ message RiskExecution {
   }
 }
 
-// TakeProfitPolicy defines a take-profit attached to an order. It evaluates
-// last trade price, arms after the parent fills, and submits the selected child.
+// TakeProfitPolicy defines a take-profit attached to an order. It watches the
+// last traded price or the index price (trigger_price_source), arms after the
+// parent fills, and submits the selected child.
 message TakeProfitPolicy {
   // Trigger price in quote units scaled by 1e9.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Child execution when the threshold is crossed.
   RiskExecution child = 2 [(buf.validate.field).required = true];
+  // Price the take-profit watches. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
-// StopLossPolicy defines a stop-loss attached to an order. It evaluates last
-// trade price, arms after the parent fills, and submits the selected child.
+// StopLossPolicy defines a stop-loss attached to an order. It watches the last
+// traded price or the index price (trigger_price_source), arms after the
+// parent fills, and submits the selected child.
 message StopLossPolicy {
   // Trigger price in quote units scaled by 1e9.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Child execution when the threshold is crossed.
   RiskExecution child = 2 [(buf.validate.field).required = true];
+  // Price the stop-loss watches. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
 // TrailingStopPolicy defines a trailing stop attached to an order.
@@ -958,6 +1008,15 @@ message TrailingStopPolicy {
   // reached. If omitted, trailing starts immediately after the parent order
   // fills. Expressed in quote units scaled by 1e9.
   int64 activation_price_ticks = 3;
+  // Price the trailing stop watches and trails: its peak or trough, activation
+  // and fire all follow this price. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 8 [(buf.validate.field).enum.defined_only = true];
 }
 
 // RiskPolicy defines optional risk controls (take-profit, stop-loss or
@@ -969,9 +1028,11 @@ message TrailingStopPolicy {
 // an exit for the whole remaining position, rounded down to the pair's step
 // size; a remainder below one step stays in the balance. If another leg's
 // condition is met while that exit works, the working exit is canceled; once
-// it ends, that leg is checked again against the latest trade and, if its
-// condition still holds, exits what remains. After an exit ends, the legs keep
-// protecting whatever position remains.
+// it ends, that leg is checked again against the latest price it watches and,
+// if its condition still holds, exits what remains. After an exit ends, the legs keep
+// protecting whatever position remains, unless you canceled the exit: canceling
+// a leg's exit order, alone or with a cancel-all, ends that leg, and with oco
+// set the other leg too.
 //
 // The legs end once the parent order is terminal and no position they can
 // exit remains: the leg whose exit ended last completes, and the others are
@@ -1001,7 +1062,13 @@ message RiskPolicy {
   // trailing stop) are linked and shown as one-cancels-the-other. Requires a
   // take-profit and exactly one stop leg. The legs of every parent share one
   // position and end together as described on RiskPolicy, so this setting
-  // does not change when exits are submitted or canceled. Default is false.
+  // does not change when exits are submitted. It decides what canceling an
+  // exit order ends: with oco set, canceling one leg's exit ends both legs;
+  // without it, only that leg ends and the other keeps protecting the
+  // remaining position. Changing only this setting with ModifyOrder keeps
+  // the existing legs, with their IDs, arming and a trailing stop's tracked
+  // peak; changing a leg's terms, such as its trigger price, limit price or
+  // trailing distance, still replaces that leg. Default is false.
   bool oco = 4;
 }
 
@@ -1102,6 +1169,18 @@ message CancelAllOrdersResponse {
     DRY_RUN = 2;
   }
 
+  // Availability of the order listing, separate from the submission outcome.
+  enum ListingStatus {
+    // Listing availability was not provided.
+    LISTING_UNSPECIFIED = 0;
+    // The initial response includes its listing, possibly empty, up to 200 orders.
+    INCLUDED = 1;
+    // A retry returns its original outcome and counts without the historical
+    // listing. Read open orders for current state and use order updates for
+    // final outcomes. No new cancellations are requested by the retry.
+    NOT_RETAINED_READ_OPEN_ORDERS = 2;
+  }
+
   // Cancel-all submission outcome.
   Status status = 1 [(buf.validate.field).enum.defined_only = true];
   // Number of open orders that matched the filter when the request was
@@ -1126,8 +1205,11 @@ message CancelAllOrdersResponse {
   // which they were created), at most 200. When more orders were canceled,
   // these are the 200 oldest and `truncated` is true; the order update stream
   // and read paths report every one. Empty when `dry_run` is set. Retrying
-  // with the same `request_id` and criteria within the replay window returns
-  // the same list.
+  // with the same `request_id` and criteria within 120 seconds returns the
+  // original status, counts and timestamp, an empty list, and
+  // `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new
+  // cancellations. Read open orders for current state and use order updates
+  // for final outcomes.
   repeated CancelledOrder cancelled_orders = 7 [(buf.validate.field).repeated.max_items = 200];
   // Number of orders whose cancellation was requested, including those not
   // listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when
@@ -1135,6 +1217,9 @@ message CancelAllOrdersResponse {
   uint32 total_cancelled = 8;
   // True when more orders were canceled than `cancelled_orders` lists.
   bool truncated = 9;
+  // Availability of the historical listing. An empty retry listing does not
+  // change the original counts or mean that no cancellations were requested.
+  ListingStatus listing_status = 10 [(buf.validate.field).enum.defined_only = true];
 }
 
 // =============================================================================
@@ -1171,6 +1256,18 @@ message CancelAllAfterRequest {
   ];
 }
 
+// DeadManSwitchScope describes the recorded scope of an armed dead-man switch.
+// Expiry cancels working orders in this scope, including working child orders.
+// Waiting triggers remain active and may create further orders.
+message DeadManSwitchScope {
+  // Public ID of the account or sub-account whose orders are canceled.
+  fixed64 account_id = 1;
+  // Symbol ID whose orders are canceled. Zero or omitted means all symbols.
+  uint32 symbol_id = 2;
+  // Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.
+  Side side = 3 [(buf.validate.field).enum.defined_only = true];
+}
+
 // CancelAllAfterResponse returns dead-man switch arming/disable status.
 message CancelAllAfterResponse {
   // Dead-man switch state after applying the request.
@@ -1193,6 +1290,10 @@ message CancelAllAfterResponse {
   google.protobuf.Timestamp ts = 4;
   // Server timestamp as epoch nanoseconds (for bots).
   uint64 ts_ns = 5;
+  // Recorded scope after arming or refreshing. Absent when disabled.
+  // Describes the current armed switch only. Cancellations already in progress
+  // are unaffected by a later refresh or disable.
+  DeadManSwitchScope effective_scope = 6;
 }
 
 // =============================================================================
@@ -1242,9 +1343,13 @@ message BatchCreateOrdersRequest {
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
   // Required account-scoped idempotency key for the entire ordered batch.
-  // Reusing it with the same payload within 15 minutes replays the original
-  // per-item results and timestamp. Reusing it with a different payload during
-  // that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.
+  // Reusing it with the same payload within 15 minutes returns each decided
+  // item's original result and result time, and retries the items still
+  // unresolved, never admitting an already admitted item again. Reusing it
+  // with a different payload during that window returns
+  // CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat
+  // is a new request and can place its orders again, so read the items back
+  // instead of repeating an older batch.
   string request_id = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).string.min_len = 1,
@@ -1315,7 +1420,10 @@ message ModifyOrderRequest {
   // Target total quantity after modify/replace, scaled by the pair's
   // base_quantity_scale from GetSpotConfig.
   optional int64 new_qty_scaled = 6 [(buf.validate.field).int64.gt = 0];
-  // Replacement attached-risk policy for the order.
+  // Replacement attached-risk policy for the order. The order's change and its
+  // take-profit, stop-loss and trailing legs apply together: either all of
+  // them change, or the whole modify is refused and the order and its legs
+  // stay as they were.
   RiskPolicy new_attached_risk = 7;
 
   // Modify behavior policy.

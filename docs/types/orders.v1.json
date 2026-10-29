@@ -447,7 +447,7 @@
             "name": "request_id",
             "jsonName": "requestId",
             "number": 2,
-            "doc": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes replays the original\n per-item results and timestamp. Reusing it with a different payload during\n that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "doc": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes returns each decided\n item's original result and result time, and retries the items still\n unresolved, never admitting an already admitted item again. Reusing it\n with a different payload during that window returns\n CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat\n is a new request and can place its orders again, so read the items back\n instead of repeating an older batch.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -1180,6 +1180,13 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "effective_scope",
+            "jsonName": "effectiveScope",
+            "number": 6,
+            "doc": "Recorded scope after arming or refreshing. Absent when disabled.\n Describes the current armed switch only. Cancellations already in progress\n are unaffected by a later refresh or disable.",
+            "protoRef": "orders.v1.DeadManSwitchScope"
           }
         ]
       }
@@ -1319,7 +1326,7 @@
             "name": "cancelled_orders",
             "jsonName": "cancelledOrders",
             "number": 7,
-            "doc": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within the replay window returns\n the same list.",
+            "doc": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within 120 seconds returns the\n original status, counts and timestamp, an empty list, and\n `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new\n cancellations. Read open orders for current state and use order updates\n for final outcomes.",
             "repeated": true,
             "protoRef": "orders.v1.CancelledOrder",
             "validate": {
@@ -1344,6 +1351,18 @@
             "doc": "True when more orders were canceled than `cancelled_orders` lists.",
             "protoScalar": "bool",
             "jsonType": "boolean"
+          },
+          {
+            "name": "listing_status",
+            "jsonName": "listingStatus",
+            "number": 10,
+            "doc": "Availability of the historical listing. An empty retry listing does not\n change the original counts or mean that no cancellations were requested.",
+            "protoRef": "orders.v1.CancelAllOrdersResponse.ListingStatus",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -1499,7 +1518,7 @@
     {
       "name": "orders.v1.CreateOrderRequest",
       "kind": "message",
-      "doc": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.",
+      "doc": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.\n A create sent but not confirmed in time fails with\n ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it\n back before retrying. UNAVAILABLE means the order was not accepted.",
       "message": {
         "fields": [
           {
@@ -1609,6 +1628,45 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.DeadManSwitchScope",
+      "kind": "message",
+      "doc": "DeadManSwitchScope describes the recorded scope of an armed dead-man switch.\n Expiry cancels working orders in this scope, including working child orders.\n Waiting triggers remain active and may create further orders.",
+      "message": {
+        "fields": [
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 1,
+            "doc": "Public ID of the account or sub-account whose orders are canceled.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 2,
+            "doc": "Symbol ID whose orders are canceled. Zero or omitted means all symbols.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 3,
+            "doc": "Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -1877,7 +1935,7 @@
           {
             "name": "ERROR_CODE_ORDER_ALREADY_TERMINAL",
             "number": 64,
-            "doc": "Client order ID points to an order that already reached terminal state."
+            "doc": "The order has already ended (filled, canceled or expired)."
           },
           {
             "name": "ERROR_CODE_TRIGGER_PRICE_INVALID",
@@ -2477,7 +2535,7 @@
           {
             "name": "ERROR_CODE_ATTACHED_EXIT_WORKING",
             "number": 292,
-            "doc": "An exit order placed by one of the order's attached take-profit or stop\n legs is still working, so attached legs can't be added now. Nothing\n changed; retry once the exit completes."
+            "doc": "An exit order placed by one of the order's attached take-profit or stop\n legs is still working, so the order's attached legs can't be added,\n edited, paused or resumed now; removing a leg is still accepted. Nothing\n changed; retry once the exit completes."
           },
           {
             "name": "ERROR_CODE_MARKET_TRIGGER_LIMIT_EXCEEDED",
@@ -2518,6 +2576,21 @@
             "name": "ERROR_CODE_ACCOUNT_REPAIRING",
             "number": 300,
             "doc": "This account's orders are being canceled while its balances are brought\n back in line, so new orders, changes and trigger orders are paused for a\n short time. Nothing changed; cancels still work. Try again shortly."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+            "number": 302,
+            "doc": "The new trigger price of a stop-loss or take-profit is already reached by\n the price the trigger watches (at or past it), so the trigger would fire at\n once and send its order. Nothing changed; the trigger keeps its previous\n trigger price. Returned by ModifyTrigger, and by an order modify that moves\n an attached take-profit or stop-loss of an order with a fill. Choose a\n trigger price the market has not reached."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN",
+            "number": 303,
+            "doc": "The order was sent but not confirmed in time. Its outcome is unknown and\n it may have been accepted; read the order by its client order ID, or read\n open orders, before retrying. For a batch create, every item's outcome is\n unknown; read them back, or repeat the batch with the same request ID and\n payload within 15 minutes, which returns decided items' original results\n and retries the rest without admitting any item twice."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN",
+            "number": 304,
+            "doc": "The trigger was sent but not confirmed in time. Its outcome is unknown and\n it may have been created; read the triggers for its client trigger ID\n before retrying."
           }
         ]
       }
@@ -3152,7 +3225,7 @@
     {
       "name": "orders.v1.GetOrderResponse",
       "kind": "message",
-      "doc": "GetOrderResponse returns order details and a bounded execution page.\n Order state, trades and transfers are eventually consistent;\n one page's execution quantities need not equal the order's cumulative quantity.",
+      "doc": "GetOrderResponse returns order details and a bounded execution page.\n The order shows a fill as soon as it executes; its trades are recorded\n shortly after. executions_complete says whether the trades already account\n for every execution the order shows. Transfers are eventually consistent and\n can trail the trades they settle.",
       "message": {
         "fields": [
           {
@@ -3190,6 +3263,14 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "executions_complete",
+            "jsonName": "executionsComplete",
+            "number": 7,
+            "doc": "True when the order's trades through its generation, across every page,\n add up exactly to its cum_qty_scaled. False while a recent execution is\n still being recorded: trades then lists the executions recorded so far,\n and a later read returns the rest. Always false when execution history is\n not included.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -3766,7 +3847,7 @@
             "name": "new_attached_risk",
             "jsonName": "newAttachedRisk",
             "number": 7,
-            "doc": "Replacement attached-risk policy for the order.",
+            "doc": "Replacement attached-risk policy for the order. The order's change and its\n take-profit, stop-loss and trailing legs apply together: either all of\n them change, or the whole modify is refused and the order and its legs\n stay as they were.",
             "protoRef": "orders.v1.RiskPolicy"
           },
           {
@@ -4342,7 +4423,7 @@
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
             "number": 22,
-            "doc": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
+            "doc": "Self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified.",
             "protoRef": "orders.v1.SelfTradePreventionMode",
             "validate": {
               "enum": {
@@ -4691,7 +4772,7 @@
     {
       "name": "orders.v1.PreviewOrderResponse",
       "kind": "message",
-      "doc": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
+      "doc": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n Quote debit and fees are not returned.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
       "message": {
         "fields": [
           {
@@ -4713,7 +4794,7 @@
             "name": "resolved_base_qty_scaled",
             "jsonName": "resolvedBaseQtyScaled",
             "number": 3,
-            "doc": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
+            "doc": "Gross base quantity resolved for execution. REST returns resolvedBaseQty as\n a decimal string in base asset units, for example \"0.005\". Protobuf uses the\n pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4722,7 +4803,7 @@
             "name": "protected_price_bound_ticks",
             "jsonName": "protectedPriceBoundTicks",
             "number": 4,
-            "doc": "Protective execution boundary in quote units scaled by 1e9. This is not an\n expected fill price. Present when price protection was resolved.",
+            "doc": "Protective execution boundary. REST returns protectedPriceBound as a decimal\n string in quote asset units per base asset unit, for example \"2751.6\".\n Protobuf uses quote units scaled by 1e9. This is not an expected fill price.\n Present when price protection was resolved.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4808,7 +4889,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest trade and, if its\n condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.",
       "message": {
         "cel": [
           {
@@ -4854,7 +4935,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted or canceled. Default is false.",
+            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted. It decides what canceling an\n exit order ends: with oco set, canceling one leg's exit ends both legs;\n without it, only that leg ends and the other keeps protecting the\n remaining position. Changing only this setting with ModifyOrder keeps\n the existing legs, with their IDs, arming and a trailing stop's tracked\n peak; changing a leg's terms, such as its trigger price, limit price or\n trailing distance, still replaces that leg. Default is false.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -4864,7 +4945,7 @@
     {
       "name": "orders.v1.SelfTradePreventionMode",
       "kind": "enum",
-      "doc": "SelfTradePreventionMode controls which orders expire when they would trade\n against another order from the same account.",
+      "doc": "SelfTradePreventionMode controls which orders expire when an order would\n trade against another order of the same root account, including all its\n subaccounts: two subaccounts of one root never trade with each other. The\n incoming order's mode decides which orders expire.",
       "enum": {
         "values": [
           {
@@ -4907,7 +4988,7 @@
     {
       "name": "orders.v1.StopLossPolicy",
       "kind": "message",
-      "doc": "StopLossPolicy defines a stop-loss attached to an order. It evaluates last\n trade price, arms after the parent fills, and submits the selected child.",
+      "doc": "StopLossPolicy defines a stop-loss attached to an order. It watches the last\n traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
@@ -4932,6 +5013,18 @@
             "protoRef": "orders.v1.RiskExecution",
             "validate": {
               "required": true
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 3,
+            "doc": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
             }
           }
         ]
@@ -4940,7 +5033,7 @@
     {
       "name": "orders.v1.TakeProfitPolicy",
       "kind": "message",
-      "doc": "TakeProfitPolicy defines a take-profit attached to an order. It evaluates\n last trade price, arms after the parent fills, and submits the selected child.",
+      "doc": "TakeProfitPolicy defines a take-profit attached to an order. It watches the\n last traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
@@ -4965,6 +5058,18 @@
             "protoRef": "orders.v1.RiskExecution",
             "validate": {
               "required": true
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 3,
+            "doc": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
             }
           }
         ]
@@ -5091,6 +5196,18 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 8,
+            "doc": "Price the trailing stop watches and trails: its peak or trough, activation\n and fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -5117,23 +5234,23 @@
     {
       "name": "orders.v1.TriggerPriceSource",
       "kind": "enum",
-      "doc": "TriggerPriceSource defines which price feed to use for trigger evaluation.\n v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for\n future.",
+      "doc": "TriggerPriceSource defines which price a trigger watches. Standalone\n stop-loss, take-profit and trailing-stop triggers watch LAST_PRICE unless\n INDEX_PRICE is requested; MARK_PRICE is not supported on spot markets.",
       "enum": {
         "values": [
           {
             "name": "LAST_PRICE",
             "number": 1,
-            "doc": "Last traded price (default for spot)."
+            "doc": "Last traded price on the market (default for spot)."
           },
           {
             "name": "INDEX_PRICE",
             "number": 2,
-            "doc": "Index price aggregated from external exchanges (future)."
+            "doc": "The market's index price, aggregated from external exchanges. A trigger\n that watches it acts only on a current index value: while the index is\n stale or unavailable the trigger stays armed and waits, and never fires on\n an outdated value."
           },
           {
             "name": "MARK_PRICE",
             "number": 3,
-            "doc": "Mark price for perpetuals (future)."
+            "doc": "Mark price for perpetuals; not supported on spot markets."
           }
         ]
       }

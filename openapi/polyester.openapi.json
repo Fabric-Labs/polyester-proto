@@ -855,7 +855,8 @@
           "AUTH_SOCIAL_VERIFICATION_EXPIRED",
           "AUTH_SOCIAL_VERIFICATION_INVALID_STATE",
           "AUTH_SUBACCOUNT_CHALLENGE_INVALID",
-          "AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED"
+          "AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED",
+          "AUTH_TEMPORARILY_UNAVAILABLE"
         ],
         "title": "AuthErrorCode",
         "type": "string"
@@ -6407,7 +6408,7 @@
         "description": "ListDepositAddressesRequest lists known deposit addresses for one selected\n account target.",
         "properties": {
           "chainId": {
-            "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns all known deposit addresses for the selected target,\n ordered by ascending chain id.",
+            "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns the known deposit addresses for the selected target on\n chains that currently accept deposits, ordered by ascending chain id. A\n chain whose deposits are unavailable returns FailedPrecondition.",
             "exclusiveMinimum": 0,
             "title": "chain_id",
             "type": "integer"
@@ -6428,7 +6429,7 @@
       },
       "chain.deposit.v1.ListDepositAddressesResponse": {
         "additionalProperties": false,
-        "description": "ListDepositAddressesResponse returns the known deposit addresses for the\n selected target, ordered by ascending chain id.",
+        "description": "ListDepositAddressesResponse returns the known deposit addresses for the\n selected target on chains that currently accept deposits, ordered by\n ascending chain id.",
         "properties": {
           "depositAddresses": {
             "description": "Known deposit addresses for the selected target.",
@@ -7069,6 +7070,11 @@
             "title": "sequence",
             "type": "integer"
           },
+          "txChainId": {
+            "description": "Chain that holds `tx_ref`, with the meaning of\n `FlowStepView.milestone_tx_chain_id`. Zero when `tx_ref` is empty or is not\n a chain transaction.",
+            "title": "tx_chain_id",
+            "type": "integer"
+          },
           "txRef": {
             "description": "Transaction reference associated with this activity.",
             "title": "tx_ref",
@@ -7138,6 +7144,11 @@
             "$ref": "#/components/schemas/chain.lifecycle.v1.LifecycleSource",
             "description": "Source that produced this visible step.",
             "title": "lifecycle_source"
+          },
+          "milestoneTxChainId": {
+            "description": "Chain that holds `milestone_tx_ref`, as the `chain_id` of a chain returned\n by `GetDepositWithdrawConfig`, the same id space as `polyester_chain_id`.\n Link the transaction with that chain's `explorer_url`. Polyester Chain\n transactions name Polyester Chain, a deposit's source-chain transaction\n names its source chain, and a withdrawal's delivery transaction names its\n destination chain. Zero when `milestone_tx_ref` is empty or is not a chain\n transaction, such as a ledger settlement identifier.",
+            "title": "milestone_tx_chain_id",
+            "type": "integer"
           },
           "milestoneTxRef": {
             "description": "Transaction reference most relevant to this step.",
@@ -7308,7 +7319,7 @@
             "title": "destination_domain"
           },
           "estimatedCompletionUnixMs": {
-            "description": "Estimated Unix completion timestamp in milliseconds.",
+            "description": "Estimated Unix completion timestamp in milliseconds. Zero while\n `is_delayed` is true, because no reliable estimate exists then.",
             "format": "int64",
             "title": "estimated_completion_unix_ms",
             "type": [
@@ -7325,6 +7336,11 @@
             "$ref": "#/components/schemas/chain.lifecycle.v1.FlowKind",
             "description": "Product flow family.",
             "title": "flow_kind"
+          },
+          "isDelayed": {
+            "description": "True when an open flow has made no progress for well beyond the expected\n time of its current step. Show the flow as delayed instead of an ETA; it\n still completes normally once progress resumes. Always false for terminal\n flows.",
+            "title": "is_delayed",
+            "type": "boolean"
           },
           "isOpen": {
             "description": "True when the flow is still progressing.",
@@ -7659,7 +7675,8 @@
           "LEDGER_MIRROR_TRANSFER_ID_ALREADY_FAILED",
           "TRADING_WITHDRAW_POLICY_DENIED",
           "TRADING_WITHDRAW_CONTRACT_REVERTED",
-          "TRADING_WITHDRAW_EXECUTION_FAILED"
+          "TRADING_WITHDRAW_EXECUTION_FAILED",
+          "DEPOSIT_SOURCE_NOT_CONFIRMED"
         ],
         "title": "LifecycleReason",
         "type": "string"
@@ -7671,7 +7688,8 @@
           "SOURCE_RELAYER",
           "SOURCE_POLYESTER_CHAIN",
           "SOURCE_EXECUTOR",
-          "SOURCE_LEDGER"
+          "SOURCE_LEDGER",
+          "SOURCE_LIFECYCLE"
         ],
         "title": "LifecycleSource",
         "type": "string"
@@ -12336,7 +12354,7 @@
       },
       "marketdata.v1.CandlePoint": {
         "additionalProperties": false,
-        "description": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume, quote_volume].",
+        "description": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n A primary candle opens at the previous candle's close, so consecutive\n candles join at every timeframe; a market's first candle opens at its first\n trade. High and low include the open. A bucket without trades is flat at\n the previous close with zero volume.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume, quote_volume].",
         "properties": {
           "close": {
             "description": "Closing price, using the same scale as open.",
@@ -12348,7 +12366,7 @@
             ]
           },
           "high": {
-            "description": "Highest traded price, using the same scale as open.",
+            "description": "Highest price in the bucket, including the open, using the same scale as\n open.",
             "format": "int64",
             "title": "high",
             "type": [
@@ -12362,7 +12380,7 @@
             "type": "boolean"
           },
           "low": {
-            "description": "Lowest traded price, using the same scale as open.",
+            "description": "Lowest price in the bucket, including the open, using the same scale as\n open.",
             "format": "int64",
             "title": "low",
             "type": [
@@ -12371,7 +12389,7 @@
             ]
           },
           "open": {
-            "description": "Opening price in quote units. Primary candles use scale 9; composite\n reference candles use the pair's reference_price_scale from GetSpotConfig.",
+            "description": "Opening price in quote units: for a primary candle, the previous\n candle's close, or the first trade for a market's first candle. Primary\n candles use scale 9; composite reference candles use the pair's\n reference_price_scale from GetSpotConfig.",
             "format": "int64",
             "title": "open",
             "type": [
@@ -13307,7 +13325,8 @@
           "PAIR_STATUS_DISABLED",
           "PAIR_STATUS_CANCEL_ONLY",
           "PAIR_STATUS_POST_ONLY",
-          "PAIR_STATUS_REDUCE_ONLY"
+          "PAIR_STATUS_REDUCE_ONLY",
+          "PAIR_STATUS_HALTED"
         ],
         "title": "PairStatus",
         "type": "string"
@@ -14414,7 +14433,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes replays the original\n per-item results and timestamp. Reusing it with a different payload during\n that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "description": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes returns each decided\n item's original result and result time, and retries the items still\n unresolved, never admitting an already admitted item again. Reusing it\n with a different payload during that window returns\n CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat\n is a new request and can place its orders again, so read the items back\n instead of repeating an older batch.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -14916,6 +14935,11 @@
         "additionalProperties": false,
         "description": "CancelAllAfterResponse returns dead-man switch arming/disable status.",
         "properties": {
+          "effectiveScope": {
+            "$ref": "#/components/schemas/orders.v1.DeadManSwitchScope",
+            "description": "Recorded scope after arming or refreshing. Absent when disabled.\n Describes the current armed switch only. Cancellations already in progress\n are unaffected by a later refresh or disable.",
+            "title": "effective_scope"
+          },
           "effectiveTimeoutSec": {
             "description": "Effective timeout in seconds (0 when disabled).",
             "title": "effective_timeout_sec",
@@ -15015,7 +15039,7 @@
         "description": "CancelAllOrdersResponse returns the result of a cancel-all operation.\n The response confirms that cancellation was requested for every matching\n order; each order's final state is reported on the order update stream and\n read paths.",
         "properties": {
           "cancelledOrders": {
-            "description": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within the replay window returns\n the same list.",
+            "description": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within 120 seconds returns the\n original status, counts and timestamp, an empty list, and\n `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new\n cancellations. Read open orders for current state and use order updates\n for final outcomes.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.CancelledOrder"
             },
@@ -15027,6 +15051,11 @@
             "description": "Number of matched orders that could not be submitted for cancellation\n because the cancel-all could not be recorded for their symbol. This\n request does not cancel them; send a new cancel-all with a new\n `request_id` if they are still open. Zero when `dry_run` is set.",
             "title": "failed_cancels",
             "type": "integer"
+          },
+          "listingStatus": {
+            "$ref": "#/components/schemas/orders.v1.CancelAllOrdersResponse.ListingStatus",
+            "description": "Availability of the historical listing. An empty retry listing does not\n change the original counts or mean that no cancellations were requested.",
+            "title": "listing_status"
           },
           "matchedOrders": {
             "description": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress.\n Orders placed after acceptance are not counted. Unless `dry_run` is set,\n equals `submitted_cancels` plus `failed_cancels`.",
@@ -15070,6 +15099,16 @@
         },
         "title": "CancelAllOrdersResponse",
         "type": "object"
+      },
+      "orders.v1.CancelAllOrdersResponse.ListingStatus": {
+        "description": "Availability of the order listing, separate from the submission outcome.",
+        "enum": [
+          "LISTING_UNSPECIFIED",
+          "INCLUDED",
+          "NOT_RETAINED_READ_OPEN_ORDERS"
+        ],
+        "title": "ListingStatus",
+        "type": "string"
       },
       "orders.v1.CancelAllOrdersResponse.Status": {
         "description": "Cancel-all submission outcome.",
@@ -15215,7 +15254,7 @@
       },
       "orders.v1.CreateOrderRequest": {
         "additionalProperties": false,
-        "description": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.",
+        "description": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.\n A create sent but not confirmed in time fails with\n ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it\n back before retrying. UNAVAILABLE means the order was not accepted.",
         "properties": {
           "order": {
             "$ref": "#/components/schemas/orders.v1.OrderIntent",
@@ -15345,6 +15384,33 @@
           }
         },
         "title": "CreateOrderResponse",
+        "type": "object"
+      },
+      "orders.v1.DeadManSwitchScope": {
+        "additionalProperties": false,
+        "description": "DeadManSwitchScope describes the recorded scope of an armed dead-man switch.\n Expiry cancels working orders in this scope, including working child orders.\n Waiting triggers remain active and may create further orders.",
+        "properties": {
+          "accountId": {
+            "description": "Public ID of the account or sub-account whose orders are canceled.",
+            "format": "int64",
+            "title": "account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "side": {
+            "$ref": "#/components/schemas/orders.v1.Side",
+            "description": "Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.",
+            "title": "side"
+          },
+          "symbolId": {
+            "description": "Symbol ID whose orders are canceled. Zero or omitted means all symbols.",
+            "title": "symbol_id",
+            "type": "integer"
+          }
+        },
+        "title": "DeadManSwitchScope",
         "type": "object"
       },
       "orders.v1.ErrorCode": {
@@ -15530,7 +15596,10 @@
           "ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN",
           "ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN",
           "ERROR_CODE_ORDER_REPAIRING",
-          "ERROR_CODE_ACCOUNT_REPAIRING"
+          "ERROR_CODE_ACCOUNT_REPAIRING",
+          "ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+          "ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN",
+          "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -15993,8 +16062,13 @@
       },
       "orders.v1.GetOrderResponse": {
         "additionalProperties": false,
-        "description": "GetOrderResponse returns order details and a bounded execution page.\n Order state, trades and transfers are eventually consistent;\n one page's execution quantities need not equal the order's cumulative quantity.",
+        "description": "GetOrderResponse returns order details and a bounded execution page.\n The order shows a fill as soon as it executes; its trades are recorded\n shortly after. executions_complete says whether the trades already account\n for every execution the order shows. Transfers are eventually consistent and\n can trail the trades they settle.",
         "properties": {
+          "executionsComplete": {
+            "description": "True when the order's trades through its generation, across every page,\n add up exactly to its cum_qty_scaled. False while a recent execution is\n still being recorded: trades then lists the executions recorded so far,\n and a later read returns the rest. Always false when execution history is\n not included.",
+            "title": "executions_complete",
+            "type": "boolean"
+          },
           "nextPageToken": {
             "description": "Cursor for the next execution page. Empty when no further rows are visible;\n this is not a settlement or order-state reconciliation watermark.",
             "maxLength": 512,
@@ -16370,7 +16444,7 @@
               },
               "newAttachedRisk": {
                 "$ref": "#/components/schemas/orders.v1.RiskPolicy",
-                "description": "Replacement attached-risk policy for the order.",
+                "description": "Replacement attached-risk policy for the order. The order's change and its\n take-profit, stop-loss and trailing legs apply together: either all of\n them change, or the whole modify is refused and the order and its legs\n stay as they were.",
                 "title": "new_attached_risk"
               },
               "newClientOrderId": {
@@ -16904,7 +16978,7 @@
           },
           "selfTradePreventionMode": {
             "$ref": "#/components/schemas/orders.v1.SelfTradePreventionMode",
-            "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
+            "description": "Self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified.",
             "title": "self_trade_prevention_mode"
           },
           "side": {
@@ -17136,7 +17210,7 @@
       },
       "orders.v1.PreviewOrderResponse": {
         "additionalProperties": false,
-        "description": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
+        "description": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n Quote debit and fees are not returned.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
         "properties": {
           "admissible": {
             "description": "Whether the order passed the current validation, policy, risk, and\n available-balance checks.",
@@ -17150,7 +17224,7 @@
             "title": "evaluated_at"
           },
           "protectedPriceBoundTicks": {
-            "description": "Protective execution boundary in quote units scaled by 1e9. This is not an\n expected fill price. Present when price protection was resolved.",
+            "description": "Protective execution boundary. REST returns protectedPriceBound as a decimal\n string in quote asset units per base asset unit, for example \"2751.6\".\n Protobuf uses quote units scaled by 1e9. This is not an expected fill price.\n Present when price protection was resolved.",
             "format": "int64",
             "nullable": true,
             "title": "protected_price_bound_ticks",
@@ -17165,7 +17239,7 @@
             "title": "rejection"
           },
           "resolvedBaseQtyScaled": {
-            "description": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
+            "description": "Gross base quantity resolved for execution. REST returns resolvedBaseQty as\n a decimal string in base asset units, for example \"0.005\". Protobuf uses the\n pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
             "format": "int64",
             "nullable": true,
             "title": "resolved_base_qty_scaled",
@@ -17242,7 +17316,7 @@
           {
             "properties": {
               "oco": {
-                "description": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted or canceled. Default is false.",
+                "description": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted. It decides what canceling an\n exit order ends: with oco set, canceling one leg's exit ends both legs;\n without it, only that leg ends and the other keeps protecting the\n remaining position. Changing only this setting with ModifyOrder keeps\n the existing legs, with their IDs, arming and a trailing stop's tracked\n peak; changing a leg's terms, such as its trigger price, limit price or\n trailing distance, still replaces that leg. Default is false.",
                 "title": "oco",
                 "type": "boolean"
               },
@@ -17284,12 +17358,12 @@
             ]
           }
         ],
-        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest trade and, if its\n condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
+        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
         "title": "RiskPolicy",
         "type": "object"
       },
       "orders.v1.SelfTradePreventionMode": {
-        "description": "SelfTradePreventionMode controls which orders expire when they would trade\n against another order from the same account.",
+        "description": "SelfTradePreventionMode controls which orders expire when an order would\n trade against another order of the same root account, including all its\n subaccounts: two subaccounts of one root never trade with each other. The\n incoming order's mode decides which orders expire.",
         "enum": [
           "SELF_TRADE_PREVENTION_MODE_UNSPECIFIED",
           "EXPIRE_MAKER",
@@ -17311,12 +17385,17 @@
       },
       "orders.v1.StopLossPolicy": {
         "additionalProperties": false,
-        "description": "StopLossPolicy defines a stop-loss attached to an order. It evaluates last\n trade price, arms after the parent fills, and submits the selected child.",
+        "description": "StopLossPolicy defines a stop-loss attached to an order. It watches the last\n traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
         "properties": {
           "child": {
             "$ref": "#/components/schemas/orders.v1.RiskExecution",
             "description": "Child execution when the threshold is crossed.",
             "title": "child"
+          },
+          "triggerPriceSource": {
+            "$ref": "#/components/schemas/orders.v1.TriggerPriceSource",
+            "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
             "description": "Trigger price in quote units scaled by 1e9.",
@@ -17337,12 +17416,17 @@
       },
       "orders.v1.TakeProfitPolicy": {
         "additionalProperties": false,
-        "description": "TakeProfitPolicy defines a take-profit attached to an order. It evaluates\n last trade price, arms after the parent fills, and submits the selected child.",
+        "description": "TakeProfitPolicy defines a take-profit attached to an order. It watches the\n last traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
         "properties": {
           "child": {
             "$ref": "#/components/schemas/orders.v1.RiskExecution",
             "description": "Child execution when the threshold is crossed.",
             "title": "child"
+          },
+          "triggerPriceSource": {
+            "$ref": "#/components/schemas/orders.v1.TriggerPriceSource",
+            "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
             "description": "Trigger price in quote units scaled by 1e9.",
@@ -17463,6 +17547,11 @@
               "integer",
               "string"
             ]
+          },
+          "triggerPriceSource": {
+            "$ref": "#/components/schemas/orders.v1.TriggerPriceSource",
+            "description": "Price the trailing stop watches and trails: its peak or trough, activation\n and fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "title": "trigger_price_source"
           }
         },
         "title": "TrailingStopPolicy",
@@ -17479,7 +17568,7 @@
         "type": "string"
       },
       "orders.v1.TriggerPriceSource": {
-        "description": "TriggerPriceSource defines which price feed to use for trigger evaluation.\n v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for\n future.",
+        "description": "TriggerPriceSource defines which price a trigger watches. Standalone\n stop-loss, take-profit and trailing-stop triggers watch LAST_PRICE unless\n INDEX_PRICE is requested; MARK_PRICE is not supported on spot markets.",
         "enum": [
           "TRIGGER_PRICE_SOURCE_UNSPECIFIED",
           "LAST_PRICE",
@@ -22360,6 +22449,11 @@
             },
             "title": "side"
           },
+          "triggerPriceSource": {
+            "$ref": "#/components/schemas/orders.v1.TriggerPriceSource",
+            "description": "Price the trigger watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "title": "trigger_price_source"
+          },
           "triggerPriceTicks": {
             "description": "Trigger threshold in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
@@ -22379,7 +22473,7 @@
       },
       "triggers.v1.CreateTriggerRequest": {
         "additionalProperties": false,
-        "description": "CreateTriggerRequest submits one standalone trigger intent for admission.",
+        "description": "CreateTriggerRequest submits one standalone trigger intent for admission.\n A create sent but not confirmed in time fails with\n TRIGGER_CREATE_OUTCOME_UNKNOWN: the trigger may have been created, so read\n the triggers for its client_trigger_id before retrying. UNAVAILABLE means\n the trigger was not created.",
         "properties": {
           "subaccountId": {
             "description": "Target sub-account. When omitted, uses the caller's root account.",
@@ -22856,8 +22950,7 @@
             ]
           },
           "symbolId": {
-            "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-            "exclusiveMinimum": 0,
+            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
             "title": "symbol_id",
             "type": "integer"
           },
@@ -22883,9 +22976,6 @@
             ]
           }
         },
-        "required": [
-          "symbolId"
-        ],
         "title": "ModifyTriggerRequest",
         "type": "object"
       },
@@ -23004,8 +23094,7 @@
             ]
           },
           "symbolId": {
-            "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-            "exclusiveMinimum": 0,
+            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
             "title": "symbol_id",
             "type": "integer"
           },
@@ -23020,9 +23109,6 @@
             ]
           }
         },
-        "required": [
-          "symbolId"
-        ],
         "title": "ResumeTriggerRequest",
         "type": "object"
       },
@@ -23268,7 +23354,7 @@
             ]
           },
           "limitPriceTicks": {
-            "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the last trade price when no activation price is set. A rise that\n fires above it still fires, and the child fills only at or below it. Must\n be unset when `side` is SELL. Fixed at create.",
+            "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the price it watches (trigger_price_source) when no activation price\n is set. A rise that fires above it still fires, and the child fills only\n at or below it. Must be unset when `side` is SELL. Fixed at create.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "limit_price_ticks",
@@ -23286,6 +23372,11 @@
               ]
             },
             "title": "side"
+          },
+          "triggerPriceSource": {
+            "$ref": "#/components/schemas/orders.v1.TriggerPriceSource",
+            "description": "Price the trailing stop watches: its activation, its peak or trough and\n its fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "title": "trigger_price_source"
           }
         },
         "title": "TrailingStopTrigger",
@@ -23546,6 +23637,11 @@
           "TRIGGER_CANCEL_REASON_OCO",
           "TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL",
           "TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION",
+          "TRIGGER_CANCEL_REASON_ACCOUNT_REPAIR",
+          "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TRIGGER",
+          "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TWAP",
+          "TRIGGER_CANCEL_REASON_PAIR_DRAIN_LADDER",
+          "TRIGGER_CANCEL_REASON_PAIR_DRAIN_ATTACHED_LEG",
           "TRIGGER_CANCEL_REASON_MISSING_REASON_CODE",
           "TRIGGER_CANCEL_REASON_INTERNAL_ERROR"
         ],
@@ -23768,6 +23864,8 @@
           "TRIGGER_FAILURE_REASON_TWAP_CAPACITY_REACHED",
           "TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT",
           "TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE",
+          "TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE",
+          "TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "TRIGGER_FAILURE_REASON_MISSING_REASON_CODE",
           "TRIGGER_FAILURE_REASON_INTERNAL_ERROR"
         ],
@@ -23780,7 +23878,7 @@
           {
             "properties": {
               "clientTriggerId": {
-                "description": "Client-provided trigger ID for idempotency. Retrying an accepted create\n with the identical intent returns the same trigger. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.\nstring.max_bytes = 36\n",
+                "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair\n and trigger type. While the trigger is active and for 60 seconds after it\n reaches a terminal status, retrying the create with the identical intent\n returns the same trigger, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is\n free: a create that uses it is a new intent and creates a new trigger. To\n learn the outcome of an earlier create after that window, read the\n triggers with ListTriggers, which return each trigger's\n client_trigger_id, instead of retrying the create. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.\nstring.max_bytes = 36\n",
                 "minLength": 1,
                 "title": "client_trigger_id",
                 "type": "string"
@@ -23802,7 +23900,7 @@
               },
               "selfTradePreventionMode": {
                 "$ref": "#/components/schemas/orders.v1.SelfTradePreventionMode",
-                "description": "Child self-trade prevention mode. Defaults to EXPIRE_MAKER.",
+                "description": "Child self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER.",
                 "title": "self_trade_prevention_mode"
               },
               "symbolId": {
@@ -24134,8 +24232,9 @@
           {
             "properties": {
               "durationMs": {
-                "description": "Total execution duration in milliseconds.",
+                "description": "Total execution duration in milliseconds, at least 1000.",
                 "format": "int64",
+                "minimum": 1000,
                 "title": "duration_ms",
                 "type": [
                   "integer",
@@ -24153,8 +24252,9 @@
                 "title": "side"
               },
               "sliceIntervalMs": {
-                "description": "Interval between slices in milliseconds.",
+                "description": "Interval between slices in milliseconds, at least 100 and at most\n duration_ms.",
                 "format": "int64",
+                "minimum": 100,
                 "title": "slice_interval_ms",
                 "type": [
                   "integer",
@@ -24194,7 +24294,7 @@
             ]
           }
         ],
-        "description": "TwapTrigger configures a proven TWAP execution mode.\ntwap_trigger.window // slice_interval_ms must be between 100 and duration_ms\n",
+        "description": "TwapTrigger configures a proven TWAP execution mode.\ntwap_trigger.window // slice_interval_ms must not exceed duration_ms\n",
         "title": "TwapTrigger",
         "type": "object"
       },
@@ -25966,7 +26066,7 @@
     },
     "/orders.v1.OrdersReadService/GetOpenOrders": {
       "post": {
-        "description": "Retrieve non-terminal orders for an account.\n Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.",
+        "description": "Retrieve non-terminal orders for an account.\n Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.\n While the current state of an order in scope is temporarily unavailable, the call\n fails with a retryable UNAVAILABLE rather than omitting the order or returning a\n stale state; retry the same request.",
         "operationId": "OrdersReadService_GetOpenOrders",
         "parameters": [
           {
@@ -26032,7 +26132,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve non-terminal orders for an account.  Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.",
+        "summary": "Retrieve non-terminal orders for an account.  Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.  While the current state of an order in scope is temporarily unavailable, the call  fails with a retryable UNAVAILABLE rather than omitting the order or returning a  stale state; retry the same request.",
         "tags": [
           "OrdersReadService"
         ]
@@ -26114,7 +26214,7 @@
     },
     "/orders.v1.OrdersReadService/GetOrderHistory": {
       "post": {
-        "description": "Retrieve terminal order history for an account.\n Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.",
+        "description": "Retrieve terminal order history for an account.\n Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.\n While the current state of an order on the page is temporarily unavailable, the call\n fails with a retryable UNAVAILABLE rather than returning a stale state; retry the\n same request.",
         "operationId": "OrdersReadService_GetOrderHistory",
         "parameters": [
           {
@@ -26180,7 +26280,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve terminal order history for an account.  Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.",
+        "summary": "Retrieve terminal order history for an account.  Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.  While the current state of an order on the page is temporarily unavailable, the call  fails with a retryable UNAVAILABLE rather than returning a stale state; retry the  same request.",
         "tags": [
           "OrdersReadService"
         ]
@@ -32963,11 +33063,11 @@
             }
           },
           {
-            "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns all known deposit addresses for the selected target,\n ordered by ascending chain id.",
+            "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns the known deposit addresses for the selected target on\n chains that currently accept deposits, ordered by ascending chain id. A\n chain whose deposits are unavailable returns FailedPrecondition.",
             "in": "query",
             "name": "chainId",
             "schema": {
-              "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns all known deposit addresses for the selected target,\n ordered by ascending chain id.",
+              "description": "Optional PolyChain-registered source chain id filter. When omitted, the\n response returns the known deposit addresses for the selected target on\n chains that currently accept deposits, ordered by ascending chain id. A\n chain whose deposits are unavailable returns FailedPrecondition.",
               "exclusiveMinimum": 0,
               "title": "chain_id",
               "type": "integer"
@@ -36456,8 +36556,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-                    "exclusiveMinimum": 0,
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   },
@@ -36473,9 +36572,6 @@
                     ]
                   }
                 },
-                "required": [
-                  "symbolId"
-                ],
                 "title": "ModifyTriggerRequest",
                 "type": "object"
               }
@@ -36595,8 +36691,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-                    "exclusiveMinimum": 0,
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   },
@@ -36612,9 +36707,6 @@
                     ]
                   }
                 },
-                "required": [
-                  "symbolId"
-                ],
                 "title": "ModifyTriggerRequest",
                 "type": "object"
               }
@@ -36851,15 +36943,11 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-                    "exclusiveMinimum": 0,
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   }
                 },
-                "required": [
-                  "symbolId"
-                ],
                 "title": "ResumeTriggerRequest",
                 "type": "object"
               }
@@ -36880,15 +36968,11 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
-                    "exclusiveMinimum": 0,
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   }
                 },
-                "required": [
-                  "symbolId"
-                ],
                 "title": "ResumeTriggerRequest",
                 "type": "object"
               }

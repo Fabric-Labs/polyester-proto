@@ -6,8 +6,13 @@
   - Append new fixed fields to the end of the fixed block and assign sinceVersion.
   - Never reuse template IDs, field IDs, enum values, or bit positions.
 -->
-<messageSchema package="tradews" id="7" version="27" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
+<messageSchema package="tradews" id="7" version="30" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
   <types>
+    <enum name="CancelAllListingStatus" encodingType="uint8" description="Availability of the cancel-all order listing, independent of its submission outcome">
+      <validValue name="UNSPECIFIED" description="Listing status was not provided; used for other commands">0</validValue>
+      <validValue name="INCLUDED" description="The initial response includes its listing, possibly empty and limited to 200 orders">1</validValue>
+      <validValue name="NOT_RETAINED_READ_OPEN_ORDERS" description="A retry returns the original outcome and counts without its historical listing; read open orders for current state and use order updates for final outcomes">2</validValue>
+    </enum>
     <composite name="messageHeader" description="Eight-byte SBE header that prefixes every WebSocket binary message">
       <type name="blockLength" primitiveType="uint16" description="Encoded length in bytes of the message fixed block, excluding this header and variable-length data"/>
       <type name="templateId" primitiveType="uint16" description="Message template identifier used to select the payload type"/>
@@ -245,7 +250,7 @@
       <validValue name="QUICKSWAP_MARKET_FEE_INVALID" description="The QuickSwap fee for this market is invalid and can&apos;t be used.">289</validValue>
       <validValue name="QUICKSWAP_SETUP_INVALID" description="QuickSwap&apos;s setup is invalid, so QuickSwap orders can&apos;t be placed.">290</validValue>
       <validValue name="QUICKSWAP_CAPACITY_REACHED" description="QuickSwap&apos;s capacity for fee settings is reached; this order can&apos;t be placed.">291</validValue>
-      <validValue name="ATTACHED_EXIT_WORKING" description="An exit order placed by one of the order's attached take-profit or stop legs is still working, so attached legs can't be added now. Nothing changed; retry once the exit completes">292</validValue>
+      <validValue name="ATTACHED_EXIT_WORKING" description="An exit order placed by one of the order's attached take-profit or stop legs is still working, so the order's attached legs can't be added, edited, paused or resumed now; removing a leg is still accepted. Nothing changed; retry once the exit completes">292</validValue>
       <validValue name="MARKET_TRIGGER_LIMIT_EXCEEDED" description="The account already has the most triggers one account may have on this market, attached take-profit, stop-loss and trailing legs included. Nothing changed; retry once one of them ends">293</validValue>
       <validValue name="MARKET_TWAP_LIMIT_EXCEEDED" description="The account already has the most TWAP orders one account may have on this market. Nothing changed; retry once one of them ends">294</validValue>
       <validValue name="MARKET_LADDER_LIMIT_EXCEEDED" description="The account already has the most ladder orders one account may have on this market. Nothing changed; retry once one of them ends">295</validValue>
@@ -254,6 +259,9 @@
       <validValue name="ORDER_MODIFY_OUTCOME_UNKNOWN" description="The order modification was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying">298</validValue>
       <validValue name="ORDER_REPAIRING" description="This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.">299</validValue>
       <validValue name="ACCOUNT_REPAIRING" description="This account's orders are being canceled while its balances are brought back in line, so new orders, changes and trigger orders are paused for a short time. Nothing changed; cancels still work. Try again shortly.">300</validValue>
+      <validValue name="TRIGGER_WOULD_TRIGGER_IMMEDIATELY" description="The trigger price is already reached by the price the trigger watches, so the trigger would fire at once. Nothing changed; choose a trigger price the market has not reached">302</validValue>
+      <validValue name="ORDER_CREATE_OUTCOME_UNKNOWN" description="The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or resend the batch with the same correlationId and items within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice">303</validValue>
+      <validValue name="TRIGGER_CREATE_OUTCOME_UNKNOWN" description="The trigger was sent but not confirmed in time. Its outcome is unknown and it may have been created; read the triggers for its client trigger ID before retrying">304</validValue>
       <validValue name="SEQUENCE_OUT_OF_ORDER" description="The client sequence did not equal the next expected sequence for this connection">1001</validValue>
     </enum>
 
@@ -277,9 +285,15 @@
       <validValue name="REJECTED" description="Rejected before becoming active">7</validValue>
     </enum>
 
+    <enum name="MarketResyncReason" encodingType="uint8" description="Why a connection may have missed private events of one trading pair">
+      <validValue name="INTERRUPTED" description="Private event delivery for the pair was interrupted, for example during maintenance or recovery of the pair, and has resumed">1</validValue>
+      <validValue name="DISCONTINUITY" description="The server detected missing, conflicting or unreadable private events of the pair">2</validValue>
+    </enum>
+
     <set name="EventChannels" encodingType="uint32" description="Private event channels enabled for this authenticated connection">
       <choice name="executions" description="Receive private execution notifications for the authenticated account scope">0</choice>
       <choice name="orders" description="Receive private order lifecycle notifications for the authenticated account scope">1</choice>
+      <choice name="marketResync" description="Receive MarketResync when private events of a trading pair may have been missed, while executions or orders is also enabled. Without it, such a miss closes the connection with WebSocket status 1012 instead; reconnect, then recover orders and executions through the Orders API">2</choice>
     </set>
 
     <enum name="RateLimitOperation" encodingType="ZeroNullUint8" description="Trading operation whose rate limit rejected the command">
@@ -332,7 +346,7 @@
     <data name="payload" id="3" type="varDataEncoding" description="Opaque bytes copied unchanged into the corresponding Pong"/>
   </message>
 
-  <message name="CreateOrder" id="2" description="Submits one independent order for admission without exact replay; an acknowledgement does not imply that the order is active or executed. Do not automatically resubmit after an ambiguous timeout: use GetOrder with clientOrderId when supplied; without it, a lost acknowledgement may leave the outcome unknown. seq and correlationId provide session sequencing and correlation only">
+  <message name="CreateOrder" id="2" description="Submits one independent order for admission without exact replay; an acknowledgement does not imply that the order is active or executed. Do not automatically resubmit after an ambiguous timeout: use GetOrder with clientOrderId when supplied; without it, a lost acknowledgement may leave the outcome unknown. A CommandReject ORDER_CREATE_OUTCOME_UNKNOWN means the order was sent but not confirmed and may have been accepted; UNAVAILABLE means it was not accepted. seq and correlationId provide session sequencing and correlation only">
     <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
     <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding acknowledgement or rejection"/>
     <field name="symbolId" id="4" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig; must be greater than zero"/>
@@ -343,7 +357,7 @@
     <field name="priceTicks" id="9" type="int64" presence="optional" description="Limit price in quote units scaled by 1e9; required and positive for LIMIT orders, null for MARKET orders"/>
     <field name="flags" id="10" type="OrderFlags" description="Bitset of requested order behaviors; zero enables no optional behaviors"/>
     <field name="feeAsset" id="11" type="FeeAsset" description="Required asset in which fees are charged; SELL orders must use QUOTE"/>
-    <field name="stpMode" id="12" type="STPMode" presence="optional" description="Self-trade prevention mode; null defaults to EXPIRE_MAKER"/>
+    <field name="stpMode" id="12" type="STPMode" presence="optional" description="Self-trade prevention mode against orders of the same root account, including all its subaccounts; null defaults to EXPIRE_MAKER"/>
     <field name="marketClientRefPriceTicks" id="13" type="int64" presence="optional" description="Optional client reference price for MARKET price protection in quote units scaled by 1e9; null uses server reference pricing"/>
     <field name="marketMaxSlippageTicks" id="14" type="int64" presence="optional" description="Non-negative absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units). Optional positive MARKET slippage limit as a price delta in 1e-9 quote-unit ticks; null uses the pair default and is mutually exclusive with marketMaxSlippageBps"/>
     <field name="marketMaxSlippageBps" id="15" type="int32" presence="optional" description="Optional MARKET slippage limit from 1 to 10000 basis points, where 1 basis point is 0.01 percent; null uses the pair default and is mutually exclusive with marketMaxSlippageTicks"/>
@@ -389,7 +403,7 @@
     <field name="channels" id="3" type="EventChannels" description="Complete desired channel bitset that replaces the previous subscription; zero unsubscribes from all private events"/>
   </message>
 
-  <message name="BatchCreateOrders" id="7" description="Submits up to 20 new orders for admission, each admitted or rejected on its own; the acknowledgement does not imply that any order is active or executed. correlationId is the batch's account-scoped idempotency identity: resending the same correlationId and items replays the original per-item results instead of creating orders again, for 15 minutes; the same correlationId with different items is rejected per item with CONFLICT_IDEMPOTENCY_KEY_REUSE. The identity is shared with the Orders API and protobuf request_id equal to correlationId in decimal, but this encoding's payload never matches theirs, so reusing one across encodings is rejected with CONFLICT_IDEMPOTENCY_KEY_REUSE and changes nothing. A CommandReject UNAVAILABLE, or an acknowledgement that never arrived, may follow the admission of some items, which stay active: resend the same correlationId and items to resolve the rest and replay the others, and do not assume no orders were created">
+  <message name="BatchCreateOrders" id="7" description="Submits up to 20 new orders for admission, each admitted or rejected on its own; the acknowledgement does not imply that any order is active or executed. correlationId is the batch's account-scoped idempotency identity: resending the same correlationId and items replays the original per-item results instead of creating orders again, for 15 minutes; the same correlationId with different items is rejected per item with CONFLICT_IDEMPOTENCY_KEY_REUSE. The identity is shared with the Orders API and protobuf request_id equal to correlationId in decimal, but this encoding's payload never matches theirs, so reusing one across encodings is rejected with CONFLICT_IDEMPOTENCY_KEY_REUSE and changes nothing. A CommandReject UNAVAILABLE or ORDER_CREATE_OUTCOME_UNKNOWN, or an acknowledgement that never arrived, may follow the admission of some items, which stay active: resend the same correlationId and items to resolve the rest and replay the others, and do not assume no orders were created">
     <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
     <field name="correlationId" id="2" type="uint64" description="Required nonzero account-scoped batch identity, copied unchanged into the acknowledgement or rejection. Keep it and the items unchanged when retrying, including after reconnecting; use a fresh one for each new batch"/>
     <group name="items" id="3" dimensionType="groupSizeEncoding" description="1 to 20 orders, answered in this order; items may name different trading pairs">
@@ -401,7 +415,7 @@
       <field name="priceTicks" id="9" type="int64" presence="optional" description="Limit price in quote units scaled by 1e9; required and positive for LIMIT orders, null for MARKET orders"/>
       <field name="flags" id="10" type="OrderFlags" description="Bitset of requested order behaviors; zero enables no optional behaviors"/>
       <field name="feeAsset" id="11" type="FeeAsset" description="Required asset in which fees are charged; SELL orders must use QUOTE"/>
-      <field name="stpMode" id="12" type="STPMode" presence="optional" description="Self-trade prevention mode; null defaults to EXPIRE_MAKER"/>
+      <field name="stpMode" id="12" type="STPMode" presence="optional" description="Self-trade prevention mode against orders of the same root account, including all its subaccounts; null defaults to EXPIRE_MAKER"/>
       <field name="marketClientRefPriceTicks" id="13" type="int64" presence="optional" description="Optional client reference price for MARKET price protection in quote units scaled by 1e9; null uses server reference pricing"/>
       <field name="marketMaxSlippageTicks" id="14" type="int64" presence="optional" description="Optional positive MARKET slippage limit as a price delta in 1e-9 quote-unit ticks; null uses the pair default and is mutually exclusive with marketMaxSlippageBps"/>
       <field name="marketMaxSlippageBps" id="15" type="int32" presence="optional" description="Optional MARKET slippage limit from 1 to 10000 basis points, where 1 basis point is 0.01 percent; null uses the pair default and is mutually exclusive with marketMaxSlippageTicks"/>
@@ -448,7 +462,8 @@
     <field name="resolvedBaseQtyScaled" id="10" type="int64" presence="optional" sinceVersion="2" description="For CREATE_ORDER, gross base-asset quantity resolved for execution and scaled by the pair's base_quantity_scale from GetSpotConfig; null for other commands"/>
     <field name="submittedMaxQuoteDebitScaled" id="11" type="int64" presence="optional" sinceVersion="2" description="For CREATE_ORDER using MAX_QUOTE_DEBIT sizing, the submitted hard all-in quote-asset debit limit scaled by the pair's quote_quantity_scale from GetSpotConfig; null otherwise"/>
     <field name="cancelledOrdersTruncated" id="12" type="uint8" sinceVersion="27" description="Boolean encoded as 0 or 1; for non-dry-run CANCEL_ALL_ORDERS, 1 when more orders were cancelled than cancelledOrders lists, and submittedCancels counts every one; 0 otherwise"/>
-    <group name="cancelledOrders" id="13" dimensionType="groupSizeEncoding" sinceVersion="27" description="For non-dry-run CANCEL_ALL_ORDERS, the orders whose cancellation was requested, at most 200, oldest first (the order in which they were created); when more were cancelled, the 200 oldest. Each order reports its final state in order events; empty for other commands and for a dry run. Resending the same correlationId and criteria within the replay window returns the same list">
+    <field name="listingStatus" id="16" type="CancelAllListingStatus" sinceVersion="29" description="For CANCEL_ALL_ORDERS, INCLUDED on the initial response and NOT_RETAINED_READ_OPEN_ORDERS on a retry; a retried empty listing does not mean no cancellations were requested. UNSPECIFIED for other commands"/>
+    <group name="cancelledOrders" id="13" dimensionType="groupSizeEncoding" sinceVersion="27" description="For non-dry-run CANCEL_ALL_ORDERS, the orders whose cancellation was requested, at most 200, oldest first (the order in which they were created); when more were cancelled, the 200 oldest. Each order reports its final state in order events; empty for other commands and for a dry run. Resending the same correlationId and criteria within 120 seconds returns the original counts and timestamp without a listing, with listingStatus NOT_RETAINED_READ_OPEN_ORDERS, and requests no new cancellations">
       <field name="orderId" id="14" type="uint64" description="Public identifier of an order whose cancellation was requested"/>
       <data name="clientOrderId" id="15" type="varDataEncoding" description="Client-generated identifier of that order; empty when the order has none"/>
     </group>
@@ -567,5 +582,11 @@
       <field name="code" id="12" type="RejectCode" presence="optional" description="Reason the cancellation was rejected; zero when accepted"/>
       <field name="orderId" id="13" type="ZeroNullUint64" presence="optional" description="Public identifier of the order: the one resolved when accepted, else the orderId sent; zero when neither is known"/>
     </group>
+  </message>
+
+  <message name="MarketResync" id="29" description="Reports that this connection may have missed private order and execution events of one trading pair before this message. Sent only to connections whose subscription enables marketResync together with executions or orders, whether or not their account trades the pair; clients must opt in to receive it. The connection stays open and the events of every other pair are unaffected. On receipt, reconcile the pair's orders and executions through the Orders API, then apply this connection's later events of the pair, which follow this message in order and may repeat state the reconciliation already returned. One interruption may send it more than once, and each later one needs only the same reconciliation">
+    <field name="symbolId" id="1" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig"/>
+    <field name="reason" id="2" type="MarketResyncReason" description="Why events of the pair may have been missed; the recovery is the same for every reason"/>
+    <field name="gatewayTsNs" id="3" type="uint64" epoch="unix" timeUnit="nanosecond" description="Timestamp when this WebSocket message was encoded, in nanoseconds since the Unix epoch, UTC"/>
   </message>
 </messageSchema>
