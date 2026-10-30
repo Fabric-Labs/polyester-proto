@@ -1227,6 +1227,11 @@
             },
             "type": "array"
           },
+          "maxOpenOrdersTotal": {
+            "description": "The venue's default limit on resting orders a typical account may hold across all pairs together: good-till-cancelled and good-till-date orders that have not ended. Immediate-or-cancel, fill-or-kill and market orders never count, and a replaced order keeps its place. An order past it is rejected with MAX_OPEN_ORDERS_TOTAL. Each pair's own limit is PairConfig.max_open_orders_per_pair. An account may have a lower limit of its own; that is not part of this public configuration and would be returned by an account-scoped read.",
+            "format": "int32",
+            "type": "integer"
+          },
           "pairs": {
             "description": "Pairs ordered by symbol in ascending alphabetical order.",
             "items": {
@@ -1283,6 +1288,23 @@
                   "description": "Maximum allowed drift between client reference price and server reference price for MARKET orders, in basis points (1 bp = 0.01%), when client reference pricing is used.",
                   "format": "int32",
                   "type": "integer"
+                },
+                "maxLimitQtyBase": {
+                  "description": "Largest quantity of one limit order, as a decimal string in base-asset units. A replace is checked on its new total less the quantity already filled. An order above it is rejected with MAX_QTY. Absent when the pair has no maximum.",
+                  "type": "string"
+                },
+                "maxMarketQtyBase": {
+                  "description": "Largest quantity of one market order, as a decimal string in base-asset units. A market order sized by quote amount is checked once converted to base. An order above it is rejected with MAX_QTY. Absent when the pair has no maximum.",
+                  "type": "string"
+                },
+                "maxOpenOrdersPerPair": {
+                  "description": "The venue's default limit on resting orders a typical account may hold on this pair at once: good-till-cancelled and good-till-date orders that have not ended. Immediate-or-cancel, fill-or-kill and market orders never count, and a replaced order keeps its place. An order past it is rejected with MAX_OPEN_ORDERS_PER_PAIR. An account may have a lower limit of its own; that is not part of this public configuration and would be returned by an account-scoped read.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "maxOrderNotionalQuote": {
+                  "description": "Largest notional of one order, as a decimal string in quote-asset units: its quantity times its limit price, or times its protection price for a market order, compared exactly with no rounding. An order above it is rejected with MAX_NOTIONAL. Absent when the pair has no maximum.",
+                  "type": "string"
                 },
                 "minNotionalQuote": {
                   "description": "Minimum order notional as a decimal string in quote-asset units.",
@@ -1342,6 +1364,7 @@
                 "listingAt",
                 "marketdata",
                 "maxClientRefDriftBps",
+                "maxOpenOrdersPerPair",
                 "minNotionalQuote",
                 "minQtyBase",
                 "quoteAsset",
@@ -1365,6 +1388,7 @@
         },
         "required": [
           "assets",
+          "maxOpenOrdersTotal",
           "pairs",
           "tsSec"
         ],
@@ -3926,6 +3950,43 @@
         ],
         "type": "object"
       },
+      "polyester.rest.OrdersService.Problem": {
+        "description": "Order request error.",
+        "properties": {
+          "code": {
+            "description": "Stable order error code.",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Human-readable explanation; clients must branch on code.",
+            "type": "string"
+          },
+          "existingOrderId": {
+            "description": "Public order ID holding this account's client order ID on CONFLICT_DUPLICATE_CLIENT_ORDER_ID; omitted when no existing holder is known. Use GetOrder for current state.",
+            "type": "string"
+          },
+          "status": {
+            "description": "HTTP status code.",
+            "type": "integer"
+          },
+          "title": {
+            "description": "Short summary of the problem.",
+            "type": "string"
+          },
+          "type": {
+            "description": "URI identifying the problem type.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "type": "object"
+      },
       "polyester.rest.OrdersService_BatchCancelOrders.Request": {
         "additionalProperties": false,
         "properties": {
@@ -4559,6 +4620,11 @@
                             }
                           ],
                           "description": "Stable error code matching the REST problem+json \"code\" field."
+                        },
+                        "existingOrderId": {
+                          "description": "Public order ID holding this account's client order ID for a duplicate rejection; omitted when no existing holder is known.",
+                          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                          "type": "string"
                         },
                         "rateLimit": {
                           "additionalProperties": false,
@@ -14978,7 +15044,8 @@
           "ACCOUNT_REPAIRING",
           "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "ORDER_CREATE_OUTCOME_UNKNOWN",
-          "TRIGGER_CREATE_OUTCOME_UNKNOWN"
+          "TRIGGER_CREATE_OUTCOME_UNKNOWN",
+          "MAX_OPEN_ORDERS_PER_PAIR"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
@@ -15050,6 +15117,7 @@
           "MARKET_TRIGGER_LIMIT_EXCEEDED": "The account already has the most triggers one account may have on this market, attached take-profit, stop-loss and trailing legs included. Nothing changed; retry once one of them ends.",
           "MARKET_TWAP_LIMIT_EXCEEDED": "The account already has the most TWAP orders one account may have on this market. Nothing changed; retry once one of them ends.",
           "MAX_NOTIONAL": "Order notional is above the pair maximum (quote units). A stricter sub-account policy cap returns POLICY_MAX_NOTIONAL instead.",
+          "MAX_OPEN_ORDERS_PER_PAIR": "The account has reached its maximum number of resting orders in this market. Good-till-cancelled and good-till-date orders count until they end; immediate-or-cancel, fill-or-kill and market orders never count, and a replace keeps its order's place. Nothing changed; cancel a resting order in this market first.",
           "MAX_OPEN_ORDERS_TOTAL": "The account has reached its maximum number of open orders across all markets. A stricter sub-account policy cap returns POLICY_MAX_OPEN_ORDERS instead.",
           "MAX_QTY": "Quantity is above the pair maximum: the market-order maximum for MARKET orders, the limit-order maximum otherwise (base units).",
           "MAX_QUOTE_DEBIT_TOO_SMALL": "The all-in quote budget cannot resolve one valid step-aligned base quantity.",
@@ -15758,6 +15826,7 @@
           "MAX_NOTIONAL",
           "PAIR_POST_ONLY",
           "MAX_OPEN_ORDERS_TOTAL",
+          "MAX_OPEN_ORDERS_PER_PAIR",
           "STP_MODE_NOT_ALLOWED",
           "PAIR_BACKLOGGED",
           "MODE_NOT_SUPPORTED",
@@ -15850,6 +15919,7 @@
           "MARKET_QUOTE_STALE": "The market's reference quote was too old to price the market child order.",
           "MARKET_QUOTE_UNHEALTHY": "The market's reference quote could not be used to price the market child order.",
           "MAX_NOTIONAL": "The child order notional was above the pair's maximum.",
+          "MAX_OPEN_ORDERS_PER_PAIR": "The account had its maximum number of resting orders in this market when a limit TWAP slice was due.",
           "MAX_OPEN_ORDERS_TOTAL": "The account had its maximum number of open orders.",
           "MAX_QUANTITY": "The child order quantity was above the pair's maximum.",
           "MAX_QUOTE_DEBIT_TOO_SMALL": "The maximum quote debit could not fund the minimum valid child order.",
@@ -17246,6 +17316,16 @@
               }
             },
             "description": "Successful response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.OrdersService.Problem"
+                }
+              }
+            },
+            "description": "CONFLICT_DUPLICATE_CLIENT_ORDER_ID: the client order ID is already bound. existingOrderId identifies the existing order when known."
           }
         },
         "summary": "Create Order",
