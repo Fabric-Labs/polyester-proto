@@ -1,6 +1,43 @@
 {
   "components": {
     "schemas": {
+      "polyester.rest.OrdersService.Problem": {
+        "description": "Order request error. OVERLOADED returns HTTP 503 when the account has too many order requests in flight; nothing was admitted. No Retry-After or RateLimit-* headers are supplied; retry after an outstanding request completes. Quota exhaustion returns HTTP 429 with RATE_LIMIT_EXCEEDED and rate-limit metadata.",
+        "properties": {
+          "code": {
+            "description": "Stable order error code.",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Human-readable explanation; clients must branch on code.",
+            "type": "string"
+          },
+          "existingOrderId": {
+            "description": "Public order ID holding this account's client order ID on CONFLICT_DUPLICATE_CLIENT_ORDER_ID; omitted when no existing holder is known. Use GetOrder for current state.",
+            "type": "string"
+          },
+          "status": {
+            "description": "HTTP status code.",
+            "type": "integer"
+          },
+          "title": {
+            "description": "Short summary of the problem.",
+            "type": "string"
+          },
+          "type": {
+            "description": "URI identifying the problem type.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "type": "object"
+      },
       "polyester.rest.OrdersService_BatchCancelOrders.Request": {
         "additionalProperties": false,
         "properties": {
@@ -234,7 +271,7 @@
                   "description": "Optional attached risk controls that arm after the parent order fills.",
                   "properties": {
                     "oco": {
-                      "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted or canceled. Default is false.",
+                      "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted. It decides what canceling an exit order ends: with oco set, canceling one leg's exit ends both legs; without it, only that leg ends and the other keeps protecting the remaining position. Changing only this setting with ModifyOrder keeps the existing legs, with their IDs, arming and a trailing stop's tracked peak; changing a leg's terms, such as its trigger price, limit price or trailing distance, still replaces that leg. Default is false.",
                       "type": "boolean"
                     },
                     "stopLoss": {
@@ -275,6 +312,14 @@
                           "description": "Trigger price in quote units scaled by 1e9.",
                           "pattern": "^[0-9]+(\\.[0-9]+)?$",
                           "type": "string"
+                        },
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -320,6 +365,14 @@
                           "description": "Trigger price in quote units scaled by 1e9.",
                           "pattern": "^[0-9]+(\\.[0-9]+)?$",
                           "type": "string"
+                        },
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -346,15 +399,23 @@
                           "format": "int64",
                           "type": "integer"
                         },
+                        "trailingDistance": {
+                          "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                          "type": "string"
+                        },
                         "trailingDistanceBps": {
                           "description": "Trailing distance in basis points (1 bp = 0.01%).",
                           "format": "int32",
                           "type": "integer"
                         },
-                        "trailingDistanceTicks": {
-                          "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                          "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                          "type": "string"
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [],
@@ -493,7 +554,7 @@
                       "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.SelfTradePreventionMode"
                     }
                   ],
-                  "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified."
+                  "description": "Self-trade prevention mode against orders of the same root account, including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified."
                 },
                 "side": {
                   "allOf": [
@@ -517,7 +578,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Required account-scoped idempotency key for the entire ordered batch. Reusing it with the same payload within 15 minutes replays the original per-item results and timestamp. Reusing it with a different payload during that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "description": "Required account-scoped idempotency key for the entire ordered batch. Reusing it with the same payload within 15 minutes returns each decided item's original result and result time, and retries the items still unresolved, never admitting an already admitted item again. Reusing it with a different payload during that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat is a new request and can place its orders again, so read the items back instead of repeating an older batch.",
             "type": "string"
           },
           "subaccountId": {
@@ -610,6 +671,11 @@
                             }
                           ],
                           "description": "Stable error code matching the REST problem+json \"code\" field."
+                        },
+                        "existingOrderId": {
+                          "description": "Public order ID holding this account's client order ID for a duplicate rejection; omitted when no existing holder is known.",
+                          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                          "type": "string"
                         },
                         "rateLimit": {
                           "additionalProperties": false,
@@ -762,7 +828,7 @@
                   "description": "Replacement attached-risk policy for the order.",
                   "properties": {
                     "oco": {
-                      "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted or canceled. Default is false.",
+                      "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted. It decides what canceling an exit order ends: with oco set, canceling one leg's exit ends both legs; without it, only that leg ends and the other keeps protecting the remaining position. Changing only this setting with ModifyOrder keeps the existing legs, with their IDs, arming and a trailing stop's tracked peak; changing a leg's terms, such as its trigger price, limit price or trailing distance, still replaces that leg. Default is false.",
                       "type": "boolean"
                     },
                     "stopLoss": {
@@ -803,6 +869,14 @@
                           "description": "Trigger price in quote units scaled by 1e9.",
                           "pattern": "^[0-9]+(\\.[0-9]+)?$",
                           "type": "string"
+                        },
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -848,6 +922,14 @@
                           "description": "Trigger price in quote units scaled by 1e9.",
                           "pattern": "^[0-9]+(\\.[0-9]+)?$",
                           "type": "string"
+                        },
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -874,15 +956,23 @@
                           "format": "int64",
                           "type": "integer"
                         },
+                        "trailingDistance": {
+                          "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                          "type": "string"
+                        },
                         "trailingDistanceBps": {
                           "description": "Trailing distance in basis points (1 bp = 0.01%).",
                           "format": "int32",
                           "type": "integer"
                         },
-                        "trailingDistanceTicks": {
-                          "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                          "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                          "type": "string"
+                        "triggerPriceSource": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                            }
+                          ],
+                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [],
@@ -898,8 +988,8 @@
                   "description": "Optional new client order id when replace path is taken.",
                   "type": "string"
                 },
-                "newPriceTicks": {
-                  "description": "New limit price in quote units scaled by 1e9.",
+                "newPrice": {
+                  "description": "New limit price as a decimal string in quote asset units per base asset unit, for example '28334.99'. An empty value keeps the current price.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -916,7 +1006,7 @@
               },
               "required": [
                 "newClientOrderId",
-                "newPriceTicks",
+                "newPrice",
                 "newQtyScaled"
               ],
               "type": "object"
@@ -1195,6 +1285,36 @@
       "polyester.rest.OrdersService_CancelAllAfter.Response": {
         "additionalProperties": false,
         "properties": {
+          "effectiveScope": {
+            "additionalProperties": false,
+            "description": "Recorded scope after arming or refreshing. Absent when disabled. Describes the current armed switch only. Cancellations already in progress are unaffected by a later refresh or disable.",
+            "properties": {
+              "accountId": {
+                "description": "Public ID of the account or sub-account whose orders are canceled.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "side": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.Side"
+                  }
+                ],
+                "description": "Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides."
+              },
+              "symbolId": {
+                "description": "Symbol ID whose orders are canceled. Zero or omitted means all symbols.",
+                "format": "int32",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "accountId",
+              "side",
+              "symbolId"
+            ],
+            "type": "object"
+          },
           "effectiveTimeoutSec": {
             "description": "Effective timeout in seconds (0 when disabled).",
             "format": "int32",
@@ -1268,7 +1388,7 @@
         "additionalProperties": false,
         "properties": {
           "cancelledOrders": {
-            "description": "Orders whose cancellation was requested, oldest first (the order in which they were created), at most 200. When more orders were canceled, these are the 200 oldest and `truncated` is true; the order update stream and read paths report every one. Empty when `dry_run` is set. Retrying with the same `request_id` and criteria within the replay window returns the same list.",
+            "description": "Orders whose cancellation was requested, oldest first (the order in which they were created), at most 200. When more orders were canceled, these are the 200 oldest and `truncated` is true; the order update stream and read paths report every one. Empty when `dry_run` is set. Retrying with the same `request_id` and criteria within 120 seconds returns the original status, counts and timestamp, an empty list, and `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new cancellations. Read open orders for current state and use order updates for final outcomes.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -1294,6 +1414,14 @@
             "description": "Number of matched orders that could not be submitted for cancellation because the cancel-all could not be recorded for their symbol. This request does not cancel them; send a new cancel-all with a new `request_id` if they are still open. Zero when `dry_run` is set.",
             "format": "int32",
             "type": "integer"
+          },
+          "listingStatus": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.CancelAllOrdersResponse.ListingStatus"
+              }
+            ],
+            "description": "Availability of the historical listing. An empty retry listing does not change the original counts or mean that no cancellations were requested."
           },
           "matchedOrders": {
             "description": "Number of open orders that matched the filter when the request was accepted, including orders whose cancellation was already in progress. Orders placed after acceptance are not counted. Unless `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
@@ -1407,7 +1535,7 @@
                 "description": "Optional attached risk controls that arm after the parent order fills.",
                 "properties": {
                   "oco": {
-                    "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted or canceled. Default is false.",
+                    "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted. It decides what canceling an exit order ends: with oco set, canceling one leg's exit ends both legs; without it, only that leg ends and the other keeps protecting the remaining position. Changing only this setting with ModifyOrder keeps the existing legs, with their IDs, arming and a trailing stop's tracked peak; changing a leg's terms, such as its trigger price, limit price or trailing distance, still replaces that leg. Default is false.",
                     "type": "boolean"
                   },
                   "stopLoss": {
@@ -1448,6 +1576,14 @@
                         "description": "Trigger price in quote units scaled by 1e9.",
                         "pattern": "^[0-9]+(\\.[0-9]+)?$",
                         "type": "string"
+                      },
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -1493,6 +1629,14 @@
                         "description": "Trigger price in quote units scaled by 1e9.",
                         "pattern": "^[0-9]+(\\.[0-9]+)?$",
                         "type": "string"
+                      },
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -1519,15 +1663,23 @@
                         "format": "int64",
                         "type": "integer"
                       },
+                      "trailingDistance": {
+                        "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
                       "trailingDistanceBps": {
                         "description": "Trailing distance in basis points (1 bp = 0.01%).",
                         "format": "int32",
                         "type": "integer"
                       },
-                      "trailingDistanceTicks": {
-                        "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                        "type": "string"
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [],
@@ -1666,7 +1818,7 @@
                     "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.SelfTradePreventionMode"
                   }
                 ],
-                "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified."
+                "description": "Self-trade prevention mode against orders of the same root account, including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified."
               },
               "side": {
                 "allOf": [
@@ -1771,10 +1923,10 @@
           },
           "newAttachedRisk": {
             "additionalProperties": false,
-            "description": "Replacement attached-risk policy for the order.",
+            "description": "Replacement attached-risk policy for the order. The order's change and its take-profit, stop-loss and trailing legs apply together: either all of them change, or the whole modify is refused and the order and its legs stay as they were.",
             "properties": {
               "oco": {
-                "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted or canceled. Default is false.",
+                "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted. It decides what canceling an exit order ends: with oco set, canceling one leg's exit ends both legs; without it, only that leg ends and the other keeps protecting the remaining position. Changing only this setting with ModifyOrder keeps the existing legs, with their IDs, arming and a trailing stop's tracked peak; changing a leg's terms, such as its trigger price, limit price or trailing distance, still replaces that leg. Default is false.",
                 "type": "boolean"
               },
               "stopLoss": {
@@ -1815,6 +1967,14 @@
                     "description": "Trigger price in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [
@@ -1860,6 +2020,14 @@
                     "description": "Trigger price in quote units scaled by 1e9.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
+                  },
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [
@@ -1886,15 +2054,23 @@
                     "format": "int64",
                     "type": "integer"
                   },
+                  "trailingDistance": {
+                    "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
                   "trailingDistanceBps": {
                     "description": "Trailing distance in basis points (1 bp = 0.01%).",
                     "format": "int32",
                     "type": "integer"
                   },
-                  "trailingDistanceTicks": {
-                    "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                    "type": "string"
+                  "triggerPriceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                      }
+                    ],
+                    "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [],
@@ -1911,7 +2087,7 @@
             "type": "string"
           },
           "newPrice": {
-            "description": "Patch fields (presence-based). New limit price in quote units scaled by 1e9. Required for price changes.",
+            "description": "New limit price as a decimal string in quote asset units per base asset unit, for example '28334.99'. Omit to keep the current price.",
             "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
           },
@@ -2016,7 +2192,7 @@
                 "description": "Optional attached risk controls that arm after the parent order fills.",
                 "properties": {
                   "oco": {
-                    "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted or canceled. Default is false.",
+                    "description": "If true, the take-profit and the configured stop leg (stop-loss or trailing stop) are linked and shown as one-cancels-the-other. Requires a take-profit and exactly one stop leg. The legs of every parent share one position and end together as described on RiskPolicy, so this setting does not change when exits are submitted. It decides what canceling an exit order ends: with oco set, canceling one leg's exit ends both legs; without it, only that leg ends and the other keeps protecting the remaining position. Changing only this setting with ModifyOrder keeps the existing legs, with their IDs, arming and a trailing stop's tracked peak; changing a leg's terms, such as its trigger price, limit price or trailing distance, still replaces that leg. Default is false.",
                     "type": "boolean"
                   },
                   "stopLoss": {
@@ -2057,6 +2233,14 @@
                         "description": "Trigger price in quote units scaled by 1e9.",
                         "pattern": "^[0-9]+(\\.[0-9]+)?$",
                         "type": "string"
+                      },
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -2102,6 +2286,14 @@
                         "description": "Trigger price in quote units scaled by 1e9.",
                         "pattern": "^[0-9]+(\\.[0-9]+)?$",
                         "type": "string"
+                      },
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -2128,15 +2320,23 @@
                         "format": "int64",
                         "type": "integer"
                       },
+                      "trailingDistance": {
+                        "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
                       "trailingDistanceBps": {
                         "description": "Trailing distance in basis points (1 bp = 0.01%).",
                         "format": "int32",
                         "type": "integer"
                       },
-                      "trailingDistanceTicks": {
-                        "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                        "type": "string"
+                      "triggerPriceSource": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                          }
+                        ],
+                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [],
@@ -2275,7 +2475,7 @@
                     "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.SelfTradePreventionMode"
                   }
                 ],
-                "description": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified."
+                "description": "Self-trade prevention mode against orders of the same root account, including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified."
               },
               "side": {
                 "allOf": [
@@ -2320,7 +2520,7 @@
             "type": "string"
           },
           "protectedPriceBound": {
-            "description": "Protective execution boundary in quote units scaled by 1e9. This is not an expected fill price. Present when price protection was resolved.",
+            "description": "Protective execution boundary as a decimal string in quote asset units per base asset unit, for example '2751.6'. This is not an expected fill price. Present when price protection was resolved.",
             "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
           },
@@ -2441,7 +2641,7 @@
             "type": "object"
           },
           "resolvedBaseQty": {
-            "description": "Gross base quantity resolved for execution, scaled by the pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
+            "description": "Gross base quantity resolved for execution as a decimal string in base asset units, for example '0.005'. Present when sizing was resolved.",
             "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
           }
@@ -2495,6 +2695,17 @@
         "x-poly-enum-descriptions": {
           "ARMED": "The dead-man switch is armed or refreshed.",
           "DISABLED": "The dead-man switch is disabled."
+        }
+      },
+      "polyester.rest.enum.orders.v1.CancelAllOrdersResponse.ListingStatus": {
+        "enum": [
+          "INCLUDED",
+          "NOT_RETAINED_READ_OPEN_ORDERS"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "INCLUDED": "The initial response includes its listing, possibly empty, up to 200 orders.",
+          "NOT_RETAINED_READ_OPEN_ORDERS": "A retry returns its original outcome and counts without the historical listing. Read open orders for current state and use order updates for final outcomes. No new cancellations are requested by the retry."
         }
       },
       "polyester.rest.enum.orders.v1.CancelAllOrdersResponse.Status": {
@@ -2698,7 +2909,11 @@
           "ORDER_CANCEL_OUTCOME_UNKNOWN",
           "ORDER_MODIFY_OUTCOME_UNKNOWN",
           "ORDER_REPAIRING",
-          "ACCOUNT_REPAIRING"
+          "ACCOUNT_REPAIRING",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+          "ORDER_CREATE_OUTCOME_UNKNOWN",
+          "TRIGGER_CREATE_OUTCOME_UNKNOWN",
+          "MAX_OPEN_ORDERS_PER_PAIR"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
@@ -2714,7 +2929,7 @@
           "API_KEY_SUBACCOUNT_MISMATCH": "API key is scoped to a different sub-account than the one requested.",
           "API_KEY_SUB_SCOPE_ONLY": "API key is scoped to a specific sub-account and cannot trade on the master/root account.",
           "API_KEY_UNKNOWN": "API key referenced in the request could not be resolved by the Orders service.",
-          "ATTACHED_EXIT_WORKING": "An exit order placed by one of the order's attached take-profit or stop legs is still working, so attached legs can't be added now. Nothing changed; retry once the exit completes.",
+          "ATTACHED_EXIT_WORKING": "An exit order placed by one of the order's attached take-profit or stop legs is still working, so the order's attached legs can't be added, edited, paused or resumed now; removing a leg is still accepted. Nothing changed; retry once the exit completes.",
           "ATTACHED_RISK_NOT_SUPPORTED": "Attached take-profit, stop-loss or trailing legs can't be applied here: this market takes none, an attached trailing stop isn't offered yet, or the modify changes them together with the order's price, quantity, client order ID or a replace. Nothing changed.",
           "BAD_PRICE": "Price is invalid for the requested order.",
           "BAD_QTY": "Quantity is invalid for the requested order.",
@@ -2770,6 +2985,7 @@
           "MARKET_TRIGGER_LIMIT_EXCEEDED": "The account already has the most triggers one account may have on this market, attached take-profit, stop-loss and trailing legs included. Nothing changed; retry once one of them ends.",
           "MARKET_TWAP_LIMIT_EXCEEDED": "The account already has the most TWAP orders one account may have on this market. Nothing changed; retry once one of them ends.",
           "MAX_NOTIONAL": "Order notional is above the pair maximum (quote units). A stricter sub-account policy cap returns POLICY_MAX_NOTIONAL instead.",
+          "MAX_OPEN_ORDERS_PER_PAIR": "The account has reached its maximum number of resting orders in this market. Good-till-cancelled and good-till-date orders count until they end; immediate-or-cancel, fill-or-kill and market orders never count, and a replace keeps its order's place. Nothing changed; cancel a resting order in this market first.",
           "MAX_OPEN_ORDERS_TOTAL": "The account has reached its maximum number of open orders across all markets. A stricter sub-account policy cap returns POLICY_MAX_OPEN_ORDERS instead.",
           "MAX_QTY": "Quantity is above the pair maximum: the market-order maximum for MARKET orders, the limit-order maximum otherwise (base units).",
           "MAX_QUOTE_DEBIT_TOO_SMALL": "The all-in quote budget cannot resolve one valid step-aligned base quantity.",
@@ -2779,8 +2995,9 @@
           "MODIFICATION_REQUIRES_REPLACE": "Modify request in AMEND_ONLY mode requires replace semantics.",
           "NEW_ACCOUNT_CAPACITY_REACHED": "The venue holds its maximum number of account access records, so an account trading this market for the first time cannot be admitted. Retry later.",
           "NOT_FOUND": "Requested order or resource was not found.",
-          "ORDER_ALREADY_TERMINAL": "Client order ID points to an order that already reached terminal state.",
+          "ORDER_ALREADY_TERMINAL": "The order has already ended (filled, canceled or expired).",
           "ORDER_CANCEL_OUTCOME_UNKNOWN": "The order cancellation was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch cancellation, every item's outcome is unknown; read them back. For a cancel all, some or all of the matching orders may be canceled; read open orders. For a cancel all after heartbeat, the switch may or may not have been armed, refreshed or disabled; send the heartbeat again.",
+          "ORDER_CREATE_OUTCOME_UNKNOWN": "The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or repeat the batch with the same request ID and payload within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice.",
           "ORDER_ID_CONFLICT": "The order identifier is held by a different, earlier order, so the request was not applied. Nothing changed.",
           "ORDER_LIMITS_UNAVAILABLE": "This market's order limits aren't set yet, so it can't take new orders.",
           "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. Retry once it completes.",
@@ -2790,7 +3007,7 @@
           "ORDER_SEQUENCE_EXHAUSTED": "The account used every order identifier available to it in this market. Retrying does not help; contact support.",
           "ORDER_TYPE_NOT_ALLOWED_IN_AUCTION": "This market is in an auction call and takes only limit orders that rest without crossing the book; market, immediate-or-cancel and fill-or-kill orders are refused. Nothing changed.",
           "ORDER_UNKNOWN": "Referenced order could not be resolved.",
-          "OVERLOADED": "This edge is at its bounded concurrent BatchReplace admission capacity.",
+          "OVERLOADED": "The account already has its maximum order requests in flight; nothing was admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after one of the outstanding requests completes.",
           "PAIR_BACKLOGGED": "The trading pair is busy with the account's earlier requests, so this one was not admitted and nothing was reserved. Retry shortly.",
           "PAIR_CANCEL_ONLY": "Pair is in cancel-only mode.",
           "PAIR_DELISTED": "Pair was delisted and is no longer tradable.",
@@ -2860,6 +3077,7 @@
           "TRIGGER_CONTROL_IN_PROGRESS": "An earlier change of the trigger has not completed yet. Retry once it completes.",
           "TRIGGER_CONTROL_OUTCOME_UNKNOWN": "The trigger change was not confirmed within its time bound. Its outcome is unknown and it may still apply; read the trigger before retrying.",
           "TRIGGER_CONTROL_SHARE_EXHAUSTED": "The account has its maximum number of trigger changes whose outcome is still pending. Retry shortly.",
+          "TRIGGER_CREATE_OUTCOME_UNKNOWN": "The trigger was sent but not confirmed in time. Its outcome is unknown and it may have been created; read the triggers for its client trigger ID before retrying.",
           "TRIGGER_DIRECTION_INVALID": "The trigger direction is neither ABOVE nor BELOW.",
           "TRIGGER_GENERATIONS_EXHAUSTED": "The trigger reached its last modification. Nothing changed; cancel it and create a new trigger instead.",
           "TRIGGER_LIMIT_EXCEEDED": "The account has its maximum number of live and recently ended triggers.",
@@ -2875,6 +3093,7 @@
           "TRIGGER_QTY_INVALID": "The trigger's child order quantity is not positive.",
           "TRIGGER_STATUS_INVALID": "Trigger status does not allow requested lifecycle operation.",
           "TRIGGER_TYPE_NOT_SUPPORTED": "The trigger type is valid but not supported on this venue yet.",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The new trigger price of a stop-loss or take-profit is already reached by the price the trigger watches (at or past it), so the trigger would fire at once and send its order. Nothing changed; the trigger keeps its previous trigger price. Returned by ModifyTrigger, and by an order modify that moves an attached take-profit or stop-loss of an order with a fill. Choose a trigger price the market has not reached.",
           "TWAP_DURATION_INVALID": "The TWAP duration is shorter than 1 second or longer than about 292 years, the longest the venue's clock represents.",
           "TWAP_INTERVAL_INVALID": "The TWAP slice interval is shorter than 100 milliseconds or longer than its duration.",
           "UNAUTHENTICATED": "Caller is not authenticated.",
@@ -2941,6 +3160,19 @@
         "x-poly-enum-descriptions": {
           "BUY": "Buy base asset using quote asset.",
           "SELL": "Sell base asset for quote asset."
+        }
+      },
+      "polyester.rest.enum.orders.v1.TriggerPriceSource": {
+        "enum": [
+          "LAST_PRICE",
+          "INDEX_PRICE",
+          "MARK_PRICE"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "INDEX_PRICE": "The market's index price, aggregated from external exchanges. A trigger that watches it acts only on a current index value: while the index is stale or unavailable the trigger stays armed and waits, and never fires on an outdated value.",
+          "LAST_PRICE": "Last traded price on the market (default for spot).",
+          "MARK_PRICE": "Mark price for perpetuals; not supported on spot markets."
         }
       },
       "polyester.rest.enum.polyester.ratelimit.v1.FailureReason": {
@@ -3061,13 +3293,15 @@
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPrice": "0.005"
+                      "triggerPrice": "0.005",
+                      "triggerPriceSource": "LAST_PRICE"
                     },
                     "takeProfit": {
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPrice": "0.005"
+                      "triggerPrice": "0.005",
+                      "triggerPriceSource": "LAST_PRICE"
                     }
                   },
                   "baseQty": "100000",
@@ -3111,6 +3345,16 @@
               }
             },
             "description": "Successful response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.OrdersService.Problem"
+                }
+              }
+            },
+            "description": "CONFLICT_DUPLICATE_CLIENT_ORDER_ID: the client order ID is already bound. existingOrderId identifies the existing order when known."
           }
         },
         "summary": "Create Order",
@@ -3143,13 +3387,15 @@
                         "child": {
                           "marketIoc": {}
                         },
-                        "triggerPrice": "0.005"
+                        "triggerPrice": "0.005",
+                        "triggerPriceSource": "LAST_PRICE"
                       },
                       "takeProfit": {
                         "child": {
                           "marketIoc": {}
                         },
-                        "triggerPrice": "0.005"
+                        "triggerPrice": "0.005",
+                        "triggerPriceSource": "LAST_PRICE"
                       }
                     },
                     "baseQty": "100000",
@@ -3305,6 +3551,7 @@
                     }
                   ],
                   "failedCancels": 1,
+                  "listingStatus": "INCLUDED",
                   "matchedOrders": 1,
                   "status": "SUBMITTED",
                   "submittedCancels": 1,
@@ -3361,6 +3608,11 @@
             "content": {
               "application/json": {
                 "example": {
+                  "effectiveScope": {
+                    "accountId": "4Rh4iXdT",
+                    "side": "BUY",
+                    "symbolId": 1
+                  },
                   "effectiveTimeoutSec": 1,
                   "expiresAtTsNs": "1735689600000000000",
                   "status": "ARMED",
@@ -3489,13 +3741,15 @@
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPrice": "0.005"
+                    "triggerPrice": "0.005",
+                    "triggerPriceSource": "LAST_PRICE"
                   },
                   "takeProfit": {
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPrice": "0.005"
+                    "triggerPrice": "0.005",
+                    "triggerPriceSource": "LAST_PRICE"
                   }
                 },
                 "newClientOrderId": "cli-ord-20250101-001",
@@ -3552,7 +3806,7 @@
     },
     "/v1/orders/preview": {
       "post": {
-        "description": "Check current order eligibility and available balance, and preview resolved quantity, price protection, quote debit, and fees. The result is advisory.",
+        "description": "Check current order eligibility and available balance, and preview resolved quantity and price protection. The result is advisory.",
         "operationId": "OrdersService_PreviewOrder",
         "requestBody": {
           "content": {
@@ -3565,13 +3819,15 @@
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPrice": "0.005"
+                      "triggerPrice": "0.005",
+                      "triggerPriceSource": "LAST_PRICE"
                     },
                     "takeProfit": {
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPrice": "0.005"
+                      "triggerPrice": "0.005",
+                      "triggerPriceSource": "LAST_PRICE"
                     }
                   },
                   "baseQty": "100000",
@@ -3647,17 +3903,19 @@
                         "child": {
                           "marketIoc": {}
                         },
-                        "triggerPrice": "0.005"
+                        "triggerPrice": "0.005",
+                        "triggerPriceSource": "LAST_PRICE"
                       },
                       "takeProfit": {
                         "child": {
                           "marketIoc": {}
                         },
-                        "triggerPrice": "0.005"
+                        "triggerPrice": "0.005",
+                        "triggerPriceSource": "LAST_PRICE"
                       }
                     },
                     "newClientOrderId": "cli-ord-20250101-001",
-                    "newPriceTicks": "0.005",
+                    "newPrice": "0.005",
                     "newQtyScaled": 100000,
                     "orderId": "5USXJZmk"
                   }

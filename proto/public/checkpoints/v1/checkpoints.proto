@@ -1,0 +1,573 @@
+syntax = "proto3";
+
+package checkpoints.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "orders/v1/orders.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/checkpoints/v1;checkpointsv1";
+// Document-level OpenAPI metadata for the testnet checkpoint API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Checkpoint Service"
+      description: "Frozen testnet season recaps, readable only by the account owner."
+    }
+  ]
+};
+
+// CheckpointBadge is an achievement earned in one season by meeting a fixed
+// threshold. Badges never depend on other accounts' activity. Values are in
+// display order.
+enum CheckpointBadge {
+  // No badge was specified.
+  BADGE_UNSPECIFIED = 0;
+
+  // At least one trade in the season.
+  FIRST_TRADE = 1;
+
+  // Traded on at least 7 consecutive UTC days.
+  SEVEN_DAY_STREAK = 2;
+
+  // Traded at least 3 different markets.
+  THREE_MARKETS = 3;
+
+  // At least 1000 USD of season trading volume.
+  VOLUME_1000_USD = 4;
+
+  // At least 100 trades in the season.
+  HUNDRED_TRADES = 5;
+
+  // Traded at least 10 different markets.
+  TEN_MARKETS = 6;
+
+  // Traded on at least 30 consecutive UTC days.
+  THIRTY_DAY_STREAK = 7;
+
+  // Used every order tool: stop loss, take profit, trailing stop, TWAP and
+  // ladder.
+  EVERY_ORDER_TOOL = 8;
+}
+
+// CheckpointField names a checkpoint value computed from partial evidence,
+// for example trades or holdings that had no USD price at the required time.
+// The value shown is a lower bound or omitted; show it with an approximation
+// marker rather than hiding the field.
+enum CheckpointField {
+  // No field was specified.
+  FIELD_UNSPECIFIED = 0;
+
+  // Season volume_usd and the daily volume curve.
+  VOLUME = 1;
+
+  // Per-market volume in top_pairs.
+  TOP_PAIRS = 2;
+
+  // Limit and market order counts.
+  ORDER_TYPES = 3;
+
+  // Time-in-force counts.
+  TIME_IN_FORCE = 4;
+
+  // Filled, partially filled, canceled and rejected order counts, and the
+  // fill and cancel ratios derived from them.
+  ORDER_STATUS = 5;
+
+  // Order tool counts and the every-order-tool badge.
+  TOOLS = 6;
+
+  // Median resting time of limit orders.
+  MEDIAN_LIMIT_REST = 7;
+
+  // Deposit count, amounts and USD values.
+  DEPOSITS = 8;
+
+  // Withdrawal count, amounts and USD values.
+  WITHDRAWALS = 9;
+
+  // Internal transfer count.
+  INTERNAL_TRANSFERS = 10;
+
+  // Daily claim amounts.
+  DAILY_CLAIM_AMOUNTS = 11;
+
+  // Hourly portfolio value curve.
+  PORTFOLIO_VALUE = 12;
+
+  // Trading balances at the end of the season.
+  TRADING_BALANCES = 13;
+
+  // Funding balances at the end of the season.
+  FUNDING_BALANCES = 14;
+
+  // Transfers in and out between this account and other accounts.
+  TRANSFERS = 15;
+
+  // Season inflow, outflow, final value and season result.
+  SEASON_RESULT = 16;
+}
+
+// VolumePoint is the trading activity of one UTC day.
+message VolumePoint {
+  // UTC midnight that starts the day.
+  google.protobuf.Timestamp day = 1 [(buf.validate.field).required = true];
+
+  // Settled trading volume of the day in USD, encoded as a non-negative
+  // base-10 decimal string without separators or a currency symbol.
+  string usd = 2;
+
+  // True when the day's volume is a lower bound because some of its trades
+  // could not be valued.
+  bool approximate = 3;
+
+  // Number of trade fills on the day, including fills against the account's
+  // own orders, which add no volume.
+  uint64 trades = 4;
+}
+
+// PortfolioValuePoint is the account's portfolio value at the end of one hour.
+message PortfolioValuePoint {
+  // UTC start of the hour.
+  google.protobuf.Timestamp hour = 1 [(buf.validate.field).required = true];
+
+  // Portfolio value in USD, encoded as a base-10 decimal string without
+  // separators or a currency symbol.
+  string usd = 2;
+
+  // True when this value is approximate because some holdings could not be
+  // valued at that hour.
+  bool approximate = 3;
+}
+
+// WeekdayTrades counts trade fills on one UTC weekday by UTC hour.
+message WeekdayTrades {
+  // Exactly 24 counts, one per UTC hour of the day from 0 through 23.
+  repeated uint64 hours = 1 [(buf.validate.field).repeated = {
+    min_items: 24
+    max_items: 24
+  }];
+}
+
+// PairActivity is the season activity on one spot market.
+message PairActivity {
+  // Stable numeric spot market identifier.
+  uint32 symbol_id = 1;
+
+  // Display symbol of the market, for example BTC-USDT. Empty when the market
+  // is no longer listed.
+  string symbol = 2;
+
+  // Season trading volume on this market in USD, encoded as a non-negative
+  // base-10 decimal string without separators or a currency symbol.
+  string volume_usd = 3;
+
+  // Number of trade fills on this market.
+  uint64 trades = 4;
+}
+
+// BiggestTrade identifies the season's largest trade fill by USD value.
+message BiggestTrade {
+  // Stable numeric spot market identifier.
+  uint32 symbol_id = 1;
+
+  // Display symbol of the market, for example BTC-USDT. Empty when the market
+  // is no longer listed.
+  string symbol = 2;
+
+  // The account's side of the fill.
+  orders.v1.Side side = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // UTC time of the fill.
+  google.protobuf.Timestamp at = 4 [(buf.validate.field).required = true];
+}
+
+// OrderTypeCounts counts placed orders by order type.
+message OrderTypeCounts {
+  // Limit orders.
+  uint64 limit = 1;
+
+  // Market orders.
+  uint64 market = 2;
+}
+
+// TimeInForceCounts counts placed orders by time in force.
+message TimeInForceCounts {
+  // Good-till-canceled orders.
+  uint64 gtc = 1;
+
+  // Immediate-or-cancel orders.
+  uint64 ioc = 2;
+
+  // Fill-or-kill orders.
+  uint64 fok = 3;
+
+  // Good-till-date orders.
+  uint64 gtd = 4;
+}
+
+// OrderToolCounts counts distinct uses of each order tool. One strategy that
+// generates several orders counts once.
+message OrderToolCounts {
+  // Stop-loss uses.
+  uint64 stop_loss = 1;
+
+  // Take-profit uses.
+  uint64 take_profit = 2;
+
+  // Trailing-stop uses.
+  uint64 trailing_stop = 3;
+
+  // TWAP uses.
+  uint64 twap = 4;
+
+  // Ladder uses.
+  uint64 ladder = 5;
+}
+
+// VIPTierChange is a VIP tier in effect from one UTC date of the season.
+message VIPTierChange {
+  // UTC date from which the tier applies, formatted as YYYY-MM-DD.
+  string date = 1;
+
+  // VIP tier in the inclusive range 0 through 10.
+  uint32 tier = 2 [(buf.validate.field).uint32.lte = 10];
+}
+
+// EarnedBadge is a badge and when it was earned.
+message EarnedBadge {
+  // The badge.
+  CheckpointBadge badge = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // UTC time the badge's threshold was first crossed, within the season.
+  google.protobuf.Timestamp earned_at = 2 [(buf.validate.field).required = true];
+}
+
+// AssetAmount is a total of one asset.
+message AssetAmount {
+  // Asset symbol, for example USDT.
+  string asset = 1;
+
+  // Amount in whole asset units, encoded as a base-10 decimal string without
+  // separators.
+  string amount = 2;
+
+  // USD value, encoded as a base-10 decimal string without separators or a
+  // currency symbol. Omitted when the asset had no USD price at the required
+  // time, and always when excluded_from_value is true.
+  optional string usd = 3;
+
+  // True when the asset does not count toward account value, for example a
+  // test token that cannot be traded. It is listed by amount only, has no
+  // USD value and is left out of every USD total, which it never makes
+  // approximate or omitted.
+  bool excluded_from_value = 4;
+}
+
+// FlowTotal counts operations and sums their USD values, each valued when it
+// happened.
+message FlowTotal {
+  // Number of operations, including operations in assets excluded from
+  // value.
+  uint64 count = 1;
+
+  // USD total over assets that count toward account value, encoded as a
+  // non-negative base-10 decimal string without separators or a currency
+  // symbol. Assets excluded from value add nothing. Omitted when any other
+  // operation had no USD value.
+  optional string usd = 2;
+}
+
+// ChainFlow is the deposits or withdrawals on one Polyester Chain.
+message ChainFlow {
+  // Polyester Chain id.
+  uint32 polyester_chain_id = 1;
+
+  // Display name of the chain, for example Ethereum Sepolia. Empty when the
+  // chain is not in the current chain catalog.
+  string chain_name = 2;
+
+  // Number of operations and their USD total on this chain.
+  FlowTotal total = 3;
+}
+
+// FundingFlowSummary summarizes successful deposits or withdrawals.
+message FundingFlowSummary {
+  // Number of successful operations.
+  uint64 count = 1;
+
+  // Operations per chain, by polyester_chain_id ascending. Operations without
+  // a known chain are counted only in count.
+  repeated ChainFlow chains = 2;
+
+  // Totals per asset, by asset ascending, each valued in USD when it was
+  // made. Assets excluded from value are listed by amount only.
+  repeated AssetAmount amounts = 3;
+}
+
+// FundingDay is the deposit and withdrawal value of one UTC day, over assets
+// that count toward account value; assets excluded from value add nothing.
+message FundingDay {
+  // UTC date, formatted as YYYY-MM-DD.
+  string date = 1;
+
+  // USD value of the day's deposits, encoded as a non-negative base-10
+  // decimal string without separators or a currency symbol; "0" without a
+  // deposit. Omitted when a deposit had no USD value.
+  optional string deposit_usd = 2;
+
+  // USD value of the day's withdrawals, encoded as a non-negative base-10
+  // decimal string without separators or a currency symbol; "0" without a
+  // withdrawal. Omitted when a withdrawal had no USD value.
+  optional string withdrawal_usd = 3;
+}
+
+// Checkpoint is one frozen season recap of a root account and all of its
+// subaccounts. Only the account owner can read it.
+message Checkpoint {
+  // Positive checkpoint number. Checkpoint 1 is the first season; numbers
+  // increase by season.
+  uint32 number = 1 [(buf.validate.field).uint32.gt = 0];
+
+  // UTC start of the season, inclusive.
+  google.protobuf.Timestamp season_start = 2 [(buf.validate.field).required = true];
+
+  // UTC end of the season, exclusive.
+  google.protobuf.Timestamp season_end = 3 [(buf.validate.field).required = true];
+
+  // UTC time at which the checkpoint was recorded.
+  google.protobuf.Timestamp taken_at = 4 [(buf.validate.field).required = true];
+
+  // Season trading volume in USD, encoded as a non-negative base-10 decimal
+  // string without separators or a currency symbol.
+  string volume_usd = 5;
+
+  // Number of trade fills.
+  uint64 trades = 6;
+
+  // Number of orders placed.
+  uint64 orders = 7;
+
+  // Number of UTC days with at least one trade.
+  uint32 days_active = 8;
+
+  // Longest run of consecutive UTC days with at least one trade.
+  uint32 longest_streak = 9;
+
+  // Markets traded, highest volume first, then by symbol_id ascending. This
+  // is naturally bounded by the number of markets traded and is not
+  // paginated.
+  repeated PairActivity top_pairs = 10;
+
+  // Number of different markets traded.
+  uint32 markets_traded = 11;
+
+  // Trade fills on the maker side.
+  uint64 maker_trades = 12;
+
+  // Trade fills on the taker side.
+  uint64 taker_trades = 13;
+
+  // Trade fills where both sides belonged to this account.
+  uint64 self_trades = 14;
+
+  // Trade fills by UTC weekday and hour: exactly 7 entries, Monday first.
+  repeated WeekdayTrades trades_by_weekday_hour = 15 [(buf.validate.field).repeated = {
+    min_items: 7
+    max_items: 7
+  }];
+
+  // Volume and trade fills of every UTC day of the season, oldest first, days
+  // without trades included.
+  repeated VolumePoint daily_volume = 16;
+
+  // Largest single trade fill in USD, encoded as a non-negative base-10
+  // decimal string without separators or a currency symbol.
+  string biggest_trade_usd = 17;
+
+  // The fill valued biggest_trade_usd, the earliest on a tie. Omitted when no
+  // fill could be valued.
+  BiggestTrade biggest_trade = 18;
+
+  // Placed orders by order type.
+  OrderTypeCounts order_types = 19;
+
+  // Placed orders by time in force.
+  TimeInForceCounts time_in_force = 20;
+
+  // Order tool uses.
+  OrderToolCounts tools = 21;
+
+  // Post-only orders placed.
+  uint64 post_only = 22;
+
+  // Orders amended at least once.
+  uint64 amends = 23;
+
+  // Orders that ended fully filled.
+  uint64 filled_orders = 24;
+
+  // Orders that ended canceled or rejected after a partial fill.
+  uint64 partially_filled_orders = 25;
+
+  // Orders that ended canceled.
+  uint64 canceled_orders = 26;
+
+  // Orders that ended rejected.
+  uint64 rejected_orders = 27;
+
+  // Share of placed orders that ended fully filled, a base-10 decimal string
+  // from 0 to 1.
+  string fill_rate = 28;
+
+  // Share of placed orders that ended canceled, a base-10 decimal string from
+  // 0 to 1.
+  string cancel_ratio = 29;
+
+  // Typical time a good-till-canceled or good-till-date limit order rested
+  // before it filled or was canceled, in milliseconds. Omitted when no such
+  // order ended in the season.
+  optional uint64 median_limit_rest_ms = 30;
+
+  // UTC time of the first trade fill in the season. Omitted without trades.
+  google.protobuf.Timestamp first_trade_at = 31;
+
+  // UTC date with the most trade fills, formatted as YYYY-MM-DD. Omitted
+  // without trades.
+  optional string busiest_day = 32;
+
+  // UTC hour of day, 0 through 23, with the most trade fills. Omitted without
+  // trades.
+  optional uint32 most_active_hour_utc = 33 [(buf.validate.field).uint32.lte = 23];
+
+  // VIP tier at the moment the checkpoint was recorded, 0 through 10.
+  uint32 vip_tier_at_checkpoint = 34 [(buf.validate.field).uint32.lte = 10];
+
+  // Highest VIP tier reached during the season, 0 through 10.
+  uint32 peak_vip_tier = 35 [(buf.validate.field).uint32.lte = 10];
+
+  // VIP tier changes during the season, oldest first. The first entry is the
+  // tier at the season start when one was in effect.
+  repeated VIPTierChange vip_timeline = 36;
+
+  // Badges earned in the season, in badge display order.
+  repeated EarnedBadge badges = 37;
+
+  // Portfolio value at the end of each hour, oldest first. Hours without a
+  // recorded value are absent; draw them as gaps, not zero.
+  repeated PortfolioValuePoint portfolio_value = 38;
+
+  // Trading balance per asset at the end of the season, valued in USD at that
+  // time; assets excluded from value are listed by amount only. Shown for
+  // the record only.
+  repeated AssetAmount trading_balances = 39;
+
+  // Funding balance per asset at the end of the season, valued in USD at that
+  // time; assets excluded from value are listed by amount only. Shown for
+  // the record only.
+  repeated AssetAmount funding_balances = 40;
+
+  // Successful deposits.
+  FundingFlowSummary deposits = 41;
+
+  // Successful withdrawals.
+  FundingFlowSummary withdrawals = 42;
+
+  // Deposit and withdrawal USD values per UTC day with at least one of them,
+  // oldest first.
+  repeated FundingDay funding_by_day = 43;
+
+  // Transfers received from other accounts, excluding daily claim payouts.
+  FlowTotal transfers_in = 44;
+
+  // Transfers sent to other accounts.
+  FlowTotal transfers_out = 45;
+
+  // Internal transfers made.
+  uint64 internal_transfers = 46;
+
+  // Daily claims collected.
+  uint64 daily_claims = 47;
+
+  // Daily claim totals per asset, by asset ascending, each valued in USD
+  // when it was paid. Assets excluded from value are listed by amount only.
+  repeated AssetAmount daily_claim_amounts = 48;
+
+  // USD value brought in during the season: daily claim payouts, deposits
+  // and transfers in, each valued when it happened, over assets that count
+  // toward account value; assets excluded from value add nothing. Encoded as
+  // a non-negative base-10 decimal string without separators or a currency
+  // symbol. Omitted when any other part had no USD value.
+  optional string inflow_usd = 49;
+
+  // USD value taken out during the season: withdrawals and transfers out,
+  // each valued when it happened, over assets that count toward account
+  // value; assets excluded from value add nothing. Encoded as a non-negative
+  // base-10 decimal string without separators or a currency symbol. Omitted
+  // when any other part had no USD value.
+  optional string outflow_usd = 50;
+
+  // inflow_usd minus outflow_usd, encoded as a base-10 decimal string that
+  // may be negative. Omitted when either is omitted.
+  optional string net_inflow_usd = 51;
+
+  // USD value of all trading and funding balances at the end of the season
+  // that count toward account value, encoded as a base-10 decimal string.
+  // Assets excluded from value add nothing. Omitted when any other balance
+  // had no USD value.
+  optional string final_value_usd = 52;
+
+  // Season result: final_value_usd minus net_inflow_usd, encoded as a base-10
+  // decimal string that may be negative. Omitted when either is omitted.
+  optional string season_result_usd = 53;
+
+  // Subaccounts of the account.
+  uint64 subaccounts = 54;
+
+  // Values computed from partial evidence, in ascending enum order. Empty
+  // when every value is exact.
+  repeated CheckpointField incomplete = 55;
+}
+
+// ListMyCheckpointsRequest requests every checkpoint of the authenticated
+// caller's root account.
+message ListMyCheckpointsRequest {
+  // Optional subaccount public identifier. Checkpoints cover a root account
+  // and all of its subaccounts, so a subaccount resolves to its root account,
+  // which must be the caller's own.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// ListMyCheckpointsResponse contains the caller's checkpoints.
+message ListMyCheckpointsResponse {
+  // Checkpoints of the root account, newest first. There is at most one per
+  // season, so the list is naturally bounded and not paginated. Empty when
+  // the account has no checkpoint, for example when it did not trade in any
+  // recorded season.
+  repeated Checkpoint checkpoints = 1;
+}
+
+// CheckpointService serves frozen testnet season recaps.
+service CheckpointService {
+  // List every checkpoint of the authenticated caller's root account, newest
+  // first. Checkpoints are private to the account owner.
+  rpc ListMyCheckpoints(ListMyCheckpointsRequest) returns (ListMyCheckpointsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {get: "/v1/checkpoints"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List My Checkpoints"
+      description: "List every checkpoint of the authenticated caller's root account, newest first. Checkpoints are private to the account owner."
+      tags: "Checkpoint Service"
+    };
+  }
+}

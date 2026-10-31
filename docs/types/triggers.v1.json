@@ -172,6 +172,18 @@
             "validate": {
               "required": true
             }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 4,
+            "doc": "Price the trigger watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -179,7 +191,7 @@
     {
       "name": "triggers.v1.CreateTriggerRequest",
       "kind": "message",
-      "doc": "CreateTriggerRequest submits one standalone trigger intent for admission.",
+      "doc": "CreateTriggerRequest submits one standalone trigger intent for admission.\n A create sent but not confirmed in time fails with\n TRIGGER_CREATE_OUTCOME_UNKNOWN: the trigger may have been created, so read\n the triggers for its client_trigger_id before retrying. UNAVAILABLE means\n the trigger was not created.",
       "message": {
         "fields": [
           {
@@ -731,15 +743,10 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
+            "doc": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
+            "format": "int32"
           },
           {
             "name": "trigger_price_ticks",
@@ -994,15 +1001,10 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
+            "doc": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
+            "format": "int32"
           }
         ]
       }
@@ -1300,13 +1302,25 @@
             "name": "limit_price_ticks",
             "jsonName": "limitPriceTicks",
             "number": 7,
-            "doc": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the last trade price when no activation price is set. A rise that\n fires above it still fires, and the child fills only at or below it. Must\n be unset when `side` is SELL. Fixed at create.",
+            "doc": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the price it watches (trigger_price_source) when no activation price\n is set. A rise that fires above it still fires, and the child fills only\n at or below it. Must be unset when `side` is SELL. Fixed at create.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
             "validate": {
               "number": {
                 "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 8,
+            "doc": "Price the trailing stop watches: its activation, its peak or trough and\n its fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
               }
             }
           }
@@ -1573,6 +1587,31 @@
             "name": "TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION",
             "number": 4,
             "doc": "Self-trade prevention canceled the trigger's child orders. For a ladder,\n no child order was canceled by the user, and the first child order to be\n canceled was canceled by self-trade prevention."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_ACCOUNT_REPAIR",
+            "number": 8,
+            "doc": "Ended by the exchange while it recovered your account. The account's\n open orders on the market were canceled at the same time; place new\n orders and triggers once the account trades again."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TRIGGER",
+            "number": 9,
+            "doc": "The market was disabled: the exchange ended the stop-loss, take-profit or\n trailing stop and released its reserved funds. The market's open orders\n were canceled at the same time."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TWAP",
+            "number": 10,
+            "doc": "The market was disabled: the exchange ended the TWAP and canceled its\n resting slice, releasing its reserved funds."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_LADDER",
+            "number": 11,
+            "doc": "The market was disabled: the exchange ended the ladder and canceled its\n resting levels, releasing their reserved funds."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_ATTACHED_LEG",
+            "number": 12,
+            "doc": "The market was disabled: the exchange ended the order's attached\n take-profit or stop-loss and canceled the order and its working exit."
           },
           {
             "name": "TRIGGER_CANCEL_REASON_MISSING_REASON_CODE",
@@ -1981,6 +2020,11 @@
             "doc": "The account had its maximum number of open orders."
           },
           {
+            "name": "TRIGGER_FAILURE_REASON_MAX_OPEN_ORDERS_PER_PAIR",
+            "number": 65,
+            "doc": "The account had its maximum number of resting orders in this market when\n a limit TWAP slice was due."
+          },
+          {
             "name": "TRIGGER_FAILURE_REASON_STP_MODE_NOT_ALLOWED",
             "number": 66,
             "doc": "The child order's self-trade prevention mode was not accepted."
@@ -2013,7 +2057,7 @@
           {
             "name": "TRIGGER_FAILURE_REASON_LIMIT_PRICE_INVALID",
             "number": 104,
-            "doc": "The trigger's limit price was not valid, including a buy trailing stop's\n maximum price below the last trade price when it was placed without an\n activation price."
+            "doc": "The trigger's limit price was not valid, including a buy trailing stop's\n maximum price below the price it watches (the last traded price or the\n index price) when it was placed without an activation price."
           },
           {
             "name": "TRIGGER_FAILURE_REASON_TWAP_INTERVAL_INVALID",
@@ -2206,6 +2250,16 @@
             "doc": "The market's order limits weren't set yet when the trigger fired."
           },
           {
+            "name": "TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE",
+            "number": 241,
+            "doc": "The trigger watches the index price and the market has no index price."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+            "number": 244,
+            "doc": "The trigger price was already reached by the price the trigger watches\n when the trigger was submitted (at or past it), so the trigger would have\n fired at once. It never armed and sent no order; its reserved funds were\n released. A price that reaches the trigger price after submission fires\n the trigger normally."
+          },
+          {
             "name": "TRIGGER_FAILURE_REASON_MISSING_REASON_CODE",
             "number": 998,
             "doc": "The terminal state did not contain a failure reason."
@@ -2281,7 +2335,7 @@
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
             "number": 4,
-            "doc": "Child self-trade prevention mode. Defaults to EXPIRE_MAKER.",
+            "doc": "Child self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER.",
             "protoRef": "orders.v1.SelfTradePreventionMode",
             "validate": {
               "enum": {
@@ -2293,7 +2347,7 @@
             "name": "client_trigger_id",
             "jsonName": "clientTriggerId",
             "number": 5,
-            "doc": "Client-provided trigger ID for idempotency. Retrying an accepted create\n with the identical intent returns the same trigger. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.",
+            "doc": "Client-provided trigger ID for idempotency, unique per sub-account, pair\n and trigger type. While the trigger is active and for 60 seconds after it\n reaches a terminal status, retrying the create with the identical intent\n returns the same trigger, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is\n free: a create that uses it is a new intent and creates a new trigger. To\n learn the outcome of an earlier create after that window, read the\n triggers with ListTriggers, which return each trigger's\n client_trigger_id, instead of retrying the create. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2683,8 +2737,8 @@
         "cel": [
           {
             "id": "twap_trigger.window",
-            "message": "slice_interval_ms must be between 100 and duration_ms",
-            "expression": "this.duration_ms \u003e= 1000 \u0026\u0026 this.slice_interval_ms \u003e= 100 \u0026\u0026 this.slice_interval_ms \u003c= this.duration_ms"
+            "message": "slice_interval_ms must not exceed duration_ms",
+            "expression": "this.slice_interval_ms \u003c= this.duration_ms"
           }
         ],
         "oneofs": [
@@ -2717,19 +2771,29 @@
             "name": "duration_ms",
             "jsonName": "durationMs",
             "number": 2,
-            "doc": "Total execution duration in milliseconds.",
+            "doc": "Total execution duration in milliseconds, at least 1000.",
             "protoScalar": "int64",
             "jsonType": "string",
-            "format": "int64"
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "1000"
+              }
+            }
           },
           {
             "name": "slice_interval_ms",
             "jsonName": "sliceIntervalMs",
             "number": 3,
-            "doc": "Interval between slices in milliseconds.",
+            "doc": "Interval between slices in milliseconds, at least 100 and at most\n duration_ms.",
             "protoScalar": "int64",
             "jsonType": "string",
-            "format": "int64"
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "100"
+              }
+            }
           },
           {
             "name": "market_ioc",

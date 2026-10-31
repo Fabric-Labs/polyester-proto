@@ -563,8 +563,10 @@ message GetOrderRequest {
 }
 
 // GetOrderResponse returns order details and a bounded execution page.
-// Order state, trades and transfers are eventually consistent;
-// one page's execution quantities need not equal the order's cumulative quantity.
+// The order shows a fill as soon as it executes; its trades are recorded
+// shortly after. executions_complete says whether the trades already account
+// for every execution the order shows. Transfers are eventually consistent and
+// can trail the trades they settle.
 message GetOrderResponse {
   // Requested order, if found.
   Order order = 1;
@@ -577,6 +579,12 @@ message GetOrderResponse {
   // Cursor for the next execution page. Empty when no further rows are visible;
   // this is not a settlement or order-state reconciliation watermark.
   string next_page_token = 6 [(buf.validate.field).string.max_len = 512];
+  // True when the order's trades through its generation, across every page,
+  // add up exactly to its cum_qty_scaled. False while a recent execution is
+  // still being recorded: trades then lists the executions recorded so far,
+  // and a later read returns the rest. Always false when execution history is
+  // not included.
+  bool executions_complete = 7;
 }
 
 // GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.
@@ -635,10 +643,16 @@ message GetBatchReplaceStatusResponse {
 service OrdersReadService {
   // Retrieve non-terminal orders for an account.
   // Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.
+  // While the current state of an order in scope is temporarily unavailable, the call
+  // fails with a retryable UNAVAILABLE rather than omitting the order or returning a
+  // stale state; retry the same request.
   rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse) {}
 
   // Retrieve terminal order history for an account.
   // Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.
+  // While the current state of an order on the page is temporarily unavailable, the call
+  // fails with a retryable UNAVAILABLE rather than returning a stale state; retry the
+  // same request.
   rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse) {}
 
   // Retrieve per-user trade fills for an account.

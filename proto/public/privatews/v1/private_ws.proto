@@ -176,9 +176,10 @@ message ServerMessage {
     Synced synced = 22;
     // The subscription's state is replaced by the snapshot that follows.
     ResyncRequired resync_required = 23;
-    // The account's live view is behind for now.
+    // The account's live view, or some of its orders, is not current for
+    // now.
     Unavailable unavailable = 24;
-    // The account's live view caught up again after Unavailable.
+    // The account's live view is current again after Unavailable.
     Available available = 25;
     // A request failed.
     RequestError error = 26;
@@ -290,6 +291,8 @@ message Unit {
   repeated orders.v1.Order orders = 3;
   // Public IDs of orders that left the live view: ended orders now kept in
   // history, or orders that never got past admission. Not a cancellation.
+  // An order that ends in this unit and leaves with it is also in `orders`,
+  // with its final revision: apply `orders` first, then these removals.
   repeated fixed64 removed_order_ids = 4;
   // What caused the change, in order. Never coalesced.
   repeated UnitEvent events = 5;
@@ -332,7 +335,7 @@ message ResyncRequired {
   Reason reason = 1;
 }
 
-// UnavailableReason names why an account's live view is behind.
+// UnavailableReason names why an account's live view is not current.
 enum UnavailableReason {
   // Not set.
   UNAVAILABLE_REASON_UNSPECIFIED = 0;
@@ -344,19 +347,30 @@ enum UnavailableReason {
   FAILOVER = 3;
   // The read fence could not be established for now.
   BOUNDARY_UNAVAILABLE = 4;
+  // The current state of the orders that `order_ids` names is temporarily
+  // unknown. Their rows, when the snapshot or a unit carried one, show an
+  // earlier state; an order may have no row yet. The rest of the account's
+  // view is current, and units keep arriving.
+  ORDER_UNAVAILABLE = 5;
 }
 
-// Unavailable says the account's live view is behind for now. Show it as
-// stale until Available. The subscription stays and always recovers by
-// itself; the client does nothing.
+// Unavailable says the account's live view, or some of its orders, is not
+// current for now. Show what it names as stale until Available. A later
+// Unavailable replaces this one's reason and `order_ids`. The subscription
+// stays and always recovers by itself; the client does nothing.
 // Ready and Synced may still arrive meanwhile: they describe the position
 // already delivered, which is unchanged.
 message Unavailable {
   // Why.
   UnavailableReason reason = 1;
+  // For ORDER_UNAVAILABLE: the public IDs of the orders whose current state
+  // is unknown, ascending. Empty for every other reason, which covers the
+  // whole view.
+  repeated fixed64 order_ids = 2;
 }
 
-// Available says the account's live view caught up after Unavailable.
+// Available says the account's live view is current again after
+// Unavailable: every order it holds shows its current state.
 message Available {}
 
 // RequestError answers a failed request. It does not close the connection.
