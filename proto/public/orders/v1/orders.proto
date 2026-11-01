@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
 import "polyester/ratelimit/v1/types.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
@@ -332,7 +333,9 @@ message CancelOrderRequest {
       (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
     ];
   }
-  // Optional symbol_id for routing; when omitted, resolved from order directory.
+  // Optional trading symbol numeric identifier. When set, it must match the
+  // order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN)
+  // and nothing is canceled. When omitted, the order's own symbol is used.
   uint32 symbol_id = 3;
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 4;
@@ -647,8 +650,8 @@ enum ErrorCode {
   // An item of the batch modify did not use the REPLACE_ONLY behavior, so the
   // batch was refused.
   ERROR_CODE_BATCH_REPLACE_ONLY_REQUIRED = 229;
-  // An item of the batch modify named no symbol, another symbol than the batch's
-  // first item, or an order on another symbol, so the batch was refused.
+  // An item of the batch modify named no symbol, or another symbol than the
+  // batch's first item, so the batch was refused.
   ERROR_CODE_BATCH_SINGLE_SYMBOL_REQUIRED = 230;
   // The account keeps its maximum number of recent modify or batch requests for
   // duplicate detection. Retry once earlier ones expire.
@@ -866,6 +869,26 @@ enum ErrorCode {
   // a replace keeps its order's place. Nothing changed; cancel a resting order
   // in this market first.
   ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR = 306;
+  // The order already carries every attached leg it may hold, so another
+  // attached leg was refused.
+  ERROR_CODE_ATTACHED_LEGS_EXCEEDED = 86;
+  // The trigger's fee asset was not valid.
+  ERROR_CODE_FEE_ASSET_INVALID = 87;
+  // The trigger's maximum fee rate was not valid.
+  ERROR_CODE_FEE_CEILING_INVALID = 88;
+  // The trigger set a field that must be left unset.
+  ERROR_CODE_UNSUPPORTED_FIELD_SET = 89;
+  // The trigger could not fire again.
+  ERROR_CODE_TRIGGER_FIRE_LIMIT_REACHED = 90;
+  // The trigger's condition flags were not valid.
+  ERROR_CODE_CONDITION_FLAGS_INVALID = 91;
+  // The trigger set a condition parameter its condition does not take.
+  ERROR_CODE_CONDITION_PARAMETER_SET = 92;
+  // The market had no room for another TWAP order.
+  ERROR_CODE_TWAP_CAPACITY_REACHED = 93;
+  // The trigger's child order did not match the order the trigger requested,
+  // so the trigger failed and the child order was canceled.
+  ERROR_CODE_CHILD_ORDER_INCONSISTENT = 94;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -1552,7 +1575,8 @@ message BatchReplaceOrdersRequest {
   };
   // Target sub-account numeric ID. When omitted, uses caller's root account.
   optional fixed64 subaccount_id = 1;
-  // Trading symbol shared by every replacement.
+  // Trading symbol shared by every replacement. An item whose order is on
+  // another symbol is refused alone as an unknown order.
   uint32 symbol_id = 2 [(buf.validate.field).uint32.gt = 0];
   // Client idempotency key (required).
   string request_id = 3 [
@@ -1602,7 +1626,9 @@ message BatchCancelItem {
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$",
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
-  // Optional symbol routing hint.
+  // Optional trading symbol numeric identifier. When set, it must match the
+  // order's symbol, or the item is refused as an unknown order. When omitted,
+  // the order's own symbol is used.
   uint32 symbol_id = 3;
 }
 
@@ -1665,6 +1691,8 @@ service OrdersService {
   // Check whether an order is currently admissible without creating an order,
   // claiming its client order ID, or reserving funds.
   rpc PreviewOrder(PreviewOrderRequest) returns (PreviewOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Preview Order"
       description:
@@ -1678,6 +1706,8 @@ service OrdersService {
   // REST clients submit decimal quantity and price strings. ConnectRPC clients
   // submit scaled integer values.
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Create Order"
       description:
@@ -1691,6 +1721,8 @@ service OrdersService {
   // REST clients submit base58 order IDs. ConnectRPC clients submit fixed64
   // order IDs.
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel Order"
       description:
@@ -1706,6 +1738,8 @@ service OrdersService {
   // lists up to 200 of them, oldest first, with the total count.
   // Final state is confirmed via the order update stream or read path.
   rpc CancelAllOrders(CancelAllOrdersRequest) returns (CancelAllOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel All Orders"
       description:
@@ -1719,6 +1753,8 @@ service OrdersService {
   // Set cancel-all-after (dead-man switch).
   // Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.
   rpc CancelAllAfter(CancelAllAfterRequest) returns (CancelAllAfterResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel All After (Dead-Man Switch)"
       description:
@@ -1730,6 +1766,8 @@ service OrdersService {
 
   // Places multiple orders in a single request (best-effort per item).
   rpc BatchCreateOrders(BatchCreateOrdersRequest) returns (BatchCreateOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Create Orders"
       description:
@@ -1741,6 +1779,8 @@ service OrdersService {
 
   // Modifies an existing order using explicit behavior policy.
   rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Modify Order"
       description:
@@ -1752,6 +1792,8 @@ service OrdersService {
 
   // Replaces same-symbol orders and returns after authoritative admission.
   rpc BatchReplaceOrders(BatchReplaceOrdersRequest) returns (BatchReplaceOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Replace Orders"
       description:
@@ -1765,6 +1807,8 @@ service OrdersService {
   // Per-item results are returned; partial success is the default.
   // Final state is confirmed via the order update stream or read path.
   rpc BatchCancelOrders(BatchCancelOrdersRequest) returns (BatchCancelOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Cancel Orders"
       description:
