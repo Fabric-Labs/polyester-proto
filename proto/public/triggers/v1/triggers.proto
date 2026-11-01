@@ -8,6 +8,7 @@ import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "orders/v1/orders.proto";
+import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/triggers/v1;triggersv1";
 // Document-level OpenAPI metadata for Triggers API
@@ -824,6 +825,8 @@ message CancelTriggerResponse {
 // =============================================================================
 
 // ModifyTriggerRequest applies a limited patch to an existing trigger.
+// Supported for stop-loss, take-profit and trailing-stop triggers; ladder and
+// TWAP triggers support only cancel and answer TRIGGER_NOT_MODIFIABLE.
 message ModifyTriggerRequest {
   // Trigger ID to modify.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -897,7 +900,9 @@ message ModifyTriggerResponse {
   uint64 ts_ns = 4;
 }
 
-// PauseTriggerRequest pauses an active trigger by ID.
+// PauseTriggerRequest pauses an active trigger by ID. Supported for
+// stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers
+// support only cancel and answer TRIGGER_NOT_MODIFIABLE.
 message PauseTriggerRequest {
   // Trigger ID to pause.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -917,7 +922,9 @@ message PauseTriggerResponse {
   uint64 ts_ns = 4;
 }
 
-// ResumeTriggerRequest resumes a paused trigger by ID.
+// ResumeTriggerRequest resumes a paused trigger by ID. Supported for
+// stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers
+// support only cancel and answer TRIGGER_NOT_MODIFIABLE.
 message ResumeTriggerRequest {
   // Trigger ID to resume.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -1092,6 +1099,16 @@ message Trigger {
   // Set for completed, canceled (for any reason), or failed triggers,
   // including terminal expiry or rejection. Absent while the trigger is live.
   google.protobuf.Timestamp completed_at = 64;
+  // Per-trigger state version: 1 for the trigger's first state, then higher
+  // for every later published state change, whether a request or the market
+  // caused it. A higher version is always newer, and two copies of a trigger
+  // with the same version show the same state. GetTrigger, ListTriggers and
+  // realtime trigger updates carry the same version for the same state. List
+  // results can briefly lag realtime updates, and after a reconnect or a
+  // service recovery a realtime update can repeat an earlier state, so keep
+  // the copy of each trigger with the highest version and ignore any copy
+  // whose version is not higher than the one you hold.
+  uint32 version = 65;
 }
 
 // =============================================================================
@@ -1101,6 +1118,8 @@ message Trigger {
 service TriggersService {
   // Create a standalone trigger (stop order, TWAP, ladder).
   rpc CreateTrigger(CreateTriggerRequest) returns (CreateTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {
       post: "/v1/triggers"
       body: "*"
@@ -1116,6 +1135,8 @@ service TriggersService {
 
   // Get a trigger by ID.
   rpc GetTrigger(GetTriggerRequest) returns (GetTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/triggers/{trigger_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Trigger"
@@ -1128,6 +1149,8 @@ service TriggersService {
 
   // List triggers for a sub-account with optional filters.
   rpc ListTriggers(ListTriggersRequest) returns (ListTriggersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/triggers"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Triggers"
@@ -1140,6 +1163,8 @@ service TriggersService {
 
   // List trigger events (append-only history).
   rpc ListTriggerEvents(ListTriggerEventsRequest) returns (ListTriggerEventsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/triggers/{trigger_id}/events"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Trigger Events"
@@ -1153,6 +1178,8 @@ service TriggersService {
 
   // Cancel a trigger.
   rpc CancelTrigger(CancelTriggerRequest) returns (CancelTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {delete: "/v1/triggers/{trigger_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel Trigger"
@@ -1165,6 +1192,8 @@ service TriggersService {
 
   // Modify a trigger (limited patch).
   rpc ModifyTrigger(ModifyTriggerRequest) returns (ModifyTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {
       put: "/v1/triggers/{trigger_id}"
       body: "*"
@@ -1173,33 +1202,39 @@ service TriggersService {
       summary: "Modify Trigger"
       description:
         "Modify a trigger by trigger ID using a limited patch for "
-        "trigger pricing and trailing/slippage parameters."
+        "trigger pricing and trailing/slippage parameters. Supported for "
+        "stop-loss, take-profit and trailing-stop triggers; ladder and TWAP "
+        "triggers support only cancel and answer TRIGGER_NOT_MODIFIABLE."
       tags: "Triggers Service"
     };
   }
 
   // Pause a trigger (sets status=PAUSED).
   rpc PauseTrigger(PauseTriggerRequest) returns (PauseTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {
       post: "/v1/triggers/{trigger_id}/pause"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Pause Trigger"
-      description: "Pause a trigger by trigger ID without deleting it."
+      description: "Pause a trigger by trigger ID without deleting it. Supported for stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers support only cancel and answer TRIGGER_NOT_MODIFIABLE."
       tags: "Triggers Service"
     };
   }
 
   // Resume a paused trigger (sets status back to ARMED/RUNNING as appropriate).
   rpc ResumeTrigger(ResumeTriggerRequest) returns (ResumeTriggerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {
       post: "/v1/triggers/{trigger_id}/resume"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Resume Trigger"
-      description: "Resume a paused trigger by trigger ID."
+      description: "Resume a paused trigger by trigger ID. Supported for stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers support only cancel and answer TRIGGER_NOT_MODIFIABLE."
       tags: "Triggers Service"
     };
   }

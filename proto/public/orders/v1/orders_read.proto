@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "ledger/v1/catalog.proto";
 import "orders/v1/orders.proto";
+import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
@@ -31,6 +32,59 @@ enum OrderStatus {
   CANCELED = 5;
   // Rejected and never entered the working state.
   REJECTED = 6;
+}
+
+// CancelReason is why a CANCELED order ended. A cancel is no error: a
+// refused order is REJECTED and names its refusal with an ErrorCode instead.
+// Fills before the cancel stand, and the order's remaining reserved funds are
+// released.
+enum CancelReason {
+  // The order is not canceled.
+  CANCEL_REASON_UNSPECIFIED = 0;
+  // A cancel the account sent: a cancel, a batch cancel or a cancel-all.
+  CANCEL_REASON_USER_REQUEST = 1;
+  // The unfilled remainder of an immediate-or-cancel order.
+  CANCEL_REASON_IOC_REMAINDER = 2;
+  // The unfilled remainder of a market order: the book ran out, or the next
+  // price was past the order's protection price.
+  CANCEL_REASON_MARKET_REMAINDER = 3;
+  // Self-trade prevention canceled this resting order when an order of the
+  // same account would have matched it.
+  CANCEL_REASON_STP_EXPIRE_MAKER = 4;
+  // Self-trade prevention canceled this incoming order instead of matching a
+  // resting order of the same account.
+  CANCEL_REASON_STP_EXPIRE_TAKER = 5;
+  // Self-trade prevention canceled both this order and the order of the same
+  // account it would have matched.
+  CANCEL_REASON_STP_EXPIRE_BOTH = 6;
+  // A replace ended this order and created its successor.
+  CANCEL_REASON_REPLACED = 7;
+  // A good-till-date order reached its expiry time.
+  CANCEL_REASON_GTD_EXPIRED = 8;
+  // An amend or replace set the order's total quantity at or below its filled
+  // quantity, so the order ended at its filled quantity.
+  CANCEL_REASON_QTY_AT_OR_BELOW_FILLED = 9;
+  // The market was disabled: the exchange canceled its resting orders.
+  CANCEL_REASON_PAIR_DRAIN = 10;
+  // The market refused one of the order's attached take-profit, stop-loss or
+  // trailing-stop legs, so the order's remainder and its other legs were
+  // canceled.
+  CANCEL_REASON_ATTACHED_RISK_REFUSED = 11;
+  // The account's cancel-all-after timer reached its deadline without a
+  // heartbeat.
+  CANCEL_REASON_CANCEL_ALL_AFTER = 12;
+  // Canceled by the exchange while it recovered the account. Place new orders
+  // once the account trades again.
+  CANCEL_REASON_ACCOUNT_REPAIR = 13;
+  // A TWAP slice its TWAP canceled at the next slice's due time; its unfilled
+  // remainder moves to the TWAP's later slices.
+  CANCEL_REASON_TWAP_ROLLOVER = 14;
+  // An order a trigger placed, such as a TWAP slice, a ladder level, a stop's
+  // child or an attached leg's exit, canceled because its trigger ended or
+  // another leg took over the exit.
+  CANCEL_REASON_STRATEGY_CANCEL = 15;
+  // The exchange canceled the order for a reason it does not name.
+  CANCEL_REASON_SYSTEM = 16;
 }
 
 // BatchReplacePhase is the recoverable execution phase for one replacement.
@@ -237,11 +291,15 @@ message Order {
   // Terminal timestamp in nanoseconds since epoch (UTC). Zero for open orders.
   uint64 terminal_ts_ns = 17;
 
-  // Terminal reason code for canceled/rejected orders. Zero for non-terminal orders.
-  uint32 terminal_reason_code = 18;
-  // Stable string for terminal_reason_code (e.g. "POST_ONLY_CROSS", "USER_REQUEST").
-  // Empty for non-terminal orders.
-  string terminal_reason = 19;
+  reserved 18, 19;
+  reserved "terminal_reason_code", "terminal_reason";
+  // For a REJECTED order, why it was refused: the same error code the Orders
+  // API returns for the same refusal. Not set for every other status; JSON and
+  // REST responses then omit it.
+  ErrorCode reject_reason = 34;
+  // For a CANCELED order, why it ended. Not set for every other status; JSON
+  // and REST responses then omit it.
+  CancelReason cancel_reason = 35;
   // Attached risk controls + runtime state on the parent order.
   // Empty when no attached risk exists. Order reads include it only when the
   // request asks for it (include_attached_risk, include_attached_risk_state):
@@ -646,24 +704,36 @@ service OrdersReadService {
   // While the current state of an order in scope is temporarily unavailable, the call
   // fails with a retryable UNAVAILABLE rather than omitting the order or returning a
   // stale state; retry the same request.
-  rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse) {}
+  rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve terminal order history for an account.
   // Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.
   // While the current state of an order on the page is temporarily unavailable, the call
   // fails with a retryable UNAVAILABLE rather than returning a stale state; retry the
   // same request.
-  rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse) {}
+  rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve per-user trade fills for an account.
   // Supports exact physical-order or logical-lineage scope, an inclusive generation
   // cutoff, and subaccount, symbol, side and time filters with cursor pagination.
-  rpc GetUserTrades(GetUserTradesRequest) returns (GetUserTradesResponse) {}
+  rpc GetUserTrades(GetUserTradesRequest) returns (GetUserTradesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve order state and a bounded page of its lineage executions by order or client order ID.
   // Use GetUserTrades for paginated execution history and optional settlement legs.
   // Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.
-  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {}
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve durable execution status for one admitted batch replacement.
   rpc GetBatchReplaceStatus(GetBatchReplaceStatusRequest) returns (GetBatchReplaceStatusResponse) {}
