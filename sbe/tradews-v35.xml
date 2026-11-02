@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Public SBE evolution rules:
-  - Describe client-visible meaning, units, null/default behavior, and scope.
-  - Do not expose internal service names, transports, storage systems, or topology.
-  - Append new fixed fields to the end of the fixed block and assign sinceVersion.
-  - Never reuse template IDs, field IDs, enum values, or bit positions.
--->
-<messageSchema package="tradews" id="7" version="34" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
+<messageSchema package="tradews" id="7" version="35" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
   <types>
     <enum name="CancelAllListingStatus" encodingType="uint8" description="Availability of the cancel-all order listing, independent of its submission outcome">
       <validValue name="UNSPECIFIED" description="Listing status was not provided; used for other commands">0</validValue>
@@ -43,7 +36,7 @@
       <validValue name="CANCEL_ALL_ORDERS" description="Requests cancellation of all matching open orders in the authenticated account scope">5</validValue>
       <validValue name="SUBSCRIBE" description="Replaces the private event-channel subscription for the connection">6</validValue>
       <validValue name="BATCH_CREATE_ORDERS" description="Submits up to 20 new orders, each admitted or rejected on its own">7</validValue>
-      <validValue name="BATCH_REPLACE_ORDERS" description="Replaces up to 50 orders on one trading pair, each admitted or rejected on its own">8</validValue>
+      <validValue name="BATCH_REPLACE_ORDERS" description="Modifies up to 50 orders on one trading pair, each amended in place or replaced, and admitted or rejected on its own">8</validValue>
       <validValue name="BATCH_CANCEL_ORDERS" description="Requests cancellation of up to 50 orders, each accepted or rejected on its own">9</validValue>
     </enum>
 
@@ -195,7 +188,7 @@
       <validValue name="ORDER_MODIFY_IN_PROGRESS" description="An earlier amend or replace of the order has not completed yet. Retry once it completes">226</validValue>
       <validValue name="ORDER_PLACEMENT_PENDING" description="The order, or the replace that created it, has not been placed on the book yet, so it cannot be modified. Retry shortly">227</validValue>
       <validValue name="INVALID_MODIFY_BEHAVIOR" description="The modify behavior is not a known behavior">228</validValue>
-      <validValue name="BATCH_REPLACE_ONLY_REQUIRED" description="An item of the batch modify did not use the REPLACE_ONLY behavior, so the batch was refused">229</validValue>
+      <validValue name="BATCH_REPLACE_ONLY_REQUIRED" description="No longer returned: each BatchReplaceOrders item follows the AMEND_OR_REPLACE behavior. The value stays reserved">229</validValue>
       <validValue name="BATCH_SINGLE_SYMBOL_REQUIRED" description="An item of the batch modify named no symbol, another symbol than the batch's first item, or an order on another symbol, so the batch was refused">230</validValue>
       <validValue name="REQUEST_RECEIPTS_EXHAUSTED" description="The account keeps its maximum number of recent modify or batch requests for duplicate detection. Retry once earlier ones expire">231</validValue>
       <validValue name="INTENT_ID_INVALID" description="The cancel-all or cancel-all-after request carried an intent identifier of zero">232</validValue>
@@ -293,6 +286,7 @@
       <validValue name="TWAP_ROLLOVER" description="A TWAP slice its TWAP canceled at the next slice's due time; its unfilled remainder moves to the TWAP's later slices">14</validValue>
       <validValue name="STRATEGY_CANCEL" description="An order a trigger placed, such as a TWAP slice, a ladder level, a stop's child or an attached leg's exit, canceled because its trigger ended or another leg took over the exit">15</validValue>
       <validValue name="SYSTEM" description="The exchange canceled the order for a reason it does not name">16</validValue>
+      <validValue name="MARKET_HALTED" description="The market was halted: the exchange canceled every open order of the market. Fills before the cancel stand. The market refuses new orders until it trades again">17</validValue>
     </enum>
 
     <enum name="LiquidityRole" encodingType="uint8" description="Liquidity role of the authenticated account's order in an execution">
@@ -332,7 +326,7 @@
       <validValue name="MODIFY_ORDER" description="Single-order modification operation">3</validValue>
       <validValue name="CANCEL_ALL_ORDERS" description="Bulk cancellation operation">4</validValue>
       <validValue name="BATCH_CREATE_ORDERS" description="Batch order placement operation">5</validValue>
-      <validValue name="BATCH_REPLACE_ORDERS" description="Batch order replacement operation">6</validValue>
+      <validValue name="BATCH_REPLACE_ORDERS" description="Batch order modification operation">6</validValue>
       <validValue name="BATCH_CANCEL_ORDERS" description="Batch order cancellation operation">7</validValue>
     </enum>
 
@@ -354,15 +348,15 @@
       <validValue name="REJECTED" description="The item was rejected; its code names the reason and states what, if anything, the item changed">2</validValue>
     </enum>
 
-    <enum name="BatchStatus" encodingType="uint8" description="Aggregate outcome of a batch replace command">
+    <enum name="BatchStatus" encodingType="uint8" description="Aggregate outcome of a BatchReplaceOrders command">
       <validValue name="ADMITTED" description="Every item was admitted">1</validValue>
       <validValue name="PARTIALLY_ADMITTED" description="Some items were admitted and others rejected">2</validValue>
       <validValue name="REJECTED" description="Every item was rejected">3</validValue>
     </enum>
 
-    <enum name="ReplaceAction" encodingType="ZeroNullUint8" description="What an admitted batch replace item did to its order">
-      <validValue name="AMENDED" description="The new total quantity was at or below the quantity already filled: the order's remaining quantity is canceled and no successor order is created; follow oldOrderId until its terminal state">1</validValue>
-      <validValue name="REPLACED" description="The order was replaced by the successor order replacementOrderId">2</validValue>
+    <enum name="ReplaceAction" encodingType="ZeroNullUint8" description="What an admitted BatchReplaceOrders item did to its order">
+      <validValue name="AMENDED" description="The order kept oldOrderId and no successor order was created: it was amended in place and kept its queue priority, or, when the new total quantity was at or below its filled quantity, it ended at its filled quantity. Keep tracking oldOrderId">1</validValue>
+      <validValue name="REPLACED" description="The order ended and the successor order replacementOrderId took its place, with its queue priority reset">2</validValue>
     </enum>
 
     <set name="OrderFlags" encodingType="uint32" description="Order behavior flags">
@@ -456,16 +450,16 @@
     </group>
   </message>
 
-  <message name="BatchReplaceOrders" id="8" description="Replaces up to 50 orders on one trading pair as one quote refresh, each admitted or rejected on its own. Each admitted item cancels its order and creates a successor, or only cancels the remaining quantity when the new total is at or below the filled quantity. correlationId is the batch's account-scoped idempotency identity: resending the same correlationId and items answers the original per-item results and replaces nothing again; the same correlationId with different items is rejected per item with CONFLICT_IDEMPOTENCY_KEY_REUSE. Reusing one identity across encodings is rejected the same way. A CommandReject UNAVAILABLE, or an acknowledgement that never arrived, may follow replacements already admitted: resend the same correlationId and items to learn each item's result, and do not assume no order changed">
+  <message name="BatchReplaceOrders" id="8" description="Modifies up to 50 orders on one trading pair as one quote refresh, each admitted or rejected on its own. Each item follows the AMEND_OR_REPLACE behavior: an item that keeps the order's price, does not raise its total quantity and keeps its client order identifier amends the order in place, under the same order identifier and with its queue priority kept; a new price, a larger total quantity or a new client order identifier replaces the order with a successor under a new order identifier, with its queue priority reset. A new total quantity at or below the filled quantity ends the order at its filled quantity, with no successor. To force a replacement, use ModifyOrder with REPLACE_ONLY. correlationId is the batch's account-scoped idempotency identity: resending the same correlationId and items answers the original per-item results and changes no order again; the same correlationId with different items is rejected per item with CONFLICT_IDEMPOTENCY_KEY_REUSE. Reusing one identity across encodings is rejected the same way. A CommandReject UNAVAILABLE, or an acknowledgement that never arrived, may follow modifications already admitted: resend the same correlationId and items to learn each item's result, and do not assume no order changed">
     <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
     <field name="correlationId" id="2" type="uint64" description="Required nonzero account-scoped batch identity, copied unchanged into the acknowledgement or rejection. Keep it and the items unchanged when retrying, including after reconnecting; use a fresh one for each new batch"/>
-    <field name="symbolId" id="3" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig shared by every replaced order; must be greater than zero"/>
-    <group name="items" id="4" dimensionType="groupSizeEncoding" description="1 to 50 replacements, answered in this order; each names a different order">
-      <field name="orderId" id="5" type="ZeroNullUint64" presence="optional" description="Public identifier of the order to replace; exactly one of orderId or clientOrderId is required, and this field is zero when clientOrderId is used"/>
-      <field name="newQtyScaled" id="6" type="int64" presence="optional" description="Optional positive target total gross base-asset quantity after replacement, scaled by the pair's base_quantity_scale from GetSpotConfig; null leaves quantity unchanged; at least one of newQtyScaled or priceTicks is required"/>
-      <field name="priceTicks" id="7" type="int64" presence="optional" description="Optional positive limit price of the successor in quote units scaled by 1e9; null leaves price unchanged"/>
-      <data name="clientOrderId" id="8" type="varDataEncoding" description="Client-generated identifier of the order to replace; exactly one of orderId or clientOrderId is required, and this value is empty when orderId is used"/>
-      <data name="newClientOrderId" id="9" type="varDataEncoding" description="Optional client order identifier of the successor; empty keeps the replaced order's identifier. A non-empty value must use 1 to 36 supported ASCII characters"/>
+    <field name="symbolId" id="3" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig shared by every targeted order; must be greater than zero"/>
+    <group name="items" id="4" dimensionType="groupSizeEncoding" description="1 to 50 order modifications, answered in this order; each names a different order">
+      <field name="orderId" id="5" type="ZeroNullUint64" presence="optional" description="Public identifier of the order to modify; exactly one of orderId or clientOrderId is required, and this field is zero when clientOrderId is used"/>
+      <field name="newQtyScaled" id="6" type="int64" presence="optional" description="Optional positive target total gross base-asset quantity after modification, scaled by the pair's base_quantity_scale from GetSpotConfig; null leaves quantity unchanged; a value above the order's total quantity makes the item a replacement; at least one of newQtyScaled or priceTicks is required"/>
+      <field name="priceTicks" id="7" type="int64" presence="optional" description="Optional positive target limit price after modification in quote units scaled by 1e9; null leaves price unchanged; a price other than the order's makes the item a replacement"/>
+      <data name="clientOrderId" id="8" type="varDataEncoding" description="Client-generated identifier of the order to modify; exactly one of orderId or clientOrderId is required, and this value is empty when orderId is used"/>
+      <data name="newClientOrderId" id="9" type="varDataEncoding" description="Optional new client order identifier; empty keeps the order's identifier. A value other than the order's identifier makes the item a replacement, and the successor carries it. A non-empty value must use 1 to 36 supported ASCII characters"/>
     </group>
   </message>
 
@@ -579,7 +573,7 @@
     </group>
   </message>
 
-  <message name="BatchReplaceAck" id="27" description="Answers a BatchReplaceOrders with its admission receipt and one result per requested replacement, in request order; order events report each order's final state">
+  <message name="BatchReplaceAck" id="27" description="Answers a BatchReplaceOrders with its admission receipt and one result per item, in request order; order events report each order's final state">
     <field name="seq" id="1" type="uint64" description="Client sequence number copied from the command"/>
     <field name="correlationId" id="2" type="uint64" description="Batch identity copied from the command"/>
     <field name="tsNs" id="3" type="uint64" epoch="unix" timeUnit="nanosecond" description="Admission timestamp in nanoseconds since the Unix epoch, UTC"/>
@@ -591,12 +585,12 @@
     <field name="rateLimitRemaining" id="9" type="uint64" presence="optional" description="Weighted capacity remaining after the decision when an item was rejected with RATE_LIMIT_EXCEEDED; null otherwise"/>
     <field name="rateLimitRetryAfterNs" id="10" type="ZeroNullUint64" presence="optional" description="Minimum delay in nanoseconds before retrying the rate-limited items; zero when no delay applies"/>
     <field name="rateLimitPolicyVersion" id="11" type="ZeroNullUint64" presence="optional" description="Version of the quota policy used for the decision when an item was rejected with RATE_LIMIT_EXCEEDED; zero otherwise"/>
-    <group name="results" id="12" dimensionType="groupSizeEncoding" description="One result per requested replacement, in request order">
-      <field name="status" id="13" type="BatchItemStatus" description="Whether the replacement was admitted"/>
-      <field name="code" id="14" type="RejectCode" presence="optional" description="Reason the replacement was rejected; zero when admitted"/>
-      <field name="action" id="15" type="ReplaceAction" presence="optional" description="What the admitted replacement did; null when rejected"/>
+    <group name="results" id="12" dimensionType="groupSizeEncoding" description="One result per item, in request order">
+      <field name="status" id="13" type="BatchItemStatus" description="Whether the item was admitted"/>
+      <field name="code" id="14" type="RejectCode" presence="optional" description="Reason the item was rejected; zero when admitted"/>
+      <field name="action" id="15" type="ReplaceAction" presence="optional" description="Whether the admitted item amended its order or replaced it with a successor; null when rejected"/>
       <field name="oldOrderId" id="16" type="ZeroNullUint64" presence="optional" description="Public identifier of the order the item targeted: the orderId sent, or the order its clientOrderId names; zero only when that clientOrderId names no order"/>
-      <field name="replacementOrderId" id="17" type="ZeroNullUint64" presence="optional" description="Public identifier of the successor order; zero for AMENDED and rejected items"/>
+      <field name="replacementOrderId" id="17" type="ZeroNullUint64" presence="optional" description="Public identifier of the successor order of a REPLACED item; zero for AMENDED and rejected items"/>
     </group>
   </message>
 

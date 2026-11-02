@@ -1,0 +1,261 @@
+syntax = "proto3";
+
+package changelog.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/changelog/v1;changelogv1";
+// Document-level OpenAPI metadata for the Changelog API.
+option (gnostic.openapi.v3.document) = {
+  tags: [{
+    name: "Changelog Service"
+    description: "Published product changelog of this environment: posts and the changes they announce."
+  }]
+};
+
+// ChangeCategory classifies one change.
+enum ChangeCategory {
+  // Not set. Never returned.
+  CATEGORY_UNSPECIFIED = 0;
+  // Breaking change: existing integrations may need to change.
+  BREAKING_CHANGE = 1;
+  // New capability.
+  NEW_FEATURE = 2;
+  // Improvement to existing behavior.
+  IMPROVEMENT = 3;
+  // Bug fix.
+  BUG_FIX = 4;
+}
+
+// Audience is a group of users a change is addressed to.
+enum Audience {
+  // Not set. Never returned.
+  AUDIENCE_UNSPECIFIED = 0;
+  // Everyone.
+  ALL_USERS = 1;
+  // Traders.
+  TRADERS = 2;
+  // Market makers.
+  MARKET_MAKERS = 3;
+  // Developers and API integrators.
+  DEVELOPERS = 4;
+}
+
+// Surface is the product area a change affects.
+enum Surface {
+  // Not set. Never returned.
+  SURFACE_UNSPECIFIED = 0;
+  // Trading.
+  TRADING = 1;
+  // Deposits, withdrawals and transfers.
+  FUNDING = 2;
+  // Accounts, subaccounts and security.
+  ACCOUNTS = 3;
+  // Programmatic API.
+  API = 4;
+  // Block explorer.
+  EXPLORER = 5;
+  // Documentation.
+  DOCUMENTATION = 6;
+  // Platform-wide behavior.
+  PLATFORM = 7;
+}
+
+// SortDirection orders changes by post publication time.
+enum SortDirection {
+  // Default: descending.
+  SORT_DIRECTION_UNSPECIFIED = 0;
+  // Ascending (oldest first).
+  SORT_ASC = 1;
+  // Descending (newest first).
+  SORT_DESC = 2;
+}
+
+// Change is one announced change. Published content never changes.
+message Change {
+  // Stable opaque 64-bit identifier, identical across environments.
+  fixed64 id = 1;
+  // Short title.
+  string title = 2;
+  // One-paragraph summary.
+  string summary = 3;
+  // Longer explanation; paragraphs separated by blank lines. Omitted when absent.
+  optional string details = 4;
+  // Category.
+  ChangeCategory category = 5;
+  // True when users or integrators must act.
+  bool action_required = 6;
+  // What to do, when action is required. Omitted when absent.
+  optional string migration_guidance = 7;
+  // Audiences addressed. Never empty.
+  repeated Audience audiences = 8;
+  // Product areas affected. May be empty.
+  repeated Surface surfaces = 9;
+}
+
+// Section groups related changes inside a post.
+message Section {
+  // Section heading.
+  string heading = 1;
+  // Section summary. Omitted when absent.
+  optional string summary = 2;
+  // Changes in publication order.
+  repeated Change changes = 3;
+}
+
+// PostSummary describes one published post without its changes.
+message PostSummary {
+  // Stable post identifier, unique within this environment.
+  string slug = 1;
+  // Title.
+  string title = 2;
+  // Introduction.
+  string introduction = 3;
+  // Publication time.
+  google.protobuf.Timestamp published_at = 4;
+  // Exclusive upper bound of the period covered. Omitted when unknown.
+  google.protobuf.Timestamp coverage_cutoff = 5;
+  // Exact number of changes.
+  uint32 change_count = 6;
+  // Exact number of BREAKING_CHANGE changes.
+  uint32 breaking_change_count = 7;
+  // Exact number of changes with action_required.
+  uint32 action_required_count = 8;
+  // Exact number of NEW_FEATURE changes.
+  uint32 new_feature_count = 9;
+  // Exact number of IMPROVEMENT changes.
+  uint32 improvement_count = 10;
+  // Exact number of BUG_FIX changes.
+  uint32 bug_fix_count = 11;
+}
+
+// Post is one complete published post.
+message Post {
+  // Post summary.
+  PostSummary summary = 1;
+  // Sections in publication order.
+  repeated Section sections = 2;
+}
+
+// ListPostsRequest pages through published posts, newest first.
+message ListPostsRequest {
+  // Maximum posts to return. 0 means the default of 20; maximum 100.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, keyset-backed, exclusive cursor from a previous response.
+  // Bound to publication time and slug.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListPostsResponse returns post summaries, newest first.
+message ListPostsResponse {
+  // Post summaries ordered by publication time descending, then slug descending.
+  repeated PostSummary posts = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetPostRequest selects one post.
+message GetPostRequest {
+  // Post slug.
+  string slug = 1 [(buf.validate.field).string = {min_len: 1, max_len: 200}];
+}
+
+// GetPostResponse returns one complete post.
+message GetPostResponse {
+  // The post with every section and change. A post can hold several hundred
+  // changes; use ListChanges with post_slug to page through them instead.
+  Post post = 1;
+}
+
+// ListChangesRequest queries changes across posts. Filters on different fields
+// combine with AND; values within one field combine with OR.
+message ListChangesRequest {
+  option (buf.validate.message).cel = {
+    id: "list_changes_request.valid_window"
+    message: "end_time must be after start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+  // Categories to include. Empty means all.
+  repeated ChangeCategory categories = 1 [(buf.validate.field).repeated = {
+    max_items: 4, unique: true, items: {enum: {defined_only: true, not_in: [0]}}
+  }];
+  // When set, only changes whose action_required equals this value.
+  optional bool action_required = 2;
+  // Surfaces to include. Empty means all.
+  repeated Surface surfaces = 3 [(buf.validate.field).repeated = {
+    max_items: 7, unique: true, items: {enum: {defined_only: true, not_in: [0]}}
+  }];
+  // Audiences to include. Empty means all. Changes addressed to ALL_USERS
+  // always match.
+  repeated Audience audiences = 4 [(buf.validate.field).repeated = {
+    max_items: 4, unique: true, items: {enum: {defined_only: true, not_in: [0]}}
+  }];
+  // Inclusive lower bound on post publication time. Optional.
+  google.protobuf.Timestamp start_time = 5;
+  // Exclusive upper bound on post publication time. Optional; must be after
+  // start_time when both are set.
+  google.protobuf.Timestamp end_time = 6;
+  // Restrict to one post. Optional.
+  string post_slug = 7 [(buf.validate.field).string.max_len = 200];
+  // Order of posts. Changes keep publication order inside each post.
+  SortDirection sort = 8 [(buf.validate.field).enum.defined_only = true];
+  // Maximum changes to return. 0 means the default of 100; maximum 500.
+  uint32 limit = 9 [(buf.validate.field).uint32.lte = 500];
+  // Opaque, keyset-backed, exclusive cursor from a previous response. Reuse
+  // it only with the same filters, time bounds and sort.
+  string page_token = 10 [(buf.validate.field).string.max_len = 512];
+}
+
+// ChangeEntry is one change with the post that announced it.
+message ChangeEntry {
+  // The change.
+  Change change = 1;
+  // Slug of the announcing post.
+  string post_slug = 2;
+  // Publication time of the announcing post.
+  google.protobuf.Timestamp published_at = 3;
+  // Heading of the section containing the change.
+  string section_heading = 4;
+}
+
+// ListChangesResponse returns matching changes.
+message ListChangesResponse {
+  // Matching changes in the requested order.
+  repeated ChangeEntry changes = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// ChangelogService serves the published changelog of this environment. It is
+// public and caller-independent, and supports cacheable ConnectRPC GET.
+service ChangelogService {
+  option (polyester.api.docs_group) = "changelog";
+
+  // List published post summaries, newest first. Use limit 1 to poll for the
+  // latest post.
+  rpc ListPosts(ListPostsRequest) returns (ListPostsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/changelog/posts"};
+    option (gnostic.openapi.v3.operation) = {summary: "List Changelog Posts" tags: "Changelog Service" security: [{}]};
+  }
+  // Get one complete published post by slug.
+  rpc GetPost(GetPostRequest) returns (GetPostResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/changelog/posts/{slug}"};
+    option (gnostic.openapi.v3.operation) = {summary: "Get Changelog Post" tags: "Changelog Service" security: [{}]};
+  }
+  // List changes across published posts, for example every breaking change
+  // since a given time.
+  rpc ListChanges(ListChangesRequest) returns (ListChangesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/changelog/changes"};
+    option (gnostic.openapi.v3.operation) = {summary: "List Changelog Changes" tags: "Changelog Service" security: [{}]};
+  }
+}
