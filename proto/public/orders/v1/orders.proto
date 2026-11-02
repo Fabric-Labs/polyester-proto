@@ -647,8 +647,8 @@ enum ErrorCode {
   ERROR_CODE_ORDER_PLACEMENT_PENDING = 227;
   // The modify behavior is not a known behavior.
   ERROR_CODE_INVALID_MODIFY_BEHAVIOR = 228;
-  // An item of the batch modify did not use the REPLACE_ONLY behavior, so the
-  // batch was refused.
+  // No longer returned: each BatchReplaceOrders item follows ModifyOrder's
+  // default amend-or-replace rule. The value stays reserved.
   ERROR_CODE_BATCH_REPLACE_ONLY_REQUIRED = 229;
   // An item of the batch modify named no symbol, or another symbol than the
   // batch's first item, so the batch was refused.
@@ -863,6 +863,10 @@ enum ErrorCode {
   // it may have been created; read the triggers for its client trigger ID
   // before retrying.
   ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN = 304;
+  // The request names a listed trading pair other than the trigger's own, so
+  // it was refused. Nothing changed; name the trigger's own pair, or omit the
+  // symbol. A pair that is not listed is ERROR_CODE_UNKNOWN_SYMBOL.
+  ERROR_CODE_TRIGGER_SYMBOL_MISMATCH = 305;
   // The account has reached its maximum number of resting orders in this
   // market. Good-till-cancelled and good-till-date orders count until they
   // end; immediate-or-cancel, fill-or-kill and market orders never count, and
@@ -870,7 +874,8 @@ enum ErrorCode {
   // in this market first.
   ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR = 306;
   // The order already carries every attached leg it may hold, so another
-  // attached leg was refused.
+  // attached leg was refused. Legs being cancelled count until they end:
+  // retry once they have ended.
   ERROR_CODE_ATTACHED_LEGS_EXCEEDED = 86;
   // The trigger's fee asset was not valid.
   ERROR_CODE_FEE_ASSET_INVALID = 87;
@@ -1054,6 +1059,16 @@ message TrailingStopPolicy {
   // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
   // another source replaces the leg.
   TriggerPriceSource trigger_price_source = 8 [(buf.validate.field).enum.defined_only = true];
+  // Maximum price of a trailing stop that buys back, in quote units scaled by
+  // 1e9: the most its exit pays per unit, at which the quote it may spend is
+  // reserved with the exit's fee. Required when the parent order sells, so
+  // the trailing stop buys; must be unset when the parent order buys. A rise
+  // that fires above it still fires, and the exit fills only at or below it.
+  // Changing it with ModifyOrder replaces the leg.
+  int64 limit_price_ticks = 4 [
+    (buf.validate.field).int64.gt = 0,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
 }
 
 // RiskPolicy defines optional risk controls (take-profit, stop-loss or
@@ -1077,6 +1092,18 @@ message TrailingStopPolicy {
 // fill, the legs are canceled with
 // TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the
 // parent's whole fill is below one step, the legs fail.
+//
+// The legs reserve what their exits would sell or spend, once for both legs:
+// the base a sell exit sells, as each parent fill settles, and the quote a
+// buy-back may spend at its legs' highest maximum price. A buy-back is
+// reserved from the order's creation for the part of that cost the sale
+// itself may not return, so an order whose balance cannot cover it is
+// rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the
+// balance's reserved amount, and an exit uses it when it is submitted. While
+// the legs protect a position, orders and withdrawals that would use the
+// reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or
+// cancel the legs first. What the legs no longer need is released as they
+// change and in full when they end.
 message RiskPolicy {
   option (buf.validate.message).cel = {
     id: "risk_policy.oco_requires_tp_and_one_stop"
@@ -1136,7 +1163,7 @@ enum ModifyActionTaken {
 enum BatchReplaceAdmissionStatus {
   // Admission status is unavailable.
   BATCH_REPLACE_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // Every requested operation was admitted, including cancel-only outcomes.
+  // Every requested operation was admitted, amended items included.
   BATCH_REPLACE_ADMISSION_STATUS_ADMITTED = 1;
   // Some requested replacements were admitted and others were rejected.
   BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED = 2;
@@ -1148,7 +1175,8 @@ enum BatchReplaceAdmissionStatus {
 enum BatchReplaceItemAdmissionStatus {
   // Item admission status is unavailable.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes.
+  // The operation was admitted and handed to execution. action_taken tells whether
+  // the order was amended under its own order ID or replaced by a successor.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED = 1;
   // The replacement was rejected before execution handoff.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED = 2;
@@ -1301,7 +1329,8 @@ message DeadManSwitchScope {
   fixed64 account_id = 1;
   // Symbol ID whose orders are canceled. Zero or omitted means all symbols.
   uint32 symbol_id = 2;
-  // Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.
+  // Order side that is canceled. Not set means both sides; JSON and REST
+  // responses then omit it.
   Side side = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
@@ -1502,7 +1531,14 @@ message ModifyOrderResponse {
   uint64 ts_ns = 9;
 }
 
-// BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.
+// BatchReplaceOrderItem identifies one order to modify inside a quote-refresh
+// batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item
+// that keeps the order's price (new_price_ticks unset or equal to it), does not
+// raise its total quantity and keeps its client order ID amends the order in
+// place, under the same order ID and with its queue priority kept. A new
+// price, a larger total quantity or a new client order ID replaces it with a
+// successor order under a new order ID, with its queue priority reset. To
+// force a replacement, use ModifyOrder with REPLACE_ONLY.
 message BatchReplaceOrderItem {
   // At least one patch field must be provided.
   option (buf.validate.message).cel = {
@@ -1531,7 +1567,8 @@ message BatchReplaceOrderItem {
   // Replacement attached-risk policy for the order.
   RiskPolicy new_attached_risk = 5;
 
-  // Optional new client order id when replace path is taken.
+  // Optional client order ID for the successor. A value other than the order's
+  // client order ID makes the item a replacement.
   string new_client_order_id = 6 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$",
@@ -1549,21 +1586,26 @@ message BatchReplaceAdmissionItem {
   // order the requested client order ID names. Rejected items keep it too. Unset
   // only when the requested client order ID names no order.
   fixed64 old_order_id = 3;
-  // Assigned successor order ID. Unset for cancel-only outcomes and rejected items.
+  // Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED
+  // item, whose order keeps old_order_id, and for rejected items.
   fixed64 replacement_order_id = 4;
-  // Client order ID assigned to the successor when available.
+  // Client order ID assigned to the successor, for a REPLACED item only.
   string client_order_id = 5;
   // Stable rejection code. Empty for admitted items.
   string code = 6;
   // Structured rejection details. Present for rate-limit guidance and other typed failures.
   ErrorDetail error = 7;
-  // REPLACED admits a successor. AMENDED cancels the original order's remaining quantity
-  // without a successor; keep tracking old_order_id until its terminal state is confirmed.
-  // Unspecified for rejected items.
+  // REPLACED admits a successor under replacement_order_id, with queue priority
+  // reset. AMENDED keeps the order under old_order_id with no successor: the
+  // order is amended in place and keeps its queue priority, or, when the new
+  // total quantity is at or below its filled quantity, ends at its filled
+  // quantity. Keep tracking old_order_id for an AMENDED item. Not set for
+  // rejected items; JSON and REST responses then omit it.
   ModifyActionTaken action_taken = 8;
 }
 
-// BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.
+// BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:
+// each item is amended in place or replaced as ModifyOrder decides by default.
 // Identical retries replay the admission result for 60 seconds from acceptance;
 // a different payload under the same key conflicts. Use a fresh key for a new batch.
 message BatchReplaceOrdersRequest {
@@ -1790,14 +1832,18 @@ service OrdersService {
     };
   }
 
-  // Replaces same-symbol orders and returns after authoritative admission.
+  // Amends or replaces same-symbol orders and returns after authoritative
+  // admission.
   rpc BatchReplaceOrders(BatchReplaceOrdersRequest) returns (BatchReplaceOrdersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Replace Orders"
       description:
-        "Replace up to 50 orders for one symbol as a quote refresh. "
+        "Modify up to 50 orders for one symbol as a quote refresh. "
+        "Each item amends its order in place, keeping its order ID and queue priority, "
+        "when it keeps the price, does not raise the total quantity and keeps the client order ID; "
+        "otherwise it replaces the order with a successor under a new order ID. "
         "Returns an admission receipt for status and private realtime reconciliation."
       tags: "Orders Service"
     };

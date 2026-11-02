@@ -53,16 +53,22 @@ enum TriggerStatus {
   STATUS_ARMED = 2;
   // Trigger is actively executing (for example, TWAP slices in progress).
   STATUS_RUNNING = 3;
-  // Trigger completed successfully. A ladder completes only when every child
-  // order filled; a ladder whose child orders were canceled or rejected ends
-  // canceled or failed instead.
+  // Trigger completed. A ladder completes once none of its child orders
+  // remains open and at least one of them was placed on the book, however
+  // each placed child order then ended: filled, canceled, or canceled by
+  // self-trade prevention. Some of its child orders may have been rejected.
+  // Completed does not mean the ladder filled: its executed quantity and
+  // executed levels state what filled, and each child order's own status
+  // states how it ended.
   STATUS_COMPLETED = 4;
   // Trigger was canceled. The cancel reason states why, for example a user
-  // request, another attached leg's exit closing its parent's position,
-  // self-trade prevention, or, for a ladder, the cancellation of its child
-  // orders.
+  // request or another attached leg's exit closing its parent's position. A
+  // ladder is canceled only when the ladder itself is canceled; canceling
+  // its child orders does not cancel it.
   STATUS_CANCELED = 5;
   // Trigger failed (for example, reservation failure, child order rejection).
+  // A ladder fails when every child order was rejected before it was placed
+  // on the book; the failure reason is the first rejected child order's.
   STATUS_FAILED = 6;
   // Trigger is paused (user-initiated, can be resumed).
   STATUS_PAUSED = 7;
@@ -80,8 +86,16 @@ enum TriggerEventType {
   EVENT_UPDATED = 3;
   // Trigger became terminal after its next child order could not be admitted.
   EVENT_FAILED = 4;
-  // A standalone trailing trigger's activation condition was satisfied and tracking began.
+  // A trailing stop's activation condition was satisfied and tracking began,
+  // for a standalone or an attached trailing stop.
   EVENT_ACTIVATED = 5;
+  // An attached take-profit, stop-loss or trailing stop started protecting
+  // its parent order's filled quantity, once, when the parent's first fill
+  // made it live (or at its resume, when it was paused before that fill).
+  // Later fills that resize it, and later pauses and resumes, do not repeat
+  // it. An attached trailing stop still reports EVENT_ACTIVATED when it
+  // starts tracking.
+  EVENT_ARMED = 6;
 }
 
 // TriggerCancelReason identifies why an admitted trigger became canceled.
@@ -95,9 +109,7 @@ enum TriggerCancelReason {
   TRIGGER_CANCEL_REASON_OCO = 2;
   // The parent order ended without a fill, so its attached trigger was canceled.
   TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL = 3;
-  // Self-trade prevention canceled the trigger's child orders. For a ladder,
-  // no child order was canceled by the user, and the first child order to be
-  // canceled was canceled by self-trade prevention.
+  // Self-trade prevention canceled the trigger's child orders.
   TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION = 4;
   // Ended by the exchange while it recovered your account. The account's
   // open orders on the market were canceled at the same time; place new
@@ -758,8 +770,11 @@ message TriggerEvent {
   int32 child_seq = 11;
   // Child order ID created by this event, if any.
   fixed64 child_order_id = 12;
-  // Price that caused a conditional trigger to fire, in quote units scaled by
-  // 1e9. Absent for time-scheduled triggers such as TWAP.
+  // Price that fired the trigger: for a stop-loss or take-profit, the price
+  // that crossed its trigger price; for a trailing stop, its trailing trigger
+  // threshold when it fired; for a ladder, the level's price. A market child
+  // order's slippage cap is measured from it. In quote units scaled by 1e9.
+  // Absent for time-scheduled triggers such as TWAP.
   optional int64 fire_price_ticks = 13 [(buf.validate.field).int64.gt = 0];
 
   // Terminal reason for canceled or failed events. Other event types leave it unset.
@@ -833,10 +848,11 @@ message ModifyTriggerRequest {
   // Optional sub-account for authorization.
   optional fixed64 subaccount_id = 2;
   // Optional trading symbol numeric identifier. Zero or omitted means the
-  // trigger's own pair. When set, it must be the trigger's pair: another pair
-  // is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger
-  // unchanged. An API key limited to specific markets must name the trigger's
-  // pair.
+  // trigger's own pair. When set, it must be the trigger's pair: another
+  // listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a
+  // pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the
+  // trigger unchanged. An API key limited to specific markets must name the
+  // trigger's pair.
   uint32 symbol_id = 3;
 
   // Patch fields for safe price, trailing-distance, and slippage edits.
@@ -931,10 +947,11 @@ message ResumeTriggerRequest {
   // Optional sub-account for authorization.
   optional fixed64 subaccount_id = 2;
   // Optional trading symbol numeric identifier. Zero or omitted means the
-  // trigger's own pair. When set, it must be the trigger's pair: another pair
-  // is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger
-  // unchanged. An API key limited to specific markets must name the trigger's
-  // pair.
+  // trigger's own pair. When set, it must be the trigger's pair: another
+  // listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a
+  // pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the
+  // trigger unchanged. An API key limited to specific markets must name the
+  // trigger's pair.
   uint32 symbol_id = 3;
 }
 

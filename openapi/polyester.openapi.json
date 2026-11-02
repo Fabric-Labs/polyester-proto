@@ -856,7 +856,8 @@
           "AUTH_SOCIAL_VERIFICATION_INVALID_STATE",
           "AUTH_SUBACCOUNT_CHALLENGE_INVALID",
           "AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED",
-          "AUTH_TEMPORARILY_UNAVAILABLE"
+          "AUTH_TEMPORARILY_UNAVAILABLE",
+          "AUTH_SUBACCOUNT_OWNER_ROLE_LOCKED"
         ],
         "title": "AuthErrorCode",
         "type": "string"
@@ -4590,6 +4591,11 @@
             "title": "owner_username",
             "type": "string"
           },
+          "removed": {
+            "description": "True when the caller no longer has access to this sub-account, for\n example after its owner removed the caller as a member: remove the\n sub-account from the caller's list. Only real-time updates set it;\n responses list only sub-accounts the caller can access. A change of the\n caller's role or access does not change revision or updated_at, so\n real-time updates deliver such changes in order and each one applies as\n it arrives. Ending access also ends the caller's subscriptions to this\n sub-account's real-time channels, and can, rarely, also end a\n subscription made after access was granted again. When the server ends a\n subscription to one of this sub-account's channels while the latest\n update lists this sub-account with a role and removed false, subscribe\n again: access is checked again on subscribe.",
+            "title": "removed",
+            "type": "boolean"
+          },
           "requireMemberMfa": {
             "description": "Owner-controlled security baseline for delegated interactive members on\n protected sub-account actions. This does not apply to read-only real-time\n subscriptions.",
             "title": "require_member_mfa",
@@ -4606,7 +4612,7 @@
           },
           "role": {
             "$ref": "#/components/schemas/auth.v1.SubaccountRole",
-            "description": "Role of the current caller on this sub-account.",
+            "description": "Role of the current caller on this sub-account. SUBACCOUNT_ROLE_UNSPECIFIED\n when removed is true.",
             "title": "role"
           },
           "smartAccountAddress": {
@@ -4641,7 +4647,7 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Time in UTC when this sub-account's configuration was last changed. For the\n same sub-account, later is fresher, equal is an idempotent replay, and\n earlier is stale. Equal timestamps with different configuration indicate\n an invariant failure.",
+            "description": "Time in UTC when this sub-account's configuration was last changed. For the\n same sub-account, later is fresher, equal is an idempotent replay, and\n earlier is stale. Equal timestamps with different configuration, other\n than role and removed, indicate an invariant failure.",
             "title": "updated_at"
           }
         },
@@ -9358,6 +9364,12 @@
             "title": "number",
             "type": "integer"
           },
+          "openingValueUsd": {
+            "description": "USD value of the funding balances restored to the account when the\n season opened, valued at the end of the season like final_value_usd,\n over assets that count toward account value; assets excluded from value\n add nothing. Encoded as a non-negative base-10 decimal string without\n separators or a currency symbol; \"0\" when the season opened with no\n balances. Omitted when a restored balance had no USD value.",
+            "nullable": true,
+            "title": "opening_value_usd",
+            "type": "string"
+          },
           "orderTypes": {
             "$ref": "#/components/schemas/checkpoints.v1.OrderTypeCounts",
             "description": "Placed orders by order type.",
@@ -9425,7 +9437,7 @@
             "title": "season_end"
           },
           "seasonResultUsd": {
-            "description": "Season result: final_value_usd minus net_inflow_usd, encoded as a base-10\n decimal string that may be negative. Omitted when either is omitted.",
+            "description": "Season result: final_value_usd minus opening_value_usd minus\n net_inflow_usd, encoded as a base-10 decimal string that may be negative.\n Price moves on restored holdings are not counted as result. Omitted when\n any of them is omitted.",
             "nullable": true,
             "title": "season_result_usd",
             "type": "string"
@@ -13985,11 +13997,11 @@
         "properties": {
           "actionTaken": {
             "$ref": "#/components/schemas/orders.v1.ModifyActionTaken",
-            "description": "REPLACED admits a successor. AMENDED cancels the original order's remaining quantity\n without a successor; keep tracking old_order_id until its terminal state is confirmed.\n Unspecified for rejected items.",
+            "description": "REPLACED admits a successor under replacement_order_id, with queue priority\n reset. AMENDED keeps the order under old_order_id with no successor: the\n order is amended in place and keeps its queue priority, or, when the new\n total quantity is at or below its filled quantity, ends at its filled\n quantity. Keep tracking old_order_id for an AMENDED item. Not set for\n rejected items; JSON and REST responses then omit it.",
             "title": "action_taken"
           },
           "clientOrderId": {
-            "description": "Client order ID assigned to the successor when available.",
+            "description": "Client order ID assigned to the successor, for a REPLACED item only.",
             "title": "client_order_id",
             "type": "string"
           },
@@ -14018,7 +14030,7 @@
             ]
           },
           "replacementOrderId": {
-            "description": "Assigned successor order ID. Unset for cancel-only outcomes and rejected items.",
+            "description": "Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED\n item, whose order keeps old_order_id, and for rejected items.",
             "format": "int64",
             "title": "replacement_order_id",
             "type": [
@@ -14067,7 +14079,7 @@
                 "title": "new_attached_risk"
               },
               "newClientOrderId": {
-                "description": "Optional new client order id when replace path is taken.",
+                "description": "Optional client order ID for the successor. A value other than the order's\n client order ID makes the item a replacement.",
                 "maxLength": 36,
                 "pattern": "^[A-Za-z0-9._:/-]+$",
                 "title": "new_client_order_id",
@@ -14136,13 +14148,13 @@
             ]
           }
         ],
-        "description": "BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.\nbatch_replace_item.patch_required // at least one patch field must be set\n",
+        "description": "BatchReplaceOrderItem identifies one order to modify inside a quote-refresh\n batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item\n that keeps the order's price (new_price_ticks unset or equal to it), does not\n raise its total quantity and keeps its client order ID amends the order in\n place, under the same order ID and with its queue priority kept. A new\n price, a larger total quantity or a new client order ID replaces it with a\n successor order under a new order ID, with its queue priority reset. To\n force a replacement, use ModifyOrder with REPLACE_ONLY.\nbatch_replace_item.patch_required // at least one patch field must be set\n",
         "title": "BatchReplaceOrderItem",
         "type": "object"
       },
       "orders.v1.BatchReplaceOrdersRequest": {
         "additionalProperties": false,
-        "description": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\nbatch_replace_orders.unique_targets // each item target must be unique within a batch\n",
+        "description": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\nbatch_replace_orders.unique_targets // each item target must be unique within a batch\n",
         "properties": {
           "items": {
             "description": "Replacement items.",
@@ -14254,7 +14266,7 @@
         "properties": {
           "actionTaken": {
             "$ref": "#/components/schemas/orders.v1.ModifyActionTaken",
-            "description": "REPLACED admits a successor. AMENDED is cancel-only: no successor exists and\n order_status describes old_order_id. Unspecified for rejected items.",
+            "description": "REPLACED admits a successor. AMENDED keeps the order under old_order_id with\n no successor, and order_status describes it. Unspecified for rejected items.",
             "title": "action_taken"
           },
           "code": {
@@ -14278,7 +14290,7 @@
           },
           "orderStatus": {
             "$ref": "#/components/schemas/orders.v1.OrderStatus",
-            "description": "Current successor status, or original order status for a cancel-only outcome, when available.",
+            "description": "Current successor status, or the amended order's status, when available.",
             "title": "order_status"
           },
           "phase": {
@@ -14287,7 +14299,7 @@
             "title": "phase"
           },
           "replacementOrderId": {
-            "description": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "description": "Assigned successor order ID. Zero for an amended item or rejection before assignment.",
             "format": "int64",
             "title": "replacement_order_id",
             "type": [
@@ -14844,7 +14856,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.",
+            "description": "Order side that is canceled. Not set means both sides; JSON and REST\n responses then omit it.",
             "title": "side"
           },
           "symbolId": {
@@ -15043,6 +15055,7 @@
           "ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN",
           "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN",
+          "ERROR_CODE_TRIGGER_SYMBOL_MISMATCH",
           "ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR",
           "ERROR_CODE_ATTACHED_LEGS_EXCEEDED",
           "ERROR_CODE_FEE_ASSET_INVALID",
@@ -16528,7 +16541,7 @@
           },
           "triggerType": {
             "$ref": "#/components/schemas/orders.v1.OrderTriggerType",
-            "description": "Trigger strategy that created this order, or unspecified for direct orders.",
+            "description": "Trigger strategy that created this order. Not set for direct orders; JSON\n and REST responses then omit it.",
             "title": "trigger_type"
           }
         },
@@ -16821,7 +16834,7 @@
             ]
           }
         ],
-        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
+        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.\nrisk_policy.oco_requires_tp_and_one_stop // oco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)\n",
         "title": "RiskPolicy",
         "type": "object"
       },
@@ -17006,6 +17019,16 @@
             "description": "Optional activation price: trailing only starts after this price is\n reached. If omitted, trailing starts immediately after the parent order\n fills. Expressed in quote units scaled by 1e9.",
             "format": "int64",
             "title": "activation_price_ticks",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "limitPriceTicks": {
+            "description": "Maximum price of a trailing stop that buys back, in quote units scaled by\n 1e9: the most its exit pays per unit, at which the quote it may spend is\n reserved with the exit's fee. Required when the parent order sells, so\n the trailing stop buys; must be unset when the parent order buys. A rise\n that fires above it still fires, and the exit fills only at or below it.\n Changing it with ModifyOrder replaces the leg.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "limit_price_ticks",
             "type": [
               "integer",
               "string"
@@ -17493,6 +17516,11 @@
             },
             "title": "awards",
             "type": "array"
+          },
+          "awardsMayChange": {
+            "description": "True while a campaign can still publish new awards, or while one of this account's awards is awaiting a destination, ready for payout, or failed and may be retried. When false, repeated polling cannot return new awards or award changes until a new campaign is created; check again on the next page load or focus.",
+            "title": "awards_may_change",
+            "type": "boolean"
           },
           "nextPageToken": {
             "description": "Opaque continuation token. Empty when no more results exist.",
@@ -20481,7 +20509,7 @@
         "properties": {
           "expectedAmountOutE18": {
             "$ref": "#/components/schemas/polyester.type.v1.U128",
-            "description": "Estimated destination amount after fees, in 18-decimal units.",
+            "description": "Estimated destination amount after fees, in 18-decimal units, at current\n order-book depth. A buy spends the whole source amount at the prices\n available up to its price limit; what the book cannot fill within the\n limit stays in the account.",
             "title": "expected_amount_out_e18"
           },
           "expiresAt": {
@@ -20570,7 +20598,8 @@
           "RATE_LIMITED",
           "ORDER_REJECTED",
           "EXPIRED",
-          "MINIMUM_NOT_MET"
+          "MINIMUM_NOT_MET",
+          "MAX_ORDER_QUANTITY"
         ],
         "title": "SwapReason",
         "type": "string"
@@ -21472,7 +21501,7 @@
             ]
           },
           "symbolId": {
-            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
             "title": "symbol_id",
             "type": "integer"
           },
@@ -21616,7 +21645,7 @@
             ]
           },
           "symbolId": {
-            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+            "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
             "title": "symbol_id",
             "type": "integer"
           },
@@ -22201,7 +22230,7 @@
                 "title": "event_type"
               },
               "firePriceTicks": {
-                "description": "Price that caused a conditional trigger to fire, in quote units scaled by\n 1e9. Absent for time-scheduled triggers such as TWAP.",
+                "description": "Price that fired the trigger: for a stop-loss or take-profit, the price\n that crossed its trigger price; for a trailing stop, its trailing trigger\n threshold when it fired; for a ladder, the level's price. A market child\n order's slippage cap is measured from it. In quote units scaled by 1e9.\n Absent for time-scheduled triggers such as TWAP.",
                 "exclusiveMinimum": 0,
                 "format": "int64",
                 "nullable": true,
@@ -22293,7 +22322,8 @@
           "EVENT_CANCELED",
           "EVENT_UPDATED",
           "EVENT_FAILED",
-          "EVENT_ACTIVATED"
+          "EVENT_ACTIVATED",
+          "EVENT_ARMED"
         ],
         "title": "TriggerEventType",
         "type": "string"
@@ -23169,11 +23199,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23240,11 +23265,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -23317,11 +23337,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23388,11 +23403,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -23466,11 +23476,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23538,11 +23543,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -23616,11 +23616,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23688,11 +23683,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -23766,11 +23756,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23838,11 +23823,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -23915,11 +23895,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -23986,11 +23961,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24063,11 +24033,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24134,11 +24099,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24211,11 +24171,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24282,11 +24237,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24359,11 +24309,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24430,11 +24375,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24507,11 +24447,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24578,11 +24513,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24655,11 +24585,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24726,11 +24651,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -24803,11 +24723,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24877,11 +24792,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -24948,11 +24858,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25026,11 +24931,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25097,11 +24997,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25174,11 +25069,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25245,11 +25135,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25322,11 +25207,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25393,11 +25273,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25471,11 +25346,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25490,7 +25360,7 @@
     },
     "/orders.v1.OrdersService/BatchReplaceOrders": {
       "post": {
-        "description": "Replace up to 50 orders for one symbol as a quote refresh. Returns an admission receipt for status and private realtime reconciliation.",
+        "description": "Modify up to 50 orders for one symbol as a quote refresh. Each item amends its order in place, keeping its order ID and queue priority, when it keeps the price, does not raise the total quantity and keeps the client order ID; otherwise it replaces the order with a successor under a new order ID. Returns an admission receipt for status and private realtime reconciliation.",
         "operationId": "OrdersService_BatchReplaceOrders",
         "parameters": [
           {
@@ -25543,11 +25413,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25621,11 +25486,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25693,11 +25553,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25771,11 +25626,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25843,11 +25693,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -25921,11 +25766,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -25993,11 +25833,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26071,11 +25906,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26143,11 +25973,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26221,11 +26046,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26293,11 +26113,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26371,11 +26186,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26443,11 +26253,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26521,11 +26326,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26593,11 +26393,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26671,11 +26466,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26743,11 +26533,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26821,11 +26606,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -26893,11 +26673,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -26971,11 +26746,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27043,11 +26813,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -27121,11 +26886,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27193,11 +26953,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -27271,11 +27026,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27343,11 +27093,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -27421,11 +27166,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27496,11 +27236,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27568,11 +27303,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -27651,11 +27381,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27728,11 +27453,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -27811,11 +27531,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27886,11 +27601,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
-              },
-              "application/proto": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
               }
             },
             "description": "Error"
@@ -27958,11 +27668,6 @@
           "default": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/connect.error"
-                }
-              },
-              "application/proto": {
                 "schema": {
                   "$ref": "#/components/schemas/connect.error"
                 }
@@ -33509,7 +33214,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   },
@@ -33644,7 +33349,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   },
@@ -33896,7 +33601,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   }
@@ -33921,7 +33626,7 @@
                     ]
                   },
                   "symbolId": {
-                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another pair\n is rejected with ERROR_CODE_UNKNOWN_SYMBOL and leaves the trigger\n unchanged. An API key limited to specific markets must name the trigger's\n pair.",
+                    "description": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
                     "title": "symbol_id",
                     "type": "integer"
                   }
