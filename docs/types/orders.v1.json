@@ -625,7 +625,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Unset for cancel-only outcomes and rejected items.",
+            "doc": "Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED\n item, whose order keeps old_order_id, and for rejected items.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -634,7 +634,7 @@
             "name": "client_order_id",
             "jsonName": "clientOrderId",
             "number": 5,
-            "doc": "Client order ID assigned to the successor when available.",
+            "doc": "Client order ID assigned to the successor, for a REPLACED item only.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -657,7 +657,7 @@
             "name": "action_taken",
             "jsonName": "actionTaken",
             "number": 8,
-            "doc": "REPLACED admits a successor. AMENDED cancels the original order's remaining quantity\n without a successor; keep tracking old_order_id until its terminal state is confirmed.\n Unspecified for rejected items.",
+            "doc": "REPLACED admits a successor under replacement_order_id, with queue priority\n reset. AMENDED keeps the order under old_order_id with no successor: the\n order is amended in place and keeps its queue priority, or, when the new\n total quantity is at or below its filled quantity, ends at its filled\n quantity. Keep tracking old_order_id for an AMENDED item. Not set for\n rejected items; JSON and REST responses then omit it.",
             "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
@@ -672,7 +672,7 @@
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "Every requested operation was admitted, including cancel-only outcomes."
+            "doc": "Every requested operation was admitted, amended items included."
           },
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED",
@@ -696,7 +696,7 @@
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes."
+            "doc": "The operation was admitted and handed to execution. action_taken tells whether\n the order was amended under its own order ID or replaced by a successor."
           },
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED",
@@ -709,7 +709,7 @@
     {
       "name": "orders.v1.BatchReplaceOrderItem",
       "kind": "message",
-      "doc": "BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.",
+      "doc": "BatchReplaceOrderItem identifies one order to modify inside a quote-refresh\n batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item\n that keeps the order's price (new_price_ticks unset or equal to it), does not\n raise its total quantity and keeps its client order ID amends the order in\n place, under the same order ID and with its queue priority kept. A new\n price, a larger total quantity or a new client order ID replaces it with a\n successor order under a new order ID, with its queue priority reset. To\n force a replacement, use ModifyOrder with REPLACE_ONLY.",
       "message": {
         "cel": [
           {
@@ -799,7 +799,7 @@
             "name": "new_client_order_id",
             "jsonName": "newClientOrderId",
             "number": 6,
-            "doc": "Optional new client order id when replace path is taken.",
+            "doc": "Optional client order ID for the successor. A value other than the order's\n client order ID makes the item a replacement.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -815,7 +815,7 @@
     {
       "name": "orders.v1.BatchReplaceOrdersRequest",
       "kind": "message",
-      "doc": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.",
+      "doc": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.",
       "message": {
         "cel": [
           {
@@ -958,12 +958,12 @@
           {
             "name": "BATCH_REPLACE_PHASE_ADMITTED",
             "number": 1,
-            "doc": "The operation was admitted and handed to execution, including cancel-only outcomes."
+            "doc": "The operation was admitted and handed to execution, amended items included."
           },
           {
             "name": "BATCH_REPLACE_PHASE_WORKING",
             "number": 2,
-            "doc": "The successor order is active."
+            "doc": "The successor order, or the amended order, is active."
           },
           {
             "name": "BATCH_REPLACE_PHASE_REJECTED",
@@ -973,7 +973,7 @@
           {
             "name": "BATCH_REPLACE_PHASE_TERMINAL",
             "number": 4,
-            "doc": "The successor, or original order for a cancel-only outcome, reached a terminal state."
+            "doc": "The successor, or the amended order, reached a terminal state."
           }
         ]
       }
@@ -1013,7 +1013,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "doc": "Assigned successor order ID. Zero for an amended item or rejection before assignment.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1022,7 +1022,7 @@
             "name": "order_status",
             "jsonName": "orderStatus",
             "number": 5,
-            "doc": "Current successor status, or original order status for a cancel-only outcome, when available.",
+            "doc": "Current successor status, or the amended order's status, when available.",
             "protoRef": "orders.v1.OrderStatus"
           },
           {
@@ -1046,7 +1046,7 @@
             "name": "action_taken",
             "jsonName": "actionTaken",
             "number": 8,
-            "doc": "REPLACED admits a successor. AMENDED is cancel-only: no successor exists and\n order_status describes old_order_id. Unspecified for rejected items.",
+            "doc": "REPLACED admits a successor. AMENDED keeps the order under old_order_id with\n no successor, and order_status describes it. Unspecified for rejected items.",
             "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
@@ -1749,7 +1749,7 @@
             "name": "side",
             "jsonName": "side",
             "number": 3,
-            "doc": "Order side that is canceled. SIDE_UNSPECIFIED or omitted means both sides.",
+            "doc": "Order side that is canceled. Not set means both sides; JSON and REST\n responses then omit it.",
             "protoRef": "orders.v1.Side",
             "validate": {
               "enum": {
@@ -2304,7 +2304,7 @@
           {
             "name": "ERROR_CODE_BATCH_REPLACE_ONLY_REQUIRED",
             "number": 229,
-            "doc": "An item of the batch modify did not use the REPLACE_ONLY behavior, so the\n batch was refused."
+            "doc": "No longer returned: each BatchReplaceOrders item follows ModifyOrder's\n default amend-or-replace rule. The value stays reserved."
           },
           {
             "name": "ERROR_CODE_BATCH_SINGLE_SYMBOL_REQUIRED",
@@ -2682,6 +2682,11 @@
             "doc": "The trigger was sent but not confirmed in time. Its outcome is unknown and\n it may have been created; read the triggers for its client trigger ID\n before retrying."
           },
           {
+            "name": "ERROR_CODE_TRIGGER_SYMBOL_MISMATCH",
+            "number": 305,
+            "doc": "The request names a listed trading pair other than the trigger's own, so\n it was refused. Nothing changed; name the trigger's own pair, or omit the\n symbol. A pair that is not listed is ERROR_CODE_UNKNOWN_SYMBOL."
+          },
+          {
             "name": "ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR",
             "number": 306,
             "doc": "The account has reached its maximum number of resting orders in this\n market. Good-till-cancelled and good-till-date orders count until they\n end; immediate-or-cancel, fill-or-kill and market orders never count, and\n a replace keeps its order's place. Nothing changed; cancel a resting order\n in this market first."
@@ -2689,7 +2694,7 @@
           {
             "name": "ERROR_CODE_ATTACHED_LEGS_EXCEEDED",
             "number": 86,
-            "doc": "The order already carries every attached leg it may hold, so another\n attached leg was refused."
+            "doc": "The order already carries every attached leg it may hold, so another\n attached leg was refused. Legs being cancelled count until they end:\n retry once they have ended."
           },
           {
             "name": "ERROR_CODE_FEE_ASSET_INVALID",
@@ -4645,7 +4650,7 @@
             "name": "trigger_type",
             "jsonName": "triggerType",
             "number": 2,
-            "doc": "Trigger strategy that created this order, or unspecified for direct orders.",
+            "doc": "Trigger strategy that created this order. Not set for direct orders; JSON\n and REST responses then omit it.",
             "protoRef": "orders.v1.OrderTriggerType",
             "validate": {
               "enum": {
@@ -5034,7 +5039,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
       "message": {
         "cel": [
           {
@@ -5351,6 +5356,20 @@
             "validate": {
               "enum": {
                 "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 4,
+            "doc": "Maximum price of a trailing stop that buys back, in quote units scaled by\n 1e9: the most its exit pays per unit, at which the quote it may spend is\n reserved with the exit's fee. Required when the parent order sells, so\n the trailing stop buys; must be unset when the parent order buys. A rise\n that fires above it still fires, and the exit fills only at or below it.\n Changing it with ModifyOrder replaces the leg.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
               }
             }
           }
