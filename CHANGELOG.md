@@ -3,6 +3,18 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-03 — develop-20261103T203939Z
+
+Self-trade prevention for attached exits, sub-account balances and consistent REST trigger fields.
+
+- [2026-11-03T0019Z-orders-v1](changes/2026-11-03T0019Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-03T0209Z-auth-v1](changes/2026-11-03T0209Z-auth-v1.md): changed `auth.v1.SubaccountViewService`.
+- [2026-11-03T0259Z-orders-v1](changes/2026-11-03T0259Z-orders-v1.md): changed `orders.v1.OrdersReadService`, `orders.v1.OrdersService`, `triggers.v1.TriggersService`.
+- [2026-11-03T1149Z-orders-v1](changes/2026-11-03T1149Z-orders-v1.md): changed `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-03T1158Z-triggers-v1](changes/2026-11-03T1158Z-triggers-v1.md): changed `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-03T1911Z-orders-v1](changes/2026-11-03T1911Z-orders-v1.md): changed `orders.v1.OrdersReadService`.
+- [2026-11-03T1911Z-triggers-v1](changes/2026-11-03T1911Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+
 ## 2026-11-03 — develop-20261103T152920Z
 
 Exact order execution totals, refused trigger fire events and API key authentication error codes.
