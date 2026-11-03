@@ -626,6 +626,14 @@
                   "summary": {
                     "description": "Section summary. Omitted when absent.",
                     "type": "string"
+                  },
+                  "surface": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.changelog.v1.Surface"
+                      }
+                    ],
+                    "description": "Product area of the section. Omitted for sections not tied to one area (for example changes that need your attention, or general)."
                   }
                 },
                 "required": [
@@ -1936,7 +1944,7 @@
           "type": "array"
         },
         "symbol": {
-          "description": "Numeric spot market identifier echoed from the request.",
+          "description": "Trading pair symbol echoed from the request path, e.g. BTC-USDT.",
           "type": "string"
         },
         "timeframe": {
@@ -2543,7 +2551,7 @@
                 "type": "string"
               },
               "change24hBps": {
-                "description": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%.",
+                "description": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%. Measured from the 24h open to the last price, at minute granularity: the 24h open is the price at the start of the minute that contains the time 24h ago or, for a market that first traded later, its first trade. 0 when the market has no trade yet (its last trade timestamp is 0 too) and until its first minute of trading has ended.",
                 "format": "int32",
                 "type": "integer"
               },
@@ -2694,7 +2702,7 @@
           "type": "string"
         },
         "ts": {
-          "description": "Snapshot timestamp as Unix epoch milliseconds.",
+          "description": "Snapshot timestamp as Unix epoch milliseconds; 0 while available is false.",
           "format": "int64",
           "type": "integer"
         }
@@ -3023,7 +3031,7 @@
                 "type": "object"
               },
               "avgPx": {
-                "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' if no fills.",
+                "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -3043,6 +3051,11 @@
               },
               "cumQty": {
                 "description": "Cumulative filled quantity across the lineage through this generation, as a decimal string in base asset units, for example '0.0005'.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "cumQuote": {
+                "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -3226,6 +3239,7 @@
               "clientOrderId",
               "createdAt",
               "cumQty",
+              "cumQuote",
               "feeAsset",
               "inheritedCumQty",
               "leavesQty",
@@ -3573,7 +3587,7 @@
               "type": "object"
             },
             "avgPx": {
-              "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' if no fills.",
+              "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
               "pattern": "^[0-9]+(\\.[0-9]+)?$",
               "type": "string"
             },
@@ -3604,6 +3618,11 @@
               "pattern": "^[0-9]+(\\.[0-9]+)?$",
               "type": "string"
             },
+            "cumQuote": {
+              "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills.",
+              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+              "type": "string"
+            },
             "expireAt": {
               "description": "Exact UTC expiry time for GTD orders, within the supported signed Unix-nanosecond range from 1677-09-21T00:12:43.145224193Z through 2262-04-11T23:47:16.854775807Z. Omitted for all other time-in-force policies. The order cannot execute when the current time equals this value.",
               "format": "date-time",
@@ -3616,6 +3635,32 @@
                 }
               ],
               "description": "Fee asset selected for fills."
+            },
+            "feeTotal": {
+              "additionalProperties": false,
+              "description": "Total fee of the fills across the lineage through this generation, net of rebates, in the order's fee asset. Order history reads and single-order reads that include execution history (the default) carry it. It can trail the order's fills: its quantity shows which fills it covers. Open-order reads, single-order reads without execution history and private stream order updates leave it unset.",
+              "properties": {
+                "amount": {
+                  "description": "Net fee of the fills the total covers, their fees less their rebates, as a decimal string in feeAsset units, for example '0.96467428595184'. '0' when they charged no fee.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "isRebate": {
+                  "description": "True when the covered fills' rebates exceed their fees, so the amount was credited to the account rather than charged.",
+                  "type": "boolean"
+                },
+                "qty": {
+                  "description": "Executed quantity of the fills the total covers, as a decimal string in base asset units, for example '0.04148504'. Equal to the order's cumQty once every fill's fee is recorded; while a fill is still being recorded the two differ, and a later read includes it.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "isRebate",
+                "qty"
+              ],
+              "type": "object"
             },
             "inheritedCumQty": {
               "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, as a decimal string in base asset units, for example '0.0005'. '0' for the original order and immutable within a generation. cumQty minus this value is the quantity executed by this generation, not the quantity new to a client session.",
@@ -3797,6 +3842,7 @@
             "clientOrderId",
             "createdAt",
             "cumQty",
+            "cumQuote",
             "feeAsset",
             "inheritedCumQty",
             "leavesQty",
@@ -4305,7 +4351,7 @@
                 "type": "object"
               },
               "avgPx": {
-                "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' if no fills.",
+                "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -4336,6 +4382,11 @@
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
+              "cumQuote": {
+                "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
               "expireAt": {
                 "description": "Exact UTC expiry time for GTD orders, within the supported signed Unix-nanosecond range from 1677-09-21T00:12:43.145224193Z through 2262-04-11T23:47:16.854775807Z. Omitted for all other time-in-force policies. The order cannot execute when the current time equals this value.",
                 "format": "date-time",
@@ -4348,6 +4399,32 @@
                   }
                 ],
                 "description": "Fee asset selected for fills."
+              },
+              "feeTotal": {
+                "additionalProperties": false,
+                "description": "Total fee of the fills across the lineage through this generation, net of rebates, in the order's fee asset. Order history reads and single-order reads that include execution history (the default) carry it. It can trail the order's fills: its quantity shows which fills it covers. Open-order reads, single-order reads without execution history and private stream order updates leave it unset.",
+                "properties": {
+                  "amount": {
+                    "description": "Net fee of the fills the total covers, their fees less their rebates, as a decimal string in feeAsset units, for example '0.96467428595184'. '0' when they charged no fee.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "isRebate": {
+                    "description": "True when the covered fills' rebates exceed their fees, so the amount was credited to the account rather than charged.",
+                    "type": "boolean"
+                  },
+                  "qty": {
+                    "description": "Executed quantity of the fills the total covers, as a decimal string in base asset units, for example '0.04148504'. Equal to the order's cumQty once every fill's fee is recorded; while a fill is still being recorded the two differ, and a later read includes it.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount",
+                  "isRebate",
+                  "qty"
+                ],
+                "type": "object"
               },
               "inheritedCumQty": {
                 "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, as a decimal string in base asset units, for example '0.0005'. '0' for the original order and immutable within a generation. cumQty minus this value is the quantity executed by this generation, not the quantity new to a client session.",
@@ -4529,6 +4606,7 @@
               "clientOrderId",
               "createdAt",
               "cumQty",
+              "cumQuote",
               "feeAsset",
               "inheritedCumQty",
               "leavesQty",
@@ -4890,7 +4968,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "fieldPath": {
-                          "description": "Protobuf field path relative to the request, using canonical field names.",
+                          "description": "REST path of the request field the violation names, for example order.baseQty or items[2].limitGtc.price; when no choice of a one-of group was sent, the group, for example order.execution.",
                           "type": "string"
                         },
                         "message": {
@@ -5462,7 +5540,7 @@
                           "additionalProperties": false,
                           "properties": {
                             "fieldPath": {
-                              "description": "Protobuf field path relative to the request, using canonical field names.",
+                              "description": "REST path of the request field the violation names, for example order.baseQty or items[2].limitGtc.price; when no choice of a one-of group was sent, the group, for example order.execution.",
                               "type": "string"
                             },
                             "message": {
@@ -5883,7 +5961,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "fieldPath": {
-                          "description": "Protobuf field path relative to the request, using canonical field names.",
+                          "description": "REST path of the request field the violation names, for example order.baseQty or items[2].limitGtc.price; when no choice of a one-of group was sent, the group, for example order.execution.",
                           "type": "string"
                         },
                         "message": {
@@ -6143,7 +6221,7 @@
           "description": "Availability of the historical listing. An empty retry listing does not change the original counts or mean that no cancellations were requested."
         },
         "matchedOrders": {
-          "description": "Number of open orders that matched the filter when the request was accepted, including orders whose cancellation was already in progress. Orders placed after acceptance are not counted. Unless `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
+          "description": "Number of open orders that matched the filter when the request was accepted, including orders whose cancellation was already in progress and open orders that triggers placed. Triggers themselves are never counted. Orders placed after acceptance are not counted. Unless `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
           "format": "int32",
           "type": "integer"
         },
@@ -6212,7 +6290,7 @@
           "type": "string"
         },
         "symbol": {
-          "description": "Optional trading symbol numeric identifier. When set, it must match the order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN) and nothing is canceled. When omitted, the order's own symbol is used.",
+          "description": "Optional trading symbol numeric identifier. When set, it must match the order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN) and nothing is canceled. An order that ended a while ago may instead be reported ended (ERROR_CODE_ORDER_ALREADY_TERMINAL). When omitted, the order's own symbol is used.",
           "type": "string"
         }
       },
@@ -7361,7 +7439,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "fieldPath": {
-                    "description": "Protobuf field path relative to the request, using canonical field names.",
+                    "description": "REST path of the request field the violation names, for example order.baseQty or items[2].limitGtc.price; when no choice of a one-of group was sent, the group, for example order.execution.",
                     "type": "string"
                   },
                   "message": {
@@ -10323,11 +10401,11 @@
           "type": "integer"
         },
         "destinationAddress": {
-          "description": "Recipient of the swap output on the destination network, in its native text form without memo.",
+          "description": "Recipient of the swap output on the destination network, in its native text form without memo: 1-256 UTF-8 bytes.",
           "type": "string"
         },
         "destinationMemo": {
-          "description": "Destination tag or memo for destination_address. Required when the destination network needs one; must be empty otherwise.",
+          "description": "Destination tag or memo for destination_address. Required when the destination network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
           "type": "string"
         },
         "idempotencyKey": {
@@ -10335,11 +10413,11 @@
           "type": "string"
         },
         "refundAddress": {
-          "description": "Recipient of refunded intermediate asset on the refund route's network, in its native text form without memo.",
+          "description": "Recipient of refunded intermediate asset on the refund route's network, in its native text form without memo. At most 256 UTF-8 bytes.",
           "type": "string"
         },
         "refundMemo": {
-          "description": "Destination tag or memo for refund_address. Required when the refund network needs one; must be empty otherwise.",
+          "description": "Destination tag or memo for refund_address. Required when the refund network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
           "type": "string"
         },
         "refundZippedAssetId": {
@@ -10348,15 +10426,15 @@
           "type": "integer"
         },
         "returnAddress": {
-          "description": "Recipient of returned source funds on the source network, in its native text form without memo. Deposits that are not accepted, and source funds that are not traded, go here; never to an observed sender.",
+          "description": "Recipient of returned source funds on the source network, in its native text form without memo: 1-256 UTF-8 bytes. Deposits that are not accepted, and source funds that are not traded, go here; never to an observed sender.",
           "type": "string"
         },
         "returnMemo": {
-          "description": "Destination tag or memo for return_address. Required when the source network needs one; must be empty otherwise.",
+          "description": "Destination tag or memo for return_address. Required when the source network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
           "type": "string"
         },
         "sourceWallet": {
-          "description": "Optional source wallet the end user will deposit from, for brokers that know it in advance. It must be a valid address on the source network and is shown on the QuickSwap.",
+          "description": "Optional source wallet the end user will deposit from, for brokers that know it in advance. It must be a valid address on the source network, at most 256 UTF-8 bytes, and is shown on the QuickSwap.",
           "type": "string"
         },
         "terms": {
@@ -14887,6 +14965,14 @@
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
+              "fireRefusalReason": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.TriggerFailureReason"
+                  }
+                ],
+                "description": "Why the attempt named by child_seq was refused while the trigger stayed live. Set only on EVENT_FIRE_REFUSED; other event types leave it unset."
+              },
               "subaccountId": {
                 "description": "Public account or sub-account ID associated with the trigger.",
                 "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
@@ -15887,7 +15973,7 @@
           "type": "object"
         },
         "payloadSignature": {
-          "description": "User/API signature over deterministic TradingWithdrawIntentPayload bytes.",
+          "description": "User/API signature over deterministic TradingWithdrawIntentPayload bytes. Must not be empty.",
           "type": "string"
         }
       },
@@ -15965,7 +16051,7 @@
           "type": "object"
         },
         "payloadSignature": {
-          "description": "Wallet EIP-191 personal_sign signature over the canonical withdraw authorization message.",
+          "description": "Wallet EIP-191 personal_sign signature over the canonical withdraw authorization message. Must not be empty.",
           "type": "string"
         },
         "signerWallet": {
@@ -16423,7 +16509,10 @@
         "API",
         "EXPLORER",
         "DOCUMENTATION",
-        "PLATFORM"
+        "PLATFORM",
+        "MARKET_DATA",
+        "QUICKSWAP",
+        "REWARDS"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -16432,8 +16521,11 @@
         "DOCUMENTATION": "Documentation.",
         "EXPLORER": "Block explorer.",
         "FUNDING": "Deposits, withdrawals and transfers.",
+        "MARKET_DATA": "Market data: prices, candles, order book, heatmaps and market overviews.",
         "PLATFORM": "Platform-wide behavior.",
-        "TRADING": "Trading."
+        "QUICKSWAP": "The QuickSwap swap app.",
+        "REWARDS": "Rewards: daily claims, campaigns, VIP tiers and fee discounts.",
+        "TRADING": "Orders, triggers and protective orders, and order outcomes."
       }
     },
     "polyester.rest.enum.claims.v1.ClaimPolicy": {
@@ -16736,9 +16828,9 @@
         "ATTACHED_RISK_REFUSED": "The market refused one of the order's attached take-profit, stop-loss or trailing-stop legs, so the order's remainder and its other legs were canceled.",
         "CANCEL_ALL_AFTER": "The account's cancel-all-after timer reached its deadline without a heartbeat.",
         "GTD_EXPIRED": "A good-till-date order reached its expiry time.",
-        "IOC_REMAINDER": "The unfilled remainder of an immediate-or-cancel order.",
+        "IOC_REMAINDER": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a quote amount (max_quote_debit_scaled) that spends that amount ends FILLED instead.",
         "MARKET_HALTED": "The market was halted: the exchange canceled every open order of the market. Fills before the cancel stand. The market refuses new orders until it trades again.",
-        "MARKET_REMAINDER": "The unfilled remainder of a market order: the book ran out, or the next price was past the order's protection price.",
+        "MARKET_REMAINDER": "The unfilled remainder of a market order: the book ran out, the next price was past the order's protection price, or the order reached the market's maximum order quantity. A market buy sized by a quote amount (max_quote_debit_scaled) that spends that amount, so that what is left buys no further quantity step, ends FILLED instead.",
         "PAIR_DRAIN": "The market was disabled: the exchange canceled its resting orders.",
         "QTY_AT_OR_BELOW_FILLED": "An amend or replace set the order's total quantity at or below its filled quantity, so the order ended at its filled quantity.",
         "REPLACED": "A replace ended this order and created its successor.",
@@ -17208,7 +17300,7 @@
       "type": "string",
       "x-poly-enum-descriptions": {
         "CANCELED": "Canceled and no longer working.",
-        "FILLED": "Fully filled (no remaining quantity).",
+        "FILLED": "Fully filled (no remaining quantity). A buy sized by a quote amount (max_quote_debit_scaled) is fully filled once it has spent that amount: what is left of it buys no further quantity step at the next price the order could fill at. Its quantity is then what it bought.",
         "PENDING": "Accepted and submitted for execution, but not yet confirmed as working.",
         "PENDING_CANCEL": "Cancel requested; may still be working until cancel is confirmed.",
         "REJECTED": "Rejected and never entered the working state.",
@@ -17673,7 +17765,7 @@
         "PAIR_DRAIN_TWAP": "The market was disabled: the exchange ended the TWAP and canceled its resting slice, releasing its reserved funds.",
         "PARENT_CANCELED_NO_FILL": "The parent order ended without a fill, so its attached trigger was canceled.",
         "SELF_TRADE_PREVENTION": "Self-trade prevention canceled the trigger's child orders.",
-        "USER_REQUEST": "The user explicitly canceled the trigger."
+        "USER_REQUEST": "The user explicitly canceled the trigger, or canceled an order that ended it, alone, with a cancel-all or by the dead-man switch: an attached leg's working exit (with oco set, the parent's other legs end with it), or a level of a ladder that ended with nothing filled."
       }
     },
     "polyester.rest.enum.triggers.v1.TriggerEventType": {
@@ -17683,7 +17775,8 @@
         "UPDATED",
         "FAILED",
         "ACTIVATED",
-        "ARMED"
+        "ARMED",
+        "FIRE_REFUSED"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -17692,6 +17785,7 @@
         "CANCELED": "Trigger was canceled.",
         "FAILED": "Trigger became terminal after its next child order could not be admitted.",
         "FIRED": "Trigger fired and may have created a child order.",
+        "FIRE_REFUSED": "A fire of the trigger was refused and the trigger stayed live: an attached take-profit, stop-loss or trailing stop waits for the next price through its trigger price, or, refused because its order would be below the market's minimums, waits until its position changes; a trigger refused for a rate limit or an account repair fires again shortly. Not terminal: the trigger keeps its status. child_seq names the refused attempt, which placed no child order, and fire_refusal_reason says why; the next fire takes the next child_seq. A refusal that ends the trigger is EVENT_FAILED instead.",
         "UPDATED": "Trigger configuration or lifecycle state was updated."
       }
     },
@@ -17787,6 +17881,7 @@
         "TWAP_CAPACITY_REACHED",
         "CHILD_ORDER_INCONSISTENT",
         "ORDER_LIMITS_UNAVAILABLE",
+        "ACCOUNT_REPAIRING",
         "INDEX_PRICE_UNAVAILABLE",
         "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
         "MISSING_REASON_CODE",
@@ -17794,6 +17889,7 @@
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
+        "ACCOUNT_REPAIRING": "The account was under an automatic repair, so the fire was retried shortly instead of placing its child order.",
         "ACCOUNT_ROUTING_INVALID": "The trigger could not be installed on its market's current route.",
         "ACCOUNT_UNKNOWN": "The account associated with the trigger was not recognized.",
         "ATTACHED_LEGS_EXCEEDED": "The order carried more attached legs than allowed.",
@@ -17903,8 +17999,8 @@
       "type": "string",
       "x-poly-enum-descriptions": {
         "ARMED": "Trigger admitted and actively evaluating conditions.",
-        "CANCELED": "Trigger was canceled. The cancel reason states why, for example a user request or another attached leg's exit closing its parent's position. A ladder is canceled only when the ladder itself is canceled; canceling its child orders does not cancel it.",
-        "COMPLETED": "Trigger completed. A ladder completes once none of its child orders remains open and at least one of them was placed on the book, however each placed child order then ended: filled, canceled, or canceled by self-trade prevention. Some of its child orders may have been rejected. Completed does not mean the ladder filled: its executed quantity and executed levels state what filled, and each child order's own status states how it ended.",
+        "CANCELED": "Trigger was canceled. The cancel reason states why, for example a user request or another attached leg's exit closing its parent's position. A ladder is canceled when the ladder itself is canceled. A ladder whose child orders were canceled with none filled, for example one by one, with a cancel-all or by the dead man's switch, is canceled too, with a user request reason, once none of them remains open. A ladder whose child orders were canceled only by self-trade prevention, with none filled, completes instead.",
+        "COMPLETED": "Trigger completed. A ladder completes once none of its child orders remains open and at least one of them was placed on the book, unless it ends canceled (see STATUS_CANCELED). A ladder that filled any quantity completes however its other child orders ended. Some of its child orders may have been rejected. Completed does not mean the ladder filled: its executed quantity and executed levels state what filled, and each child order's own status states how it ended.",
         "CREATED": "Trigger was created and is pending activation.",
         "FAILED": "Trigger failed (for example, reservation failure, child order rejection). A ladder fails when every child order was rejected before it was placed on the book; the failure reason is the first rejected child order's.",
         "PAUSED": "Trigger is paused (user-initiated, can be resumed).",

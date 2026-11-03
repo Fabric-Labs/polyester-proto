@@ -26,7 +26,10 @@ enum OrderStatus {
   PENDING_CANCEL = 2;
   // Accepted and actively working (resting and/or matching).
   WORKING = 3;
-  // Fully filled (no remaining quantity).
+  // Fully filled (no remaining quantity). A buy sized by a quote amount
+  // (max_quote_debit_scaled) is fully filled once it has spent that amount:
+  // what is left of it buys no further quantity step at the next price the
+  // order could fill at. Its quantity is then what it bought.
   FILLED = 4;
   // Canceled and no longer working.
   CANCELED = 5;
@@ -43,10 +46,15 @@ enum CancelReason {
   CANCEL_REASON_UNSPECIFIED = 0;
   // A cancel the account sent: a cancel, a batch cancel or a cancel-all.
   CANCEL_REASON_USER_REQUEST = 1;
-  // The unfilled remainder of an immediate-or-cancel order.
+  // The unfilled remainder of an immediate-or-cancel order. A buy sized by a
+  // quote amount (max_quote_debit_scaled) that spends that amount ends
+  // FILLED instead.
   CANCEL_REASON_IOC_REMAINDER = 2;
-  // The unfilled remainder of a market order: the book ran out, or the next
-  // price was past the order's protection price.
+  // The unfilled remainder of a market order: the book ran out, the next
+  // price was past the order's protection price, or the order reached the
+  // market's maximum order quantity. A market buy sized by a quote amount
+  // (max_quote_debit_scaled) that spends that amount, so that what is left
+  // buys no further quantity step, ends FILLED instead.
   CANCEL_REASON_MARKET_REMAINDER = 3;
   // Self-trade prevention canceled this resting order when an order of the
   // same account would have matched it.
@@ -245,6 +253,26 @@ message OrderLineage {
   uint32 generation = 2 [(buf.validate.field).uint32.gt = 0];
 }
 
+// OrderFeeTotal is the total fee of an order's fills, net of rebates, as
+// settled. A fill's fee is recorded shortly after the fill executes, so the
+// total can trail the fills the order shows: qty_scaled says which fills it
+// covers.
+message OrderFeeTotal {
+  // Net fee magnitude in fixed 18-decimal units of the order's fee_asset:
+  // the fees of the covered fills less their rebates. Zero when they charged
+  // no fee.
+  polyester.type.v1.U128 amount_e18 = 1;
+  // True when the covered fills' rebates exceed their fees, so the amount
+  // was credited to the account rather than charged.
+  bool is_rebate = 2;
+  // Executed quantity of the fills the total covers, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig. Equal to the order's
+  // cum_qty_scaled once every fill's fee is recorded. While a fill is still
+  // being recorded the two differ, and a later read of the order includes
+  // it.
+  int64 qty_scaled = 3;
+}
+
 // Order is the Connect-facing order view with compact binary fields.
 message Order {
   // Public order identifier as fixed64.
@@ -287,8 +315,38 @@ message Order {
   // GetSpotConfig for symbol_id. Zero for terminal orders.
   int64 leaves_qty_scaled = 20;
   // Average execution price across the lineage through this generation,
-  // in quote units scaled by 1e9. Zero if no fills.
+  // in quote units scaled by 1e9, rounded down. Zero if no fills.
+  // avg_price_e18 carries the exact average.
   int64 avg_price_ticks = 14;
+  // Average execution price across the lineage through this generation, in
+  // quote units scaled by 1e18: the exact executed quote amount divided by
+  // cum_qty_scaled, rounded half to even at the 18th decimal. Unset if no
+  // fills.
+  polyester.type.v1.U128 avg_price_e18 = 36;
+  // Exact quote amount of the fills across the lineage through this
+  // generation, before fees: the sum over the fills of their quantity,
+  // scaled as cum_qty_scaled, times their price in quote units scaled by
+  // 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with
+  // the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST
+  // shows it in quote units. avg_price_e18 is this amount over
+  // cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down
+  // to 18 decimal places, which is this amount exactly unless
+  // base_quantity_scale is above 9.
+  //
+  // For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),
+  // the quote the order used is this amount plus fee_total's amount_e18
+  // when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,
+  // since a rebate is credited; it is this amount alone when fee_asset is
+  // BASE, whose fee is taken from the base received. What it left unspent is
+  // submitted_max_quote_debit_scaled less the quote it used.
+  polyester.type.v1.U128 cum_notional = 37;
+  // Total fee of the fills across the lineage through this generation, net
+  // of rebates, in the order's fee asset. Order history reads and
+  // single-order reads that include execution history (the default) carry
+  // it. It can trail the order's fills: its quantity shows which fills it
+  // covers. Open-order reads, single-order reads without execution history
+  // and private stream order updates leave it unset.
+  OrderFeeTotal fee_total = 38;
   // Limit price in quote units scaled by 1e9. Zero for MARKET orders.
   int64 price_ticks = 15;
   // Creation timestamp in nanoseconds since epoch (UTC).

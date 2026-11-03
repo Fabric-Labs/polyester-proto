@@ -54,17 +54,21 @@ enum TriggerStatus {
   // Trigger is actively executing (for example, TWAP slices in progress).
   STATUS_RUNNING = 3;
   // Trigger completed. A ladder completes once none of its child orders
-  // remains open and at least one of them was placed on the book, however
-  // each placed child order then ended: filled, canceled, or canceled by
-  // self-trade prevention. Some of its child orders may have been rejected.
-  // Completed does not mean the ladder filled: its executed quantity and
-  // executed levels state what filled, and each child order's own status
-  // states how it ended.
+  // remains open and at least one of them was placed on the book, unless it
+  // ends canceled (see STATUS_CANCELED). A ladder that filled any quantity
+  // completes however its other child orders ended. Some of its child orders
+  // may have been rejected. Completed does not mean the ladder filled: its
+  // executed quantity and executed levels state what filled, and each child
+  // order's own status states how it ended.
   STATUS_COMPLETED = 4;
   // Trigger was canceled. The cancel reason states why, for example a user
   // request or another attached leg's exit closing its parent's position. A
-  // ladder is canceled only when the ladder itself is canceled; canceling
-  // its child orders does not cancel it.
+  // ladder is canceled when the ladder itself is canceled. A ladder whose
+  // child orders were canceled with none filled, for example one by one, with
+  // a cancel-all or by the dead man's switch, is canceled too, with a user
+  // request reason, once none of them remains open. A ladder whose child
+  // orders were canceled only by self-trade prevention, with none filled,
+  // completes instead.
   STATUS_CANCELED = 5;
   // Trigger failed (for example, reservation failure, child order rejection).
   // A ladder fails when every child order was rejected before it was placed
@@ -96,13 +100,26 @@ enum TriggerEventType {
   // it. An attached trailing stop still reports EVENT_ACTIVATED when it
   // starts tracking.
   EVENT_ARMED = 6;
+  // A fire of the trigger was refused and the trigger stayed live: an
+  // attached take-profit, stop-loss or trailing stop waits for the next price
+  // through its trigger price, or, refused because its order would be below
+  // the market's minimums, waits until its position changes; a trigger
+  // refused for a rate limit or an account repair fires again shortly. Not
+  // terminal: the trigger keeps its
+  // status. child_seq names the refused attempt, which placed no child order,
+  // and fire_refusal_reason says why; the next fire takes the next child_seq.
+  // A refusal that ends the trigger is EVENT_FAILED instead.
+  EVENT_FIRE_REFUSED = 7;
 }
 
 // TriggerCancelReason identifies why an admitted trigger became canceled.
 enum TriggerCancelReason {
   // No cancellation reason was provided.
   TRIGGER_CANCEL_REASON_UNSPECIFIED = 0;
-  // The user explicitly canceled the trigger.
+  // The user explicitly canceled the trigger, or canceled an order that
+  // ended it, alone, with a cancel-all or by the dead-man switch: an
+  // attached leg's working exit (with oco set, the parent's other legs end
+  // with it), or a level of a ladder that ended with nothing filled.
   TRIGGER_CANCEL_REASON_USER_REQUEST = 1;
   // An attached leg ended because its parent order is terminal and another of
   // the parent's legs made the last exit, leaving no position to protect.
@@ -334,6 +351,9 @@ enum TriggerFailureReason {
   TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT = 235;
   // The market's order limits weren't set yet when the trigger fired.
   TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE = 238;
+  // The account was under an automatic repair, so the fire was retried
+  // shortly instead of placing its child order.
+  TRIGGER_FAILURE_REASON_ACCOUNT_REPAIRING = 239;
   // The trigger watches the index price and the market has no index price.
   TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE = 241;
   // The trigger price was already reached by the price the trigger watches
@@ -789,6 +809,9 @@ message TriggerEvent {
     // Why an admitted trigger failed.
     TriggerFailureReason failure_reason = 21;
   }
+  // Why the attempt named by child_seq was refused while the trigger stayed
+  // live. Set only on EVENT_FIRE_REFUSED; other event types leave it unset.
+  optional TriggerFailureReason fire_refusal_reason = 22;
 }
 
 // TriggerEventBatch is one realtime publication on an account's trigger event
@@ -1200,7 +1223,14 @@ service TriggersService {
     };
   }
 
-  // Cancel a trigger.
+  // Cancel a trigger: a standalone stop-loss, take-profit, trailing stop,
+  // TWAP or ladder, or an order's attached leg. Canceling a TWAP or a ladder
+  // also cancels its open child orders.
+  // OrdersService.CancelAllOrders and the dead-man switch
+  // (OrdersService.CancelAllAfter) cancel open orders only, never triggers:
+  // after either, armed stops and running TWAPs can still place orders. To
+  // stop them, cancel each live trigger with this method; ListTriggers lists
+  // them.
   rpc CancelTrigger(CancelTriggerRequest) returns (CancelTriggerResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -1209,7 +1239,9 @@ service TriggersService {
       summary: "Cancel Trigger"
       description:
         "Cancel a trigger by trigger ID and release its reserved "
-        "quantity."
+        "quantity. Cancel All Orders and the dead-man switch cancel "
+        "open orders only, never triggers; use this method to stop "
+        "each trigger too."
       tags: "Triggers Service"
     };
   }

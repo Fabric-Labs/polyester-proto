@@ -1226,6 +1226,14 @@
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
+                "fireRefusalReason": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.TriggerFailureReason"
+                    }
+                  ],
+                  "description": "Why the attempt named by child_seq was refused while the trigger stayed live. Set only on EVENT_FIRE_REFUSED; other event types leave it unset."
+                },
                 "subaccountId": {
                   "description": "Public account or sub-account ID associated with the trigger.",
                   "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
@@ -2268,7 +2276,7 @@
           "PAIR_DRAIN_TWAP": "The market was disabled: the exchange ended the TWAP and canceled its resting slice, releasing its reserved funds.",
           "PARENT_CANCELED_NO_FILL": "The parent order ended without a fill, so its attached trigger was canceled.",
           "SELF_TRADE_PREVENTION": "Self-trade prevention canceled the trigger's child orders.",
-          "USER_REQUEST": "The user explicitly canceled the trigger."
+          "USER_REQUEST": "The user explicitly canceled the trigger, or canceled an order that ended it, alone, with a cancel-all or by the dead-man switch: an attached leg's working exit (with oco set, the parent's other legs end with it), or a level of a ladder that ended with nothing filled."
         }
       },
       "polyester.rest.enum.triggers.v1.TriggerEventType": {
@@ -2278,7 +2286,8 @@
           "UPDATED",
           "FAILED",
           "ACTIVATED",
-          "ARMED"
+          "ARMED",
+          "FIRE_REFUSED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
@@ -2287,6 +2296,7 @@
           "CANCELED": "Trigger was canceled.",
           "FAILED": "Trigger became terminal after its next child order could not be admitted.",
           "FIRED": "Trigger fired and may have created a child order.",
+          "FIRE_REFUSED": "A fire of the trigger was refused and the trigger stayed live: an attached take-profit, stop-loss or trailing stop waits for the next price through its trigger price, or, refused because its order would be below the market's minimums, waits until its position changes; a trigger refused for a rate limit or an account repair fires again shortly. Not terminal: the trigger keeps its status. child_seq names the refused attempt, which placed no child order, and fire_refusal_reason says why; the next fire takes the next child_seq. A refusal that ends the trigger is EVENT_FAILED instead.",
           "UPDATED": "Trigger configuration or lifecycle state was updated."
         }
       },
@@ -2382,6 +2392,7 @@
           "TWAP_CAPACITY_REACHED",
           "CHILD_ORDER_INCONSISTENT",
           "ORDER_LIMITS_UNAVAILABLE",
+          "ACCOUNT_REPAIRING",
           "INDEX_PRICE_UNAVAILABLE",
           "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "MISSING_REASON_CODE",
@@ -2389,6 +2400,7 @@
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
+          "ACCOUNT_REPAIRING": "The account was under an automatic repair, so the fire was retried shortly instead of placing its child order.",
           "ACCOUNT_ROUTING_INVALID": "The trigger could not be installed on its market's current route.",
           "ACCOUNT_UNKNOWN": "The account associated with the trigger was not recognized.",
           "ATTACHED_LEGS_EXCEEDED": "The order carried more attached legs than allowed.",
@@ -2498,8 +2510,8 @@
         "type": "string",
         "x-poly-enum-descriptions": {
           "ARMED": "Trigger admitted and actively evaluating conditions.",
-          "CANCELED": "Trigger was canceled. The cancel reason states why, for example a user request or another attached leg's exit closing its parent's position. A ladder is canceled only when the ladder itself is canceled; canceling its child orders does not cancel it.",
-          "COMPLETED": "Trigger completed. A ladder completes once none of its child orders remains open and at least one of them was placed on the book, however each placed child order then ended: filled, canceled, or canceled by self-trade prevention. Some of its child orders may have been rejected. Completed does not mean the ladder filled: its executed quantity and executed levels state what filled, and each child order's own status states how it ended.",
+          "CANCELED": "Trigger was canceled. The cancel reason states why, for example a user request or another attached leg's exit closing its parent's position. A ladder is canceled when the ladder itself is canceled. A ladder whose child orders were canceled with none filled, for example one by one, with a cancel-all or by the dead man's switch, is canceled too, with a user request reason, once none of them remains open. A ladder whose child orders were canceled only by self-trade prevention, with none filled, completes instead.",
+          "COMPLETED": "Trigger completed. A ladder completes once none of its child orders remains open and at least one of them was placed on the book, unless it ends canceled (see STATUS_CANCELED). A ladder that filled any quantity completes however its other child orders ended. Some of its child orders may have been rejected. Completed does not mean the ladder filled: its executed quantity and executed levels state what filled, and each child order's own status states how it ended.",
           "CREATED": "Trigger was created and is pending activation.",
           "FAILED": "Trigger failed (for example, reservation failure, child order rejection). A ladder fails when every child order was rejected before it was placed on the book; the failure reason is the first rejected child order's.",
           "PAUSED": "Trigger is paused (user-initiated, can be resumed).",
@@ -3057,6 +3069,7 @@
                       "childSeq": 1,
                       "eventType": "FIRED",
                       "firePx": "61000.25",
+                      "fireRefusalReason": "UNKNOWN_SYMBOL",
                       "subaccountId": "45LUmqjT",
                       "symbol": "BTC-USDT",
                       "triggerId": "59VD7Lar",
