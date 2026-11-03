@@ -1055,7 +1055,7 @@
     {
       "name": "orders.v1.CancelAllAfterRequest",
       "kind": "message",
-      "doc": "CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.",
+      "doc": "CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.\n When the switch fires, it cancels what a CancelAllOrders with the same\n scope cancels: open orders, never triggers. See CancelAllAfter.",
       "message": {
         "cel": [
           {
@@ -1194,7 +1194,7 @@
     {
       "name": "orders.v1.CancelAllOrdersRequest",
       "kind": "message",
-      "doc": "CancelAllOrdersRequest cancels all matching open orders for an account.",
+      "doc": "CancelAllOrdersRequest cancels all matching open orders for an account.\n It cancels orders only, never triggers: see CancelAllOrders for what\n happens to stop-loss, take-profit and trailing stops, TWAPs, ladders and\n attached legs, and how to stop them too.",
       "message": {
         "fields": [
           {
@@ -1281,7 +1281,7 @@
             "name": "matched_orders",
             "jsonName": "matchedOrders",
             "number": 2,
-            "doc": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress.\n Orders placed after acceptance are not counted. Unless `dry_run` is set,\n equals `submitted_cancels` plus `failed_cancels`.",
+            "doc": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress\n and open orders that triggers placed. Triggers themselves are never\n counted. Orders placed after acceptance are not counted. Unless\n `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1424,7 +1424,7 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Optional trading symbol numeric identifier. When set, it must match the\n order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN)\n and nothing is canceled. When omitted, the order's own symbol is used.",
+            "doc": "Optional trading symbol numeric identifier. When set, it must match the\n order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN)\n and nothing is canceled. An order that ended a while ago may instead be\n reported ended (ERROR_CODE_ORDER_ALREADY_TERMINAL). When omitted, the\n order's own symbol is used.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1503,12 +1503,12 @@
           {
             "name": "CANCEL_REASON_IOC_REMAINDER",
             "number": 2,
-            "doc": "The unfilled remainder of an immediate-or-cancel order."
+            "doc": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a\n quote amount (max_quote_debit_scaled) that spends that amount ends\n FILLED instead."
           },
           {
             "name": "CANCEL_REASON_MARKET_REMAINDER",
             "number": 3,
-            "doc": "The unfilled remainder of a market order: the book ran out, or the next\n price was past the order's protection price."
+            "doc": "The unfilled remainder of a market order: the book ran out, the next\n price was past the order's protection price, or the order reached the\n market's maximum order quantity. A market buy sized by a quote amount\n (max_quote_debit_scaled) that spends that amount, so that what is left\n buys no further quantity step, ends FILLED instead."
           },
           {
             "name": "CANCEL_REASON_STP_EXPIRE_MAKER",
@@ -1729,7 +1729,7 @@
     {
       "name": "orders.v1.DeadManSwitchScope",
       "kind": "message",
-      "doc": "DeadManSwitchScope describes the recorded scope of an armed dead-man switch.\n Expiry cancels working orders in this scope, including working child orders.\n Waiting triggers remain active and may create further orders.",
+      "doc": "DeadManSwitchScope describes the recorded scope of an armed dead-man switch.\n Expiry cancels working orders in this scope, including orders that\n triggers placed. It cancels no trigger: armed stop-loss, take-profit and\n trailing stops and running TWAPs remain active and may create further\n orders after expiry. Cancel them with TriggersService.CancelTrigger.",
       "message": {
         "fields": [
           {
@@ -4271,10 +4271,31 @@
             "name": "avg_price_ticks",
             "jsonName": "avgPriceTicks",
             "number": 14,
-            "doc": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e9. Zero if no fills.",
+            "doc": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e9, rounded down. Zero if no fills.\n avg_price_e18 carries the exact average.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "avg_price_e18",
+            "jsonName": "avgPriceE18",
+            "number": 36,
+            "doc": "Average execution price across the lineage through this generation, in\n quote units scaled by 1e18: the exact executed quote amount divided by\n cum_qty_scaled, rounded half to even at the 18th decimal. Unset if no\n fills.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "cum_notional",
+            "jsonName": "cumNotional",
+            "number": 37,
+            "doc": "Exact quote amount of the fills across the lineage through this\n generation, before fees: the sum over the fills of their quantity,\n scaled as cum_qty_scaled, times their price in quote units scaled by\n 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with\n the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST\n shows it in quote units. avg_price_e18 is this amount over\n cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down\n to 18 decimal places, which is this amount exactly unless\n base_quantity_scale is above 9.\n\n For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),\n the quote the order used is this amount plus fee_total's amount_e18\n when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,\n since a rebate is credited; it is this amount alone when fee_asset is\n BASE, whose fee is taken from the base received. What it left unspent is\n submitted_max_quote_debit_scaled less the quote it used.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "fee_total",
+            "jsonName": "feeTotal",
+            "number": 38,
+            "doc": "Total fee of the fills across the lineage through this generation, net\n of rebates, in the order's fee asset. Order history reads and\n single-order reads that include execution history (the default) carry\n it. It can trail the order's fills: its quantity shows which fills it\n covers. Open-order reads, single-order reads without execution history\n and private stream order updates leave it unset.",
+            "protoRef": "orders.v1.OrderFeeTotal"
           },
           {
             "name": "price_ticks",
@@ -4411,6 +4432,39 @@
       }
     },
     {
+      "name": "orders.v1.OrderFeeTotal",
+      "kind": "message",
+      "doc": "OrderFeeTotal is the total fee of an order's fills, net of rebates, as\n settled. A fill's fee is recorded shortly after the fill executes, so the\n total can trail the fills the order shows: qty_scaled says which fills it\n covers.",
+      "message": {
+        "fields": [
+          {
+            "name": "amount_e18",
+            "jsonName": "amountE18",
+            "number": 1,
+            "doc": "Net fee magnitude in fixed 18-decimal units of the order's fee_asset:\n the fees of the covered fills less their rebates. Zero when they charged\n no fee.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "is_rebate",
+            "jsonName": "isRebate",
+            "number": 2,
+            "doc": "True when the covered fills' rebates exceed their fees, so the amount\n was credited to the account rather than charged.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 3,
+            "doc": "Executed quantity of the fills the total covers, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Equal to the order's\n cum_qty_scaled once every fill's fee is recorded. While a fill is still\n being recorded the two differ, and a later read of the order includes\n it.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.OrderIntent",
       "kind": "message",
       "doc": "OrderIntent contains one order's complete, transport-independent placement\n intent. Single and batch create use this same message.",
@@ -4497,7 +4551,7 @@
             "name": "max_quote_debit_scaled",
             "jsonName": "maxQuoteDebitScaled",
             "number": 4,
-            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -4746,7 +4800,7 @@
           {
             "name": "FILLED",
             "number": 4,
-            "doc": "Fully filled (no remaining quantity)."
+            "doc": "Fully filled (no remaining quantity). A buy sized by a quote amount\n (max_quote_debit_scaled) is fully filled once it has spent that amount:\n what is left of it buys no further quantity step at the next price the\n order could fill at. Its quantity is then what it bought."
           },
           {
             "name": "CANCELED",
