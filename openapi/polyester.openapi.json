@@ -2555,6 +2555,11 @@
             "title": "include_api_keys",
             "type": "boolean"
           },
+          "includeBalances": {
+            "description": "Include current balances for this sub-account. The caller needs the READ_BALANCES action on\n the sub-account: its role, any attached sub-account policy and, for an API key, the key's\n policy must allow it, or the request fails with PermissionDenied. When balances cannot be\n read right now, the request fails with Unavailable and AUTH_TEMPORARILY_UNAVAILABLE; retry\n the same request.",
+            "title": "include_balances",
+            "type": "boolean"
+          },
           "includeInvites": {
             "description": "Include invitations visible to the caller.",
             "title": "include_invites",
@@ -2603,6 +2608,11 @@
             },
             "title": "api_keys",
             "type": "array"
+          },
+          "balances": {
+            "$ref": "#/components/schemas/ledger.read.v1.GetBalancesResponse",
+            "description": "Current balances when include_balances is true, in the same shape as GetBalances.",
+            "title": "balances"
           },
           "invites": {
             "description": "Invitations visible to the caller when include_invites is true.",
@@ -15116,7 +15126,8 @@
           "CANCEL_REASON_TWAP_ROLLOVER",
           "CANCEL_REASON_STRATEGY_CANCEL",
           "CANCEL_REASON_SYSTEM",
-          "CANCEL_REASON_MARKET_HALTED"
+          "CANCEL_REASON_MARKET_HALTED",
+          "CANCEL_REASON_ATTACHED_EXIT_FIRED"
         ],
         "title": "CancelReason",
         "type": "string"
@@ -15493,6 +15504,7 @@
           "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN",
           "ERROR_CODE_TRIGGER_SYMBOL_MISMATCH",
           "ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR",
+          "ERROR_CODE_SELF_TRADE_PREVENTED",
           "ERROR_CODE_ATTACHED_LEGS_EXCEEDED",
           "ERROR_CODE_FEE_ASSET_INVALID",
           "ERROR_CODE_FEE_CEILING_INVALID",
@@ -16893,7 +16905,7 @@
               {
                 "properties": {
                   "maxQuoteDebitScaled": {
-                    "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled.",
+                    "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled. It can carry\n attached_risk: the legs protect the quantity it actually buys.",
                     "exclusiveMinimum": 0,
                     "format": "int64",
                     "title": "max_quote_debit_scaled",
@@ -17312,7 +17324,7 @@
             ]
           }
         ],
-        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.\noco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)",
+        "description": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.\noco requires take_profit and exactly one stop leg (stop_loss or trailing_stop)",
         "title": "RiskPolicy",
         "type": "object"
       },
@@ -22911,6 +22923,7 @@
           "TRIGGER_FAILURE_REASON_ACCOUNT_REPAIRING",
           "TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE",
           "TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+          "TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED",
           "TRIGGER_FAILURE_REASON_MISSING_REASON_CODE",
           "TRIGGER_FAILURE_REASON_INTERNAL_ERROR"
         ],
@@ -30903,7 +30916,7 @@
     },
     "/v1/auth/subaccounts/{subaccount_id}": {
       "get": {
-        "description": "Return a single payload containing the sub-account and requested related read models, such as members, API keys, invites, and policy.",
+        "description": "Return a single payload containing the sub-account and requested related read models, such as members, API keys, invites, policy, and balances.",
         "operationId": "SubaccountViewService_GetSubaccount",
         "parameters": [
           {
@@ -30959,6 +30972,16 @@
             "schema": {
               "description": "Include the attached sub-account policy, when one is attached. Every current member may receive it.",
               "title": "include_policy",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Include current balances for this sub-account. The caller needs the READ_BALANCES action on\n the sub-account: its role, any attached sub-account policy and, for an API key, the key's\n policy must allow it, or the request fails with PermissionDenied. When balances cannot be\n read right now, the request fails with Unavailable and AUTH_TEMPORARILY_UNAVAILABLE; retry\n the same request.",
+            "in": "query",
+            "name": "includeBalances",
+            "schema": {
+              "description": "Include current balances for this sub-account. The caller needs the READ_BALANCES action on\n the sub-account: its role, any attached sub-account policy and, for an API key, the key's\n policy must allow it, or the request fails with PermissionDenied. When balances cannot be\n read right now, the request fails with Unavailable and AUTH_TEMPORARILY_UNAVAILABLE; retry\n the same request.",
+              "title": "include_balances",
               "type": "boolean"
             }
           },
@@ -34455,6 +34478,14 @@
       "name": "PolicyService"
     },
     {
+      "description": "Read endpoints for balances, transfers, and holds.",
+      "name": "Ledger Read"
+    },
+    {
+      "description": "LedgerReadService exposes read-only ledger endpoints (balances, history, transfers, holds).",
+      "name": "LedgerReadService"
+    },
+    {
       "description": "Read service for aggregated sub-account pages.",
       "name": "SubaccountViewService"
     },
@@ -34587,14 +34618,6 @@
     {
       "description": "FeeService serves authenticated effective spot trading fee rates.",
       "name": "FeeService"
-    },
-    {
-      "description": "Read endpoints for balances, transfers, and holds.",
-      "name": "Ledger Read"
-    },
-    {
-      "description": "LedgerReadService exposes read-only ledger endpoints (balances, history, transfers, holds).",
-      "name": "LedgerReadService"
     },
     {
       "description": "HeatmapService serves historical orderbook heatmap chains.",

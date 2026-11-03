@@ -196,7 +196,8 @@ message OrderIntent {
     // from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.
     // The order spends up to this amount at the prices it fills at. Once what
     // is left buys no further quantity step, it ends FILLED; if the book or
-    // its price limit stops it first, its remainder is canceled.
+    // its price limit stops it first, its remainder is canceled. It can carry
+    // attached_risk: the legs protect the quantity it actually buys.
     int64 max_quote_debit_scaled = 4 [(buf.validate.field).int64.gt = 0];
   }
   // Required execution behavior. The selected variant exposes only fields that
@@ -878,6 +879,13 @@ enum ErrorCode {
   // a replace keeps its order's place. Nothing changed; cancel a resting order
   // in this market first.
   ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR = 306;
+  // Self-trade prevention expired the order of an attached take-profit,
+  // stop-loss or trailing stop because it would have traded with another of
+  // the account's resting orders. It is reported as the trigger's fire refusal
+  // reason, never as the answer to a request: the attached order stays active
+  // and fires again at a new trade at or beyond its trigger price, or once the
+  // other order is no longer at the best price.
+  ERROR_CODE_SELF_TRADE_PREVENTED = 307;
   // The order already carries every attached leg it may hold, so another
   // attached leg was refused. Legs being cancelled count until they end:
   // retry once they have ended.
@@ -1079,6 +1087,11 @@ message TrailingStopPolicy {
 // RiskPolicy defines optional risk controls (take-profit, stop-loss or
 // trailing stop) attached to an order. The legs protect the parent order's
 // filled position: they arm as the parent fills and follow its later fills.
+// A buy sized by max_quote_debit_scaled has no fixed quantity: its legs
+// protect what its fills buy. When the order is created, each leg's exit is
+// checked against the pair's minimums at the quantity the whole amount buys
+// at the order's limit price, or a market order's maximum slippage price:
+// the least it buys if it spends the amount.
 //
 // The legs of one parent share that position, whether or not oco is set, and
 // only one exit works at a time. The first leg whose condition is met submits
