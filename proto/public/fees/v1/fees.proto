@@ -5,6 +5,7 @@ package fees.v1;
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/fees/v1;feesv1";
@@ -18,14 +19,16 @@ option (gnostic.openapi.v3.document) = {
   ]
 };
 
-// SpotFeeRate describes the effective maker and taker rates for one spot
-// market and account target.
+// SpotFeeRate describes, for one spot market and account target, the
+// effective maker and taker rates, the rates an order reserves its fee at,
+// and the components the effective rates are computed from.
 message SpotFeeRate {
   // Stable numeric spot market identifier.
   uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
 
   // Effective maker fee rate encoded as a base-10 percentage string without a
-  // percent sign. Values are between -100 and 100 inclusive.
+  // percent sign. Values are between -100 and 100 inclusive. It is computed
+  // from breakdown as SpotFeeRateBreakdown describes.
   string maker_fee_rate_percent = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 14,
@@ -33,7 +36,8 @@ message SpotFeeRate {
   ];
 
   // Effective taker fee rate encoded as a non-negative base-10 percentage
-  // string without a percent sign. Values are between 0 and 100 inclusive.
+  // string without a percent sign. Values are between 0 and 100 inclusive. It
+  // is computed from breakdown as SpotFeeRateBreakdown describes.
   string taker_fee_rate_percent = 4 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 13,
@@ -42,13 +46,175 @@ message SpotFeeRate {
 
   // VIP tier used to resolve these rates, in the inclusive range 0 through 10.
   uint32 vip_tier = 5 [(buf.validate.field).uint32.lte = 10];
+
+  // Fee rate a new order on this market reserves its fee at when the fee is
+  // paid in the quote asset, encoded as a non-negative base-10 percentage
+  // string without a percent sign, between 0 and 100 inclusive. It is the
+  // highest maker or taker rate of every VIP tier under the fee schedule in
+  // force on this market, so it is at least the effective rates and
+  // discounts never lower it. A buy limit order that pays its fee in the
+  // quote asset reserves N + F, computed in units of 10^-18 of the quote
+  // asset whatever the quote asset's own decimals: N is its price times its
+  // quantity rounded up to 10^-18, and F is N times this rate rounded up to
+  // 10^-18. It has sufficient quote balance when N + F is at most the
+  // available quote balance, compared in the same 10^-18 units; other order
+  // validation and market limits still apply. A post-only limit order
+  // reserves at post_only_reserve_fee_rate_percent instead, and a buy sized
+  // by a quote amount reserves at the lower of this rate and
+  // taker_fee_rate_percent. Fills charge the effective rate, and the rest of
+  // the reserve is released as the order fills or ends.
+  string reserve_fee_rate_percent = 6 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 13,
+    (buf.validate.field).string.pattern = "^(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+
+  // Fee rate a new post-only limit order on this market reserves its fee at
+  // when the fee is paid in the quote asset, encoded as a non-negative
+  // base-10 percentage string without a percent sign, between 0 and 100
+  // inclusive: the highest maker rate of every VIP tier under the fee
+  // schedule in force on this market, as reserve_fee_rate_percent describes.
+  string post_only_reserve_fee_rate_percent = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 13,
+    (buf.validate.field).string.pattern = "^(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+
+  // Components of the effective maker and taker rates in force.
+  SpotFeeRateBreakdown breakdown = 8 [(buf.validate.field).required = true];
+
+  // Earliest scheduled time at which a component of these rates starts or
+  // ends: a fee schedule or discount in breakdown ending, or a VIP tier, fee
+  // policy, fee schedule or discount not yet in force starting. The effective
+  // and reserve rates can change then, or stay the same. Omitted when no
+  // change is scheduled.
+  optional google.protobuf.Timestamp next_change_at = 9;
+}
+
+// SpotFeeRateBreakdown lists the components of one market's effective fee
+// rates in force. A client reproduces maker_fee_rate_percent and
+// taker_fee_rate_percent exactly by applying the steps below to the maker
+// and the taker rate separately, in this order, in integer arithmetic. Work
+// in units of 0.0000001 percent: write every rate as an integer R, the
+// percentage times 10,000,000. Write every multiplier and discount as an
+// integer M or D, the percentage times 100. trunc(x / 10000) divides and
+// rounds toward zero.
+//
+// 1. Start from the VIP tier rate: R = tier_maker_fee_rate_percent or
+//    tier_taker_fee_rate_percent.
+// 2. When market_multiplier is set, multiply by it:
+//    R = trunc((R × M + 5000) / 10000).
+// 3. When R is above 0, let D be the highest maker or taker discount of
+//    account_discounts, 0 when the list is empty. When D is above 0, apply
+//    it: R = trunc((R × (10000 − D) + 5000) / 10000).
+// 4. When R is above 0 and referral_discount is set with a maker or taker
+//    discount D above 0, apply it the same way:
+//    R = trunc((R × (10000 − D) + 5000) / 10000).
+//
+// The result is the effective rate times 10,000,000. The steps multiply: a
+// 10% account discount and a 20% referral discount on a 0.1% rate leave
+// 0.1% × 0.9 × 0.8 = 0.072%. A negative maker rate is a rebate, which only
+// the multiplier scales.
+message SpotFeeRateBreakdown {
+  // Maker fee rate of the account's VIP tier under the fee policy in force,
+  // before the market multiplier and discounts, encoded as a base-10
+  // percentage string without a percent sign. Values are between -100 and
+  // 100 inclusive; a negative rate is a rebate.
+  string tier_maker_fee_rate_percent = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 14,
+    (buf.validate.field).string.pattern = "^-?(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+
+  // Taker fee rate of the account's VIP tier under the fee policy in force,
+  // before the market multiplier and discounts, encoded as a non-negative
+  // base-10 percentage string without a percent sign, between 0 and 100
+  // inclusive.
+  string tier_taker_fee_rate_percent = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 13,
+    (buf.validate.field).string.pattern = "^(100([.]0+)?|([0-9]|[1-9][0-9])([.][0-9]+)?)$"
+  ];
+
+  // Fee schedule multipliers in force on this market. Omitted when none is
+  // in force, which leaves the tier rates unchanged.
+  optional SpotFeeMultiplier market_multiplier = 3;
+
+  // Account discounts in force on this market, in no particular order. The
+  // highest maker discount and the highest taker discount apply, each
+  // possibly from a different discount.
+  repeated SpotFeeDiscount account_discounts = 4;
+
+  // Referral discount in force for the account. Omitted when none is in
+  // force.
+  optional SpotFeeDiscount referral_discount = 5;
+}
+
+// SpotFeeMultiplier is the fee schedule of one market, which scales the VIP
+// tier rates.
+message SpotFeeMultiplier {
+  // Maker rate multiplier encoded as a base-10 percentage string without a
+  // percent sign, between 0 and 100 inclusive with at most two decimals.
+  string maker_multiplier_percent = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 6,
+    (buf.validate.field).string.pattern = "^(100|([0-9]|[1-9][0-9])([.][0-9]{1,2})?)$"
+  ];
+
+  // Taker rate multiplier encoded as a base-10 percentage string without a
+  // percent sign, between 0 and 100 inclusive with at most two decimals.
+  string taker_multiplier_percent = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 6,
+    (buf.validate.field).string.pattern = "^(100|([0-9]|[1-9][0-9])([.][0-9]{1,2})?)$"
+  ];
+
+  // Time from which the fee schedule is in force, inclusive.
+  google.protobuf.Timestamp effective_from = 3 [(buf.validate.field).required = true];
+
+  // Time at which the fee schedule ends, exclusive. Omitted when it has no
+  // scheduled end.
+  optional google.protobuf.Timestamp effective_to = 4;
+}
+
+// SpotFeeDiscount is one fee discount of the account's.
+message SpotFeeDiscount {
+  // Maker fee discount encoded as a base-10 percentage string without a
+  // percent sign, with at most two decimals. It lowers a positive maker rate
+  // only.
+  string maker_discount_percent = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 24,
+    (buf.validate.field).string.pattern = "^-?[0-9]+([.][0-9]{1,2})?$"
+  ];
+
+  // Taker fee discount encoded as a base-10 percentage string without a
+  // percent sign, with at most two decimals.
+  string taker_discount_percent = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 24,
+    (buf.validate.field).string.pattern = "^-?[0-9]+([.][0-9]{1,2})?$"
+  ];
+
+  // True when the discount applies to every spot market; false when it
+  // applies to selected markets, this one included. A referral discount
+  // always applies to every spot market.
+  bool all_markets = 3;
+
+  // Time from which the discount is in force, inclusive.
+  google.protobuf.Timestamp effective_from = 4 [(buf.validate.field).required = true];
+
+  // Time at which the discount ends, exclusive. Omitted when it has no
+  // scheduled end.
+  optional google.protobuf.Timestamp effective_to = 5;
 }
 
 // GetSpotFeeRatesRequest requests effective spot fee rates for one account
 // target and an optional set of markets.
 message GetSpotFeeRatesRequest {
-  // Optional subaccount public identifier. When omitted, the authenticated
-  // caller's root account is used.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
 
   // Optional unique spot market identifier filter. When empty, all currently
@@ -63,8 +229,8 @@ message GetSpotFeeRatesRequest {
   ];
 }
 
-// GetSpotFeeRatesResponse contains effective spot fee rates ordered by numeric
-// market identifier ascending.
+// GetSpotFeeRatesResponse contains spot fee rates ordered by numeric market
+// identifier ascending.
 message GetSpotFeeRatesResponse {
   // Effective spot fee rows ordered by symbol_id ascending. The result is a
   // finite snapshot of the requested or currently listed, non-disabled spot
@@ -76,8 +242,9 @@ message GetSpotFeeRatesResponse {
 service FeeService {
   option (polyester.api.docs_group) = "trading";
 
-  // Get effective maker and taker fee rates for the authenticated caller's
-  // root account or selected subaccount.
+  // Get effective maker and taker fee rates, the rates an order reserves its
+  // fee at, and the components of the effective rates for the authenticated
+  // caller's root account or selected subaccount.
   rpc GetSpotFeeRates(GetSpotFeeRatesRequest) returns (GetSpotFeeRatesResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -85,8 +252,9 @@ service FeeService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Spot Fee Rates"
       description:
-        "Get effective maker and taker fee rates for the authenticated "
-        "account target."
+        "Get effective maker and taker fee rates, the rates an order "
+        "reserves its fee at, and the components of the effective rates "
+        "for the authenticated account target."
       tags: "Fee Service"
     };
   }

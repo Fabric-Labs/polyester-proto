@@ -16,7 +16,8 @@ option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;order
 // Shared enums (Side, OrderType, TimeInForce, SelfTradePreventionMode,
 // FeeAsset) are imported from orders.proto.
 
-// OrderStatus is specific to the read API (write API uses simple "accepted" status string).
+// OrderStatus describes the order's execution lifecycle state on read surfaces.
+// CreateOrder acknowledges admission without returning execution status.
 enum OrderStatus {
   // Order status was not provided.
   ORDER_STATUS_UNSPECIFIED = 0;
@@ -56,14 +57,17 @@ enum CancelReason {
   // (max_quote_debit_scaled) that spends that amount, so that what is left
   // buys no further quantity step, ends FILLED instead.
   CANCEL_REASON_MARKET_REMAINDER = 3;
-  // Self-trade prevention canceled this resting order when an order of the
-  // same account would have matched it.
+  // Self-trade prevention canceled this resting order when an incoming order
+  // belonging to the same root account, including another subaccount of that
+  // root, would have matched it.
   CANCEL_REASON_STP_EXPIRE_MAKER = 4;
   // Self-trade prevention canceled this incoming order instead of matching a
-  // resting order of the same account.
+  // resting order belonging to the same root account, including another
+  // subaccount of that root.
   CANCEL_REASON_STP_EXPIRE_TAKER = 5;
-  // Self-trade prevention canceled both this order and the order of the same
-  // account it would have matched.
+  // Self-trade prevention canceled both this order and the order belonging to
+  // the same root account, including another subaccount of that root, that it
+  // would have matched.
   CANCEL_REASON_STP_EXPIRE_BOTH = 6;
   // A replace ended this order and created its successor.
   CANCEL_REASON_REPLACED = 7;
@@ -359,8 +363,6 @@ message Order {
   // Terminal timestamp in nanoseconds since epoch (UTC). Zero for open orders.
   uint64 terminal_ts_ns = 17;
 
-  reserved 18, 19;
-  reserved "terminal_reason_code", "terminal_reason";
   // For a REJECTED order, why it was refused: the same error code the Orders
   // API returns for the same refusal. Not set for every other status; JSON and
   // REST responses then omit it.
@@ -386,9 +388,9 @@ message Order {
   int32 market_max_slippage_bps = 25;
   // Per-order state version: 0 while the order is accepted but not yet on
   // the book (status PENDING), then 1 from its first book state and higher
-  // for every later published state change. A higher version is always
-  // newer, and two copies of an order with the same version are identical,
-  // so use this field to reconcile API and realtime updates.
+  // for every later published execution-state change. Higher values identify
+  // newer execution state. Fee totals and requested enrichments are not covered
+  // by this version and may differ between responses with the same version.
   uint32 version = 26 [(buf.validate.field).uint32 = {
     gte: 0
     lte: 2147483647
@@ -399,8 +401,6 @@ message Order {
   // quote_quantity_scale from GetSpotConfig. Present only when that sizing
   // method was submitted.
   optional int64 submitted_max_quote_debit_scaled = 28;
-  reserved 29, 30;
-  reserved "lineage_id", "generation";
   // Logical-order identity and requested generation. Always populated by order reads.
   OrderLineage lineage = 31;
   // Exact UTC expiry time for GTD orders, within the supported signed
@@ -437,8 +437,6 @@ message UserTrade {
   uint64 ts_ns = 13;
   // Whether this fill earned a rebate instead of paying a fee.
   bool fee_is_rebate = 14;
-  reserved 15, 16;
-  reserved "lineage_id", "generation";
   // Logical-order identity and the generation that executed this fill.
   // Always populated by execution reads; order_id retains its original identity.
   OrderLineage lineage = 17;
@@ -483,7 +481,9 @@ message OrderTransfer {
 
 // GetOpenOrdersRequest lists currently non-terminal orders for an account.
 message GetOpenOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id values. Empty means all symbols.
   repeated uint32 symbol_id = 2 [
@@ -530,7 +530,9 @@ message GetOrderHistoryRequest {
     expression: "!has(this.start_ts_ns) || !has(this.end_ts_ns) || (this.start_ts_ns <= this.end_ts_ns)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id values. Empty means all symbols.
   repeated uint32 symbol_id = 2 [
@@ -597,7 +599,9 @@ message GetUserTradesRequest {
     expression: "!has(this.through_generation) || has(this.lineage_id)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id.
   uint32 symbol_id = 2 [
@@ -652,7 +656,9 @@ message GetUserTradesResponse {
 
 // GetOrderRequest retrieves one physical order and a bounded page of its lineage executions.
 message GetOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Order lookup key. Exactly one identifier is required.
   oneof key {
@@ -717,7 +723,9 @@ message GetOrderResponse {
 // Batch admission replay lasts 60 seconds from acceptance. If status is
 // unavailable, reconcile the individual orders; absence does not prove rejection.
 message GetBatchReplaceStatusRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Server-issued batch identity from BatchReplaceOrders.
   fixed64 batch_request_id = 2 [(buf.validate.field).fixed64.gt = 0];
