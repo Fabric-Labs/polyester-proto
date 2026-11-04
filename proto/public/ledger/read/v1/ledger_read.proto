@@ -14,7 +14,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "Ledger Read"
-      description: "Read endpoints for balances, transfers, and holds."
+      description: "Read endpoints for balances and transfers."
     }
   ]
 };
@@ -30,10 +30,9 @@ option (gnostic.openapi.v3.document) = {
 // human-friendly decimal strings without duplicating REST message types here.
 
 message GetBalancesRequest {
-  // Optional sub-account to scope balances to. If omitted, balances are
-  // returned for the authenticated root account derived from the JWT or API
-  // key. The logical account id itself is always derived from the caller's JWT
-  // or API key, not from this payload.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
 }
 
@@ -79,10 +78,9 @@ enum BalanceRange {
 }
 
 message GetBalanceHistoryRequest {
-  // Optional sub-account to scope balances to. If omitted, balances are
-  // returned for the authenticated root account derived from the JWT or API
-  // key. The logical account id itself is always derived from the caller's JWT
-  // or API key, not from this payload.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // History window to return. When unset/UNSPECIFIED, defaults to 1D.
   BalanceRange range = 2 [(buf.validate.field).enum.defined_only = true];
@@ -151,8 +149,9 @@ message PortfolioAccountGrouping {
 // Equity history in USDT (or BTC via client-side conversion using btc_prices).
 // Values are derived from per-asset balances and market prices (close ticks).
 message GetEquityHistorySeriesRequest {
-  // Optional sub-account to scope equity to. If omitted, equity is returned for
-  // the authenticated root account derived from the JWT or API key.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // History window to return. When unset/UNSPECIFIED, defaults to 1D.
   BalanceRange range = 2 [(buf.validate.field).enum.defined_only = true];
@@ -277,8 +276,9 @@ message ListTransfersRequest {
     message: "ts_max_us must be >= ts_min_us when both are set"
     expression: "this.ts_min_us == 0u || this.ts_max_us == 0u || this.ts_max_us >= this.ts_min_us"
   };
-  // Optional sub-account to scope transfers to. If omitted, transfers are
-  // listed for the authenticated root account derived from the JWT or API key.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Maximum number of transfer rows to return. Defaults to 100 when omitted;
   // maximum is 1000.
@@ -397,39 +397,7 @@ message ListTransfersResponse {
   string next_page_token = 3 [(buf.validate.field).string.max_len = 512];
 }
 
-message ListHoldsRequest {
-  // Optional sub-account to scope holds to. If omitted, holds are listed for
-  // the authenticated root account derived from the JWT or API key.
-  optional fixed64 subaccount_id = 1;
-  // Maximum number of holds to return. Defaults to 100 when omitted; maximum is
-  // 1000.
-  uint32 limit = 2 [(buf.validate.field).uint32.lte = 1000];
-  // true=newest first; false=oldest first.
-  bool reversed = 3;
-  // Opaque keyset cursor from a previous response. The cursor is exclusive and
-  // bound to account, sub-account scope, and sort direction.
-  string page_token = 4 [(buf.validate.field).string.max_len = 512];
-}
-
-// Hold row with compact integers and client-side resolution.
-message HoldRow {
-  fixed64 hold_id = 1; // pending transfer id (numeric)
-  // Reserved amount at fixed 18-decimal ledger scale.
-  polyester.type.v1.U128 amount_reserved_e18 = 2;
-  // Public unified asset id.
-  uint32 asset_id = 3;
-  // Expiration time in nanoseconds since epoch (UTC).
-  uint64 expires_at_ns = 4;
-}
-
-message ListHoldsResponse {
-  // Hold rows in the sort direction requested by the caller.
-  repeated HoldRow holds = 1;
-  // Opaque cursor for the next page. Empty when no more results exist.
-  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
-}
-
-// LedgerReadService exposes read-only ledger endpoints (balances, history, transfers, holds).
+// LedgerReadService exposes read-only ledger endpoints (balances, history, transfers).
 service LedgerReadService {
   option (polyester.api.docs_group) = "account";
 
@@ -462,14 +430,11 @@ service LedgerReadService {
   }
 
   // List finalized transfer history for an account.
-  // Supports optional subaccount, asset, ordering, and cursor filters.
+  // Supports optional subaccount, asset, inclusive time-bound, ordering, and cursor filters.
   rpc ListTransfers(ListTransfersRequest) returns (ListTransfersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
   }
-
-  // ListHolds returns pending holds with integer amounts (u128) and asset ids.
-  rpc ListHolds(ListHoldsRequest) returns (ListHoldsResponse) {}
 
   // Retrieve the latest balances for an account.
   // Supports optional subaccount scoping and returns asset symbols with decimal amounts on REST.

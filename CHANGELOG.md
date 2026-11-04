@@ -3,6 +3,24 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-04 — develop-20261104T112923Z
+
+Fee reserve rates and breakdown, removal of the holds list, canonical REST problem types and stricter trigger checks.
+
+- [2026-11-03T1601Z-orders-v1](changes/2026-11-03T1601Z-orders-v1.md): changed `orders.v1.OrdersReadService`.
+- [2026-11-03T1601Z-triggers-v1](changes/2026-11-03T1601Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-03T1943Z-auth-v1](changes/2026-11-03T1943Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.PolicyService`, `auth.v1.SubaccountViewService`, `auth.v1.SubaccountRoleService`, `chain.lifecycle.v1.LifecycleReadService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-03T2227Z-triggers-v1](changes/2026-11-03T2227Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`.
+- [2026-11-04T0002Z-triggers-v1](changes/2026-11-04T0002Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-04T0020Z-triggers-v1](changes/2026-11-04T0020Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-04T0201Z-orders-v1](changes/2026-11-04T0201Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `marketdata.v1.MarketDataService`, `triggers.v1.TriggersService`, `ledger.read.v1.LedgerReadService`, `fees.v1.FeeService`, `ratelimit.v1.RateLimitService`, `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `transfer.v1.InternalTransferService`.
+- [2026-11-04T0211Z-ledger-read-v1](changes/2026-11-04T0211Z-ledger-read-v1.md): removed `ledger.read.v1.LedgerReadService`. **Breaking.**
+- [2026-11-04T0229Z-fees-v1](changes/2026-11-04T0229Z-fees-v1.md): added `fees.v1.FeeService`.
+- [2026-11-04T0312Z-triggers-v1](changes/2026-11-04T0312Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-04T0421Z-triggers-v1](changes/2026-11-04T0421Z-triggers-v1.md): changed `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-04T0430Z-claims-v1](changes/2026-11-04T0430Z-claims-v1.md): changed `claims.v1.ClaimsService`, `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`, `chain.analytics.v1.ChainAnalyticsService`, `chain.deposit.v1.DepositAddressService`, `chain.lifecycle.v1.LifecycleReadService`, `chain.zipper.v1.ZipperService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `transfer.v1.InternalTransferService`, `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-04T0604Z-transfer-v1](changes/2026-11-04T0604Z-transfer-v1.md): added `transfer.v1.InternalTransferService`, `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `rewards.v1.RewardCampaignService`, `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `auth.v1.SubaccountRoleService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`, `vip.v1.VIPService`, `ratelimit.v1.RateLimitService`, `fees.v1.FeeService`, `checkpoints.v1.CheckpointService`.
+
 ## 2026-11-03 — develop-20261103T203939Z
 
 Self-trade prevention for attached exits, sub-account balances and consistent REST trigger fields.

@@ -47,7 +47,8 @@ enum OrderType {
 // TimeInForce controls how long an order may remain active and whether it must
 // fill completely.
 enum TimeInForce {
-  // Time-in-force was not provided; create requests default to GTC.
+  // Time-in-force was not provided. Create requests must select an execution
+  // variant, which determines time-in-force.
   TIME_IN_FORCE_UNSPECIFIED = 0;
   // Good-til-canceled.
   GTC = 1;
@@ -243,7 +244,9 @@ message OrderIntent {
 // ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it
 // back before retrying. UNAVAILABLE means the order was not accepted.
 message CreateOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Order to admit.
   OrderIntent order = 2 [
@@ -284,7 +287,9 @@ message CreateOrderResponse {
 // admissible. It uses the same order contract as CreateOrderRequest. Previewing
 // creates no order, hold, reservation, or client-order-ID claim.
 message PreviewOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Order intent to evaluate without submitting it.
   OrderIntent order = 2 [
@@ -343,7 +348,9 @@ message CancelOrderRequest {
   // reported ended (ERROR_CODE_ORDER_ALREADY_TERMINAL). When omitted, the
   // order's own symbol is used.
   uint32 symbol_id = 3;
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 4;
 }
 
@@ -440,7 +447,7 @@ enum ErrorCode {
   // API key policy does not allow trading this market, even though the
   // sub-account policy does.
   ERROR_CODE_API_KEY_MARKET_DENY = 29;
-  // Price must align with the pair tick size (LIMIT orders).
+  // Price must align with the pair tick size, including trigger and activation prices.
   ERROR_CODE_PRICE_TICK_SIZE = 30;
   // Quantity is below the pair minimum quantity (base units).
   ERROR_CODE_MIN_QTY = 31;
@@ -498,10 +505,6 @@ enum ErrorCode {
   ERROR_CODE_TRAILING_DISTANCE_INVALID = 42;
   // Trigger not found (for cancel/get operations).
   ERROR_CODE_TRIGGER_NOT_FOUND = 43;
-  // A trigger cancel refused in its state answers TRIGGER_STATUS_INVALID or
-  // TRIGGER_NOT_MODIFIABLE, each cause its own code.
-  reserved 44;
-  reserved "ERROR_CODE_TRIGGER_CANCEL_REJECTED";
   // Trigger status does not allow requested lifecycle operation.
   ERROR_CODE_TRIGGER_STATUS_INVALID = 45;
   // Trigger type/state does not support requested lifecycle operation.
@@ -851,12 +854,16 @@ enum ErrorCode {
   // back in line, so new orders, changes and trigger orders are paused for a
   // short time. Nothing changed; cancels still work. Try again shortly.
   ERROR_CODE_ACCOUNT_REPAIRING = 300;
-  // The new trigger price of a stop-loss or take-profit is already reached by
-  // the price the trigger watches (at or past it), so the trigger would fire at
-  // once and send its order. Nothing changed; the trigger keeps its previous
-  // trigger price. Returned by ModifyTrigger, and by an order modify that moves
-  // an attached take-profit or stop-loss of an order with a fill. Choose a
-  // trigger price the market has not reached.
+  // The change would act on the trigger at once. The new trigger price of a
+  // stop-loss or take-profit, or the trigger price a new trailing distance
+  // gives an activated trailing stop, is already reached by the price the
+  // trigger watches (at or past it), so the trigger would fire at once and send
+  // its order; or the new activation price of a trailing stop not yet
+  // activated is already reached by that price, so it would activate at once.
+  // Nothing changed; the trigger keeps its previous settings. Returned by
+  // ModifyTrigger, and by an order modify that moves an attached take-profit,
+  // stop-loss or trailing stop of an order with a fill. Choose a price the
+  // market has not reached.
   ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 302;
   // The order was sent but not confirmed in time. Its outcome is unknown and
   // it may have been accepted; read the order by its client order ID, or read
@@ -882,9 +889,10 @@ enum ErrorCode {
   // Self-trade prevention expired the order of an attached take-profit,
   // stop-loss or trailing stop because it would have traded with another of
   // the account's resting orders. It is reported as the trigger's fire refusal
-  // reason, never as the answer to a request: the attached order stays active
-  // and fires again at a new trade at or beyond its trigger price, or once the
-  // other order is no longer at the best price.
+  // reason, never as the answer to a request: the attached order stays active.
+  // New trades and price updates do not fire it while the other order is first
+  // in line at the best price; once that order is gone or no longer first
+  // there, it fires again if its trigger condition still holds.
   ERROR_CODE_SELF_TRADE_PREVENTED = 307;
   // The order already carries every attached leg it may hold, so another
   // attached leg was refused. Legs being cancelled count until they end:
@@ -1042,11 +1050,12 @@ message TrailingStopPolicy {
       lte: 10000
     }];
   }
-  // Optional price protection. If set, when the trailing stop triggers we place
-  // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
-  // MARKET order).
-  //
-  // Exactly one of these should be set (or neither for unprotected behavior).
+  // Optional slippage override for the trailing-stop child. When set, the
+  // child uses an IOC limit bounded by this delta from the trigger price and,
+  // for a buy, by limit_price_ticks. When omitted, a market child uses the
+  // pair's default market slippage for its side, or 200 basis points if no
+  // positive default is configured. A buy child remains bounded by
+  // limit_price_ticks. Set at most one of these fields.
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 6 [(buf.validate.field).int64.gt = 0];
@@ -1209,7 +1218,9 @@ enum BatchReplaceItemAdmissionStatus {
 // happens to stop-loss, take-profit and trailing stops, TWAPs, ladders and
 // attached legs, and how to stop them too.
 message CancelAllOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Optional trading-pair IDs from GetSpotConfig. Empty matches all symbols.
   // At most 100 positive IDs; duplicates are ignored and ordering is immaterial.
@@ -1275,9 +1286,10 @@ message CancelAllOrdersResponse {
   // counted. Orders placed after acceptance are not counted. Unless
   // `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.
   uint32 matched_orders = 2;
-  // Number of matched orders submitted for cancellation, including orders
-  // whose cancellation was already in progress. Each moves to `CANCELED`
-  // asynchronously after the response. Zero when `dry_run` is set.
+  // Number of matched orders for which cancellation was requested, including
+  // orders whose cancellation was already in progress. Observe order updates or
+  // reads for final outcomes; orders may execute before cancellation takes
+  // effect. Zero when `dry_run` is set.
   uint32 submitted_cancels = 3;
   // Number of matched orders that could not be submitted for cancellation
   // because the cancel-all could not be recorded for their symbol. This
@@ -1323,7 +1335,9 @@ message CancelAllAfterRequest {
     expression: "this.timeout_sec == 0u || (this.timeout_sec >= 10u && this.timeout_sec <= 120u)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Heartbeat timeout in seconds.
   // - 0 disables the dead-man switch for this account.
@@ -1432,7 +1446,9 @@ message BatchCreateResultItem {
 
 // BatchCreateOrdersRequest places multiple orders in one request.
 message BatchCreateOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Required account-scoped idempotency key for the entire ordered batch.
   // Reusing it with the same payload within 15 minutes returns each decided
@@ -1484,7 +1500,9 @@ message ModifyOrderRequest {
     expression: "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Target key.
   oneof key {
@@ -1641,7 +1659,9 @@ message BatchReplaceOrdersRequest {
     message: "each item target must be unique within a batch"
     expression: "this.items.map(i, i.order_id > 0u ? \"o:\" + string(i.order_id) : \"c:\" + i.client_order_id).unique()"
   };
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Trading symbol shared by every replacement. An item whose order is on
   // another symbol is refused alone as an unknown order.
@@ -1726,7 +1746,9 @@ message BatchCancelResultItem {
 
 // BatchCancelOrdersRequest cancels multiple orders by explicit ID.
 message BatchCancelOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Idempotency key (required).
   string request_id = 2 [

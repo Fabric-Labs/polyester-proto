@@ -64,11 +64,11 @@ enum TriggerStatus {
   // Trigger was canceled. The cancel reason states why, for example a user
   // request or another attached leg's exit closing its parent's position. A
   // ladder is canceled when the ladder itself is canceled. A ladder whose
-  // child orders were canceled with none filled, for example one by one, with
-  // a cancel-all or by the dead man's switch, is canceled too, with a user
+  // child orders the user canceled with none filled, one by one, with a
+  // cancel-all or by the dead man's switch, is canceled too, with a user
   // request reason, once none of them remains open. A ladder whose child
-  // orders were canceled only by self-trade prevention, with none filled,
-  // completes instead.
+  // orders were canceled only by self-trade prevention, or by the exchange
+  // while it recovered the account, with none filled, completes instead.
   STATUS_CANCELED = 5;
   // Trigger failed (for example, reservation failure, child order rejection).
   // A ladder fails when every child order was rejected before it was placed
@@ -108,11 +108,12 @@ enum TriggerEventType {
   // attached take-profit, stop-loss or trailing stop whose order self-trade
   // prevention expired against another of the account's resting orders stays
   // live too (TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED), reported once
-  // while that order blocks it; it fires again at a new trade at or beyond its
-  // trigger price, or once the other order is no longer at the best price. Not
-  // terminal: the trigger keeps its
-  // status. child_seq names the refused attempt, which placed no child order,
-  // and fire_refusal_reason says why; the next fire takes the next child_seq.
+  // while that order blocks it. New trades and price updates do not fire it
+  // while the other order is first in line at the best price; once that order
+  // is gone or no longer first there, it fires again if its trigger condition
+  // still holds. Not terminal: the trigger keeps its status. child_seq names
+  // the refused attempt, which placed no child order, and fire_refusal_reason
+  // says why; the next fire takes the next child_seq.
   // With TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED, child_seq names the
   // expired child order instead, which was placed and canceled by self-trade
   // prevention. A refusal that ends the trigger is EVENT_FAILED instead.
@@ -363,18 +364,19 @@ enum TriggerFailureReason {
   TRIGGER_FAILURE_REASON_ACCOUNT_REPAIRING = 239;
   // The trigger watches the index price and the market has no index price.
   TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE = 241;
-  // The trigger price was already reached by the price the trigger watches
-  // when the trigger was submitted (at or past it), so the trigger would have
-  // fired at once. It never armed and sent no order; its reserved funds were
-  // released. A price that reaches the trigger price after submission fires
-  // the trigger normally.
+  // The trigger price, or a trailing stop's activation price, was already
+  // reached by the price the trigger watches when the trigger was submitted
+  // (at or past it), so the trigger would have fired or activated at once. It
+  // never armed and sent no order; its reserved funds were released. A price
+  // that reaches it after submission fires or activates the trigger normally.
   TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 244;
   // Self-trade prevention expired the order of an attached take-profit,
   // stop-loss or trailing stop because it would have traded with another of
   // the account's resting orders. Reported only as a fire refusal reason
-  // (EVENT_FIRE_REFUSED): the attached order stays active and fires again at a
-  // new trade at or beyond its trigger price, or once the other order is no
-  // longer at the best price.
+  // (EVENT_FIRE_REFUSED): the attached order stays active. New trades and price
+  // updates do not fire it while the other order is first in line at the best
+  // price; once that order is gone or no longer first there, it fires again if
+  // its trigger condition still holds.
   TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED = 249;
   // The terminal state did not contain a failure reason.
   TRIGGER_FAILURE_REASON_MISSING_REASON_CODE = 998;
@@ -629,7 +631,7 @@ message LadderTrigger {
   bool post_only = 5;
 }
 
-// TriggerIntent contains one standalone trigger's immutable configuration.
+// TriggerIntent contains one standalone trigger's initial configuration.
 message TriggerIntent {
   // Stable numeric pair ID from GetSpotConfig.
   uint32 symbol_id = 1 [
@@ -686,7 +688,9 @@ message TriggerIntent {
 // the triggers for its client_trigger_id before retrying. UNAVAILABLE means
 // the trigger was not created.
 message CreateTriggerRequest {
-  // Target sub-account. When omitted, uses the caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Trigger to admit.
   TriggerIntent trigger = 2 [
@@ -716,7 +720,9 @@ message CreateTriggerResponse {
 message GetTriggerRequest {
   // Trigger ID to retrieve.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account for authorization.
+  // Optional public subaccount ID for authorization. When omitted,
+  // subaccount-scoped API keys use their bound subaccount; other callers use
+  // their authenticated root account.
   optional fixed64 subaccount_id = 2;
 }
 
@@ -732,8 +738,9 @@ message GetTriggerResponse {
 
 // ListTriggersRequest lists triggers for an account.
 message ListTriggersRequest {
-  // Optional sub-account to list triggers for. When empty or omitted, uses the
-  // caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Optional filter by stable numeric pair ID. Zero means all symbols.
   uint32 symbol_id = 2 [
@@ -773,8 +780,9 @@ message ListTriggersResponse {
 message ListTriggerEventsRequest {
   // Trigger ID to list events for.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account (authorization). When empty or omitted, uses the
-  // caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 2;
   // Maximum number of events to return. Defaults to 100 when omitted; maximum
   // is 1000.
@@ -861,7 +869,9 @@ message ListTriggerEventsResponse {
 message CancelTriggerRequest {
   // Trigger ID to cancel.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account for authorization.
+  // Optional public subaccount ID for authorization. When omitted,
+  // subaccount-scoped API keys use their bound subaccount; other callers use
+  // their authenticated root account.
   optional fixed64 subaccount_id = 2;
 }
 
@@ -887,7 +897,9 @@ message CancelTriggerResponse {
 message ModifyTriggerRequest {
   // Trigger ID to modify.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account for authorization.
+  // Optional public subaccount ID for authorization. When omitted,
+  // subaccount-scoped API keys use their bound subaccount; other callers use
+  // their authenticated root account.
   optional fixed64 subaccount_id = 2;
   // Optional trading symbol numeric identifier. Zero or omitted means the
   // trigger's own pair. When set, it must be the trigger's pair: another
@@ -964,7 +976,9 @@ message ModifyTriggerResponse {
 message PauseTriggerRequest {
   // Trigger ID to pause.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account for authorization.
+  // Optional public subaccount ID for authorization. When omitted,
+  // subaccount-scoped API keys use their bound subaccount; other callers use
+  // their authenticated root account.
   optional fixed64 subaccount_id = 2;
 }
 
@@ -986,7 +1000,9 @@ message PauseTriggerResponse {
 message ResumeTriggerRequest {
   // Trigger ID to resume.
   fixed64 trigger_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Optional sub-account for authorization.
+  // Optional public subaccount ID for authorization. When omitted,
+  // subaccount-scoped API keys use their bound subaccount; other callers use
+  // their authenticated root account.
   optional fixed64 subaccount_id = 2;
   // Optional trading symbol numeric identifier. Zero or omitted means the
   // trigger's own pair. When set, it must be the trigger's pair: another
@@ -1119,8 +1135,9 @@ message Trigger {
   // Self-trade prevention mode for child orders.
   orders.v1.SelfTradePreventionMode self_trade_prevention_mode = 22;
 
-  // Immutable strategy configuration. The selected variant is the trigger
-  // category and uses the same shape accepted by CreateTrigger.
+  // Current strategy configuration, including successfully applied
+  // modifications. The selected variant identifies the trigger category and
+  // uses the same shape accepted by CreateTrigger.
   oneof configuration {
     // Stop-loss configuration.
     ConditionalTrigger stop_loss = 30;
@@ -1222,7 +1239,10 @@ service TriggersService {
     };
   }
 
-  // List trigger events (append-only history).
+  // List trigger events (append-only history). A trigger the caller cannot
+  // read (no such trigger, another account's, or one outside the selected
+  // sub-account) answers NOT_FOUND, as GetTrigger does. A trigger the caller
+  // can read that has no event yet answers an empty list.
   rpc ListTriggerEvents(ListTriggerEventsRequest) returns (ListTriggerEventsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
