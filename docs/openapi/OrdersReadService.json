@@ -15,10 +15,10 @@
               "properties": {
                 "attachedRisk": {
                   "additionalProperties": false,
-                  "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists.",
+                  "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists. Order reads include it only when the request asks for it (include_attached_risk, include_attached_risk_state): an omission on request, never a removal. The private WebSocket always carries it in full, as a read asking for both does.",
                   "properties": {
                     "oco": {
-                      "description": "True when the take-profit and stop leg are linked as one-cancels-the-other.",
+                      "description": "True while the parent's legs were placed with oco and both the take-profit and a stop leg (stop-loss or trailing stop) are present. False once either leg is removed. A leg that ended, including one canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
                       "type": "boolean"
                     },
                     "stopLoss": {
@@ -38,7 +38,7 @@
                                   "description": "Resting GTC limit child.",
                                   "properties": {
                                     "price": {
-                                      "description": "Limit price in quote units scaled by 1e9.",
+                                      "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                       "type": "string"
                                     }
@@ -60,9 +60,17 @@
                               "type": "object"
                             },
                             "triggerPrice": {
-                              "description": "Trigger price in quote units scaled by 1e9.",
+                              "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
+                            },
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
@@ -129,7 +137,7 @@
                                   "description": "Resting GTC limit child.",
                                   "properties": {
                                     "price": {
-                                      "description": "Limit price in quote units scaled by 1e9.",
+                                      "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                       "type": "string"
                                     }
@@ -151,9 +159,17 @@
                               "type": "object"
                             },
                             "triggerPrice": {
-                              "description": "Trigger price in quote units scaled by 1e9.",
+                              "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
+                            },
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
@@ -212,12 +228,17 @@
                           "description": "Trailing-stop policy configured on the parent order.",
                           "properties": {
                             "activationPrice": {
-                              "description": "Optional activation price: trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills. Expressed in quote units scaled by 1e9.",
+                              "description": "Optional activation price as a decimal string in quote asset units per base asset unit, for example '62000': trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "limitPrice": {
+                              "description": "Maximum price of a trailing stop that buys back, as a decimal string in quote asset units per base asset unit, for example '65000': the most its exit pays, at which the quote it may spend is reserved. Present when the parent order sells; omitted when the parent order buys.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
                             },
                             "maxSlippageBps": {
-                              "description": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+                              "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999 whichever side the exit trades. An order whose trailing stop sets 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would leave an exit that sells no positive price to sell at.",
                               "format": "int32",
                               "type": "integer"
                             },
@@ -226,23 +247,27 @@
                               "format": "int64",
                               "type": "integer"
                             },
+                            "trailingDistance": {
+                              "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
                             "trailingDistanceBps": {
                               "description": "Trailing distance in basis points (1 bp = 0.01%).",
                               "format": "int32",
                               "type": "integer"
                             },
-                            "trailingDistanceTicks": {
-                              "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                              "type": "string"
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
-                            "activationPrice",
-                            "maxSlippageBps",
-                            "maxSlippageTicks",
-                            "trailingDistanceBps",
-                            "trailingDistanceTicks"
+                            "activationPrice"
                           ],
                           "type": "object"
                         },
@@ -295,7 +320,7 @@
                   "type": "object"
                 },
                 "avgPx": {
-                  "description": "Average execution price across the lineage through this generation, in quote units scaled by 1e9. Zero if no fills.",
+                  "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -314,7 +339,12 @@
                   "type": "string"
                 },
                 "cumQty": {
-                  "description": "Cumulative filled quantity across the lineage through this generation, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Cumulative filled quantity across the lineage through this generation, as a decimal string in base asset units, for example '0.0005'.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "cumQuote": {
+                  "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills. Each fill settles its quote rounded down to 18 decimal places, so cumQuote is exactly the quote the fills settled when the base asset's quantity scale is at most 9; above that, cumQuote can exceed it by less than 1e-18 per fill.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -332,12 +362,12 @@
                   "description": "Fee asset selected for fills."
                 },
                 "inheritedCumQty": {
-                  "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for the original order and immutable within a generation. cum_qty_scaled minus this value is the quantity executed by this generation, not the quantity new to a client session.",
+                  "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, as a decimal string in base asset units, for example '0.0005'. '0' for the original order and immutable within a generation. cumQty minus this value is the quantity executed by this generation, not the quantity new to a client session.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "leavesQty": {
-                  "description": "Remaining working quantity scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for terminal orders.",
+                  "description": "Remaining working quantity as a decimal string in base asset units, for example '0.001'. '0' for terminal orders.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -363,7 +393,7 @@
                   "type": "object"
                 },
                 "marketClientRefPrice": {
-                  "description": "Optional client-side reference price used for MARKET slippage protection, in quote units scaled by 1e9.",
+                  "description": "Optional client-side reference price used for MARKET slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -391,7 +421,7 @@
                   "description": "Order type."
                 },
                 "origQty": {
-                  "description": "Current accepted total order quantity, updated by successful modifies, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -428,13 +458,12 @@
                           "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.OrderTriggerType"
                         }
                       ],
-                      "description": "Trigger strategy that created this order, or unspecified for direct orders."
+                      "description": "Trigger strategy that created this order. Not set for direct orders; JSON and REST responses then omit it."
                     }
                   },
                   "required": [
                     "childSeq",
-                    "scope",
-                    "triggerType"
+                    "scope"
                   ],
                   "type": "object"
                 },
@@ -443,7 +472,7 @@
                   "type": "boolean"
                 },
                 "price": {
-                  "description": "Limit price in quote units scaled by 1e9. Zero for MARKET orders.",
+                  "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' for MARKET orders.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -472,7 +501,7 @@
                   "description": "Self-trade prevention mode."
                 },
                 "submittedMaxQuoteDebit": {
-                  "description": "Submitted hard all-in quote debit limit, scaled by the pair's quote_quantity_scale from GetSpotConfig. Present only when that sizing method was submitted.",
+                  "description": "Submitted hard all-in quote debit limit as a decimal string in quote asset units, for example '100'. Present only when that sizing method was submitted.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -489,17 +518,17 @@
                   "description": "Time-in-force policy."
                 },
                 "version": {
-                  "description": "Per-order state version. Starts at 1 and increases for every published state change. Use this field to reconcile API and realtime updates.",
+                  "description": "Per-order state version: 0 while the order is accepted but not yet on the book (status PENDING), then 1 from its first book state and higher for every later published execution-state change. Higher values identify newer execution state. Fee totals and requested enrichments are not covered by this version and may differ between responses with the same version.",
                   "format": "int32",
                   "type": "integer"
                 }
               },
               "required": [
                 "avgPx",
-                "batchRequestId",
                 "clientOrderId",
                 "createdAt",
                 "cumQty",
+                "cumQuote",
                 "feeAsset",
                 "inheritedCumQty",
                 "leavesQty",
@@ -533,6 +562,10 @@
       "polyester.rest.OrdersReadService_GetOrder.Response": {
         "additionalProperties": false,
         "properties": {
+          "executionsComplete": {
+            "description": "True when the order's trades through its generation, across every page, add up exactly to its cum_qty_scaled. False while a recent execution is still being recorded: trades then lists the executions recorded so far, and a later read returns the rest. Always false when execution history is not included.",
+            "type": "boolean"
+          },
           "nextPageToken": {
             "description": "Cursor for the next execution page. Empty when no further rows are visible; this is not a settlement or order-state reconciliation watermark.",
             "type": "string"
@@ -543,10 +576,10 @@
             "properties": {
               "attachedRisk": {
                 "additionalProperties": false,
-                "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists.",
+                "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists. Order reads include it only when the request asks for it (include_attached_risk, include_attached_risk_state): an omission on request, never a removal. The private WebSocket always carries it in full, as a read asking for both does.",
                 "properties": {
                   "oco": {
-                    "description": "True when the take-profit and stop leg are linked as one-cancels-the-other.",
+                    "description": "True while the parent's legs were placed with oco and both the take-profit and a stop leg (stop-loss or trailing stop) are present. False once either leg is removed. A leg that ended, including one canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
                     "type": "boolean"
                   },
                   "stopLoss": {
@@ -566,7 +599,7 @@
                                 "description": "Resting GTC limit child.",
                                 "properties": {
                                   "price": {
-                                    "description": "Limit price in quote units scaled by 1e9.",
+                                    "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                     "type": "string"
                                   }
@@ -588,9 +621,17 @@
                             "type": "object"
                           },
                           "triggerPrice": {
-                            "description": "Trigger price in quote units scaled by 1e9.",
+                            "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                             "pattern": "^[0-9]+(\\.[0-9]+)?$",
                             "type": "string"
+                          },
+                          "triggerPriceSource": {
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                              }
+                            ],
+                            "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                           }
                         },
                         "required": [
@@ -657,7 +698,7 @@
                                 "description": "Resting GTC limit child.",
                                 "properties": {
                                   "price": {
-                                    "description": "Limit price in quote units scaled by 1e9.",
+                                    "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                     "type": "string"
                                   }
@@ -679,9 +720,17 @@
                             "type": "object"
                           },
                           "triggerPrice": {
-                            "description": "Trigger price in quote units scaled by 1e9.",
+                            "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                             "pattern": "^[0-9]+(\\.[0-9]+)?$",
                             "type": "string"
+                          },
+                          "triggerPriceSource": {
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                              }
+                            ],
+                            "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                           }
                         },
                         "required": [
@@ -740,12 +789,17 @@
                         "description": "Trailing-stop policy configured on the parent order.",
                         "properties": {
                           "activationPrice": {
-                            "description": "Optional activation price: trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills. Expressed in quote units scaled by 1e9.",
+                            "description": "Optional activation price as a decimal string in quote asset units per base asset unit, for example '62000': trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills.",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                            "type": "string"
+                          },
+                          "limitPrice": {
+                            "description": "Maximum price of a trailing stop that buys back, as a decimal string in quote asset units per base asset unit, for example '65000': the most its exit pays, at which the quote it may spend is reserved. Present when the parent order sells; omitted when the parent order buys.",
                             "pattern": "^[0-9]+(\\.[0-9]+)?$",
                             "type": "string"
                           },
                           "maxSlippageBps": {
-                            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+                            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999 whichever side the exit trades. An order whose trailing stop sets 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would leave an exit that sells no positive price to sell at.",
                             "format": "int32",
                             "type": "integer"
                           },
@@ -754,23 +808,27 @@
                             "format": "int64",
                             "type": "integer"
                           },
+                          "trailingDistance": {
+                            "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                            "type": "string"
+                          },
                           "trailingDistanceBps": {
                             "description": "Trailing distance in basis points (1 bp = 0.01%).",
                             "format": "int32",
                             "type": "integer"
                           },
-                          "trailingDistanceTicks": {
-                            "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                            "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                            "type": "string"
+                          "triggerPriceSource": {
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                              }
+                            ],
+                            "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                           }
                         },
                         "required": [
-                          "activationPrice",
-                          "maxSlippageBps",
-                          "maxSlippageTicks",
-                          "trailingDistanceBps",
-                          "trailingDistanceTicks"
+                          "activationPrice"
                         ],
                         "type": "object"
                       },
@@ -823,7 +881,7 @@
                 "type": "object"
               },
               "avgPx": {
-                "description": "Average execution price across the lineage through this generation, in quote units scaled by 1e9. Zero if no fills.",
+                "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -831,6 +889,14 @@
                 "description": "Batch-replace identity that admitted this order. Zero for other origins.",
                 "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                 "type": "string"
+              },
+              "cancelReason": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.CancelReason"
+                  }
+                ],
+                "description": "For a CANCELED order, why it ended. Not set for every other status; JSON and REST responses then omit it."
               },
               "clientOrderId": {
                 "description": "Client-provided, account-scoped identifier for correlation, lookup, and cancellation. Empty when none was supplied.",
@@ -842,7 +908,12 @@
                 "type": "string"
               },
               "cumQty": {
-                "description": "Cumulative filled quantity across the lineage through this generation, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                "description": "Cumulative filled quantity across the lineage through this generation, as a decimal string in base asset units, for example '0.0005'.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "cumQuote": {
+                "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills. Each fill settles its quote rounded down to 18 decimal places, so cumQuote is exactly the quote the fills settled when the base asset's quantity scale is at most 9; above that, cumQuote can exceed it by less than 1e-18 per fill.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -859,13 +930,39 @@
                 ],
                 "description": "Fee asset selected for fills."
               },
+              "feeTotal": {
+                "additionalProperties": false,
+                "description": "Total fee of the fills across the lineage through this generation, net of rebates, in the order's fee asset. Order history reads and single-order reads that include execution history (the default) carry it. It can trail the order's fills: its quantity shows which fills it covers. Open-order reads, single-order reads without execution history and private stream order updates leave it unset.",
+                "properties": {
+                  "amount": {
+                    "description": "Net fee of the fills the total covers, their fees less their rebates, as a decimal string in feeAsset units, for example '0.96467428595184'. '0' when they charged no fee.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "isRebate": {
+                    "description": "True when the covered fills' rebates exceed their fees, so the amount was credited to the account rather than charged.",
+                    "type": "boolean"
+                  },
+                  "qty": {
+                    "description": "Executed quantity of the fills the total covers, as a decimal string in base asset units, for example '0.04148504'. Equal to the order's cumQty once every fill's fee is recorded; while a fill is still being recorded the two differ, and a later read includes it.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount",
+                  "isRebate",
+                  "qty"
+                ],
+                "type": "object"
+              },
               "inheritedCumQty": {
-                "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for the original order and immutable within a generation. cum_qty_scaled minus this value is the quantity executed by this generation, not the quantity new to a client session.",
+                "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, as a decimal string in base asset units, for example '0.0005'. '0' for the original order and immutable within a generation. cumQty minus this value is the quantity executed by this generation, not the quantity new to a client session.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
               "leavesQty": {
-                "description": "Remaining working quantity scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for terminal orders.",
+                "description": "Remaining working quantity as a decimal string in base asset units, for example '0.001'. '0' for terminal orders.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -891,7 +988,7 @@
                 "type": "object"
               },
               "marketClientRefPrice": {
-                "description": "Optional client-side reference price used for MARKET slippage protection, in quote units scaled by 1e9.",
+                "description": "Optional client-side reference price used for MARKET slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -919,7 +1016,7 @@
                 "description": "Order type."
               },
               "origQty": {
-                "description": "Current accepted total order quantity, updated by successful modifies, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -956,13 +1053,12 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.OrderTriggerType"
                       }
                     ],
-                    "description": "Trigger strategy that created this order, or unspecified for direct orders."
+                    "description": "Trigger strategy that created this order. Not set for direct orders; JSON and REST responses then omit it."
                   }
                 },
                 "required": [
                   "childSeq",
-                  "scope",
-                  "triggerType"
+                  "scope"
                 ],
                 "type": "object"
               },
@@ -971,9 +1067,17 @@
                 "type": "boolean"
               },
               "price": {
-                "description": "Limit price in quote units scaled by 1e9. Zero for MARKET orders.",
+                "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' for MARKET orders.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
+              },
+              "rejectReason": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.ErrorCode"
+                  }
+                ],
+                "description": "For a REJECTED order, why it was refused: the same error code the Orders API returns for the same refusal. Not set for every other status; JSON and REST responses then omit it."
               },
               "side": {
                 "allOf": [
@@ -1000,7 +1104,7 @@
                 "description": "Self-trade prevention mode."
               },
               "submittedMaxQuoteDebit": {
-                "description": "Submitted hard all-in quote debit limit, scaled by the pair's quote_quantity_scale from GetSpotConfig. Present only when that sizing method was submitted.",
+                "description": "Submitted hard all-in quote debit limit as a decimal string in quote asset units, for example '100'. Present only when that sizing method was submitted.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -1013,15 +1117,6 @@
                 "format": "date-time",
                 "type": "string"
               },
-              "terminalReason": {
-                "description": "Stable string for terminal_reason_code (e.g. \"POST_ONLY_CROSS\", \"USER_REQUEST\"). Empty for non-terminal orders.",
-                "type": "string"
-              },
-              "terminalReasonCode": {
-                "description": "Terminal reason code for canceled/rejected orders. Zero for non-terminal orders.",
-                "format": "int32",
-                "type": "integer"
-              },
               "tif": {
                 "allOf": [
                   {
@@ -1031,17 +1126,17 @@
                 "description": "Time-in-force policy."
               },
               "version": {
-                "description": "Per-order state version. Starts at 1 and increases for every published state change. Use this field to reconcile API and realtime updates.",
+                "description": "Per-order state version: 0 while the order is accepted but not yet on the book (status PENDING), then 1 from its first book state and higher for every later published execution-state change. Higher values identify newer execution state. Fee totals and requested enrichments are not covered by this version and may differ between responses with the same version.",
                 "format": "int32",
                 "type": "integer"
               }
             },
             "required": [
               "avgPx",
-              "batchRequestId",
               "clientOrderId",
               "createdAt",
               "cumQty",
+              "cumQuote",
               "feeAsset",
               "inheritedCumQty",
               "leavesQty",
@@ -1058,8 +1153,6 @@
               "status",
               "stpMode",
               "symbol",
-              "terminalReason",
-              "terminalReasonCode",
               "tif",
               "version"
             ],
@@ -1128,12 +1221,12 @@
                   "type": "string"
                 },
                 "price": {
-                  "description": "Execution price in quote units scaled by 1e9.",
+                  "description": "Execution price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "qty": {
-                  "description": "Executed quantity scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Executed quantity as a decimal string in base asset units, for example '0.001'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1159,6 +1252,7 @@
                 "executedAt",
                 "fee",
                 "feeAsset",
+                "feeIsRebate",
                 "isMaker",
                 "lineage",
                 "matchId",
@@ -1230,6 +1324,7 @@
           }
         },
         "required": [
+          "executionsComplete",
           "nextPageToken",
           "trades",
           "transfers"
@@ -1240,7 +1335,7 @@
         "additionalProperties": false,
         "properties": {
           "nextPageToken": {
-            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "description": "Opaque cursor for the next page. A page may hold fewer orders than requested, or none; continue while this token is non-empty. Empty when no more results exist.",
             "type": "string"
           },
           "orders": {
@@ -1250,10 +1345,10 @@
               "properties": {
                 "attachedRisk": {
                   "additionalProperties": false,
-                  "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists.",
+                  "description": "Attached risk controls + runtime state on the parent order. Empty when no attached risk exists. Order reads include it only when the request asks for it (include_attached_risk, include_attached_risk_state): an omission on request, never a removal. The private WebSocket always carries it in full, as a read asking for both does.",
                   "properties": {
                     "oco": {
-                      "description": "True when the take-profit and stop leg are linked as one-cancels-the-other.",
+                      "description": "True while the parent's legs were placed with oco and both the take-profit and a stop leg (stop-loss or trailing stop) are present. False once either leg is removed. A leg that ended, including one canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
                       "type": "boolean"
                     },
                     "stopLoss": {
@@ -1273,7 +1368,7 @@
                                   "description": "Resting GTC limit child.",
                                   "properties": {
                                     "price": {
-                                      "description": "Limit price in quote units scaled by 1e9.",
+                                      "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                       "type": "string"
                                     }
@@ -1295,9 +1390,17 @@
                               "type": "object"
                             },
                             "triggerPrice": {
-                              "description": "Trigger price in quote units scaled by 1e9.",
+                              "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
+                            },
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
@@ -1364,7 +1467,7 @@
                                   "description": "Resting GTC limit child.",
                                   "properties": {
                                     "price": {
-                                      "description": "Limit price in quote units scaled by 1e9.",
+                                      "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                       "type": "string"
                                     }
@@ -1386,9 +1489,17 @@
                               "type": "object"
                             },
                             "triggerPrice": {
-                              "description": "Trigger price in quote units scaled by 1e9.",
+                              "description": "Trigger price as a decimal string in quote asset units per base asset unit, for example '60000'.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
+                            },
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
@@ -1447,12 +1558,17 @@
                           "description": "Trailing-stop policy configured on the parent order.",
                           "properties": {
                             "activationPrice": {
-                              "description": "Optional activation price: trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills. Expressed in quote units scaled by 1e9.",
+                              "description": "Optional activation price as a decimal string in quote asset units per base asset unit, for example '62000': trailing only starts after this price is reached. If omitted, trailing starts immediately after the parent order fills.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "limitPrice": {
+                              "description": "Maximum price of a trailing stop that buys back, as a decimal string in quote asset units per base asset unit, for example '65000': the most its exit pays, at which the quote it may spend is reserved. Present when the parent order sells; omitted when the parent order buys.",
                               "pattern": "^[0-9]+(\\.[0-9]+)?$",
                               "type": "string"
                             },
                             "maxSlippageBps": {
-                              "description": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+                              "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999 whichever side the exit trades. An order whose trailing stop sets 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would leave an exit that sells no positive price to sell at.",
                               "format": "int32",
                               "type": "integer"
                             },
@@ -1461,23 +1577,27 @@
                               "format": "int64",
                               "type": "integer"
                             },
+                            "trailingDistance": {
+                              "description": "Trailing distance as a decimal price delta in quote asset units, for example '0.5'.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
                             "trailingDistanceBps": {
                               "description": "Trailing distance in basis points (1 bp = 0.01%).",
                               "format": "int32",
                               "type": "integer"
                             },
-                            "trailingDistanceTicks": {
-                              "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
-                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
-                              "type": "string"
+                            "triggerPriceSource": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
+                                }
+                              ],
+                              "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                             }
                           },
                           "required": [
-                            "activationPrice",
-                            "maxSlippageBps",
-                            "maxSlippageTicks",
-                            "trailingDistanceBps",
-                            "trailingDistanceTicks"
+                            "activationPrice"
                           ],
                           "type": "object"
                         },
@@ -1530,7 +1650,7 @@
                   "type": "object"
                 },
                 "avgPx": {
-                  "description": "Average execution price across the lineage through this generation, in quote units scaled by 1e9. Zero if no fills.",
+                  "description": "Average execution price across the lineage through this generation, as a decimal string in quote asset units per base asset unit, for example '0.000002908714285714': the exact executed quote amount divided by cumQty, rounded half to even at 18 decimal places, trailing zeros trimmed. '0' if no fills.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1538,6 +1658,14 @@
                   "description": "Batch-replace identity that admitted this order. Zero for other origins.",
                   "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                   "type": "string"
+                },
+                "cancelReason": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.CancelReason"
+                    }
+                  ],
+                  "description": "For a CANCELED order, why it ended. Not set for every other status; JSON and REST responses then omit it."
                 },
                 "clientOrderId": {
                   "description": "Client-provided, account-scoped identifier for correlation, lookup, and cancellation. Empty when none was supplied.",
@@ -1549,7 +1677,12 @@
                   "type": "string"
                 },
                 "cumQty": {
-                  "description": "Cumulative filled quantity across the lineage through this generation, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Cumulative filled quantity across the lineage through this generation, as a decimal string in base asset units, for example '0.0005'.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "cumQuote": {
+                  "description": "Exact quote amount of the fills across the lineage through this generation, before fees, as a decimal string in quote asset units, for example '3215.5809531728'. For a BUY sized by submittedMaxQuoteDebit, the quote it used is cumQuote plus feeTotal.amount when feeAsset is QUOTE, or minus it when feeTotal.isRebate is true, since a rebate is credited, and cumQuote alone when feeAsset is BASE; submittedMaxQuoteDebit less the quote it used is what it left unspent. '0' if no fills. Each fill settles its quote rounded down to 18 decimal places, so cumQuote is exactly the quote the fills settled when the base asset's quantity scale is at most 9; above that, cumQuote can exceed it by less than 1e-18 per fill.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1566,13 +1699,39 @@
                   ],
                   "description": "Fee asset selected for fills."
                 },
+                "feeTotal": {
+                  "additionalProperties": false,
+                  "description": "Total fee of the fills across the lineage through this generation, net of rebates, in the order's fee asset. Order history reads and single-order reads that include execution history (the default) carry it. It can trail the order's fills: its quantity shows which fills it covers. Open-order reads, single-order reads without execution history and private stream order updates leave it unset.",
+                  "properties": {
+                    "amount": {
+                      "description": "Net fee of the fills the total covers, their fees less their rebates, as a decimal string in feeAsset units, for example '0.96467428595184'. '0' when they charged no fee.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "isRebate": {
+                      "description": "True when the covered fills' rebates exceed their fees, so the amount was credited to the account rather than charged.",
+                      "type": "boolean"
+                    },
+                    "qty": {
+                      "description": "Executed quantity of the fills the total covers, as a decimal string in base asset units, for example '0.04148504'. Equal to the order's cumQty once every fill's fee is recorded; while a fill is still being recorded the two differ, and a later read includes it.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "isRebate",
+                    "qty"
+                  ],
+                  "type": "object"
+                },
                 "inheritedCumQty": {
-                  "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for the original order and immutable within a generation. cum_qty_scaled minus this value is the quantity executed by this generation, not the quantity new to a client session.",
+                  "description": "Cumulative filled base quantity inherited from predecessors when this replacement was accepted, as a decimal string in base asset units, for example '0.0005'. '0' for the original order and immutable within a generation. cumQty minus this value is the quantity executed by this generation, not the quantity new to a client session.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "leavesQty": {
-                  "description": "Remaining working quantity scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id. Zero for terminal orders.",
+                  "description": "Remaining working quantity as a decimal string in base asset units, for example '0.001'. '0' for terminal orders.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1598,7 +1757,7 @@
                   "type": "object"
                 },
                 "marketClientRefPrice": {
-                  "description": "Optional client-side reference price used for MARKET slippage protection, in quote units scaled by 1e9.",
+                  "description": "Optional client-side reference price used for MARKET slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1626,7 +1785,7 @@
                   "description": "Order type."
                 },
                 "origQty": {
-                  "description": "Current accepted total order quantity, updated by successful modifies, scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1663,13 +1822,12 @@
                           "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.OrderTriggerType"
                         }
                       ],
-                      "description": "Trigger strategy that created this order, or unspecified for direct orders."
+                      "description": "Trigger strategy that created this order. Not set for direct orders; JSON and REST responses then omit it."
                     }
                   },
                   "required": [
                     "childSeq",
-                    "scope",
-                    "triggerType"
+                    "scope"
                   ],
                   "type": "object"
                 },
@@ -1678,9 +1836,17 @@
                   "type": "boolean"
                 },
                 "price": {
-                  "description": "Limit price in quote units scaled by 1e9. Zero for MARKET orders.",
+                  "description": "Limit price as a decimal string in quote asset units per base asset unit, for example '61000.25'. '0' for MARKET orders.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
+                },
+                "rejectReason": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.ErrorCode"
+                    }
+                  ],
+                  "description": "For a REJECTED order, why it was refused: the same error code the Orders API returns for the same refusal. Not set for every other status; JSON and REST responses then omit it."
                 },
                 "side": {
                   "allOf": [
@@ -1707,7 +1873,7 @@
                   "description": "Self-trade prevention mode."
                 },
                 "submittedMaxQuoteDebit": {
-                  "description": "Submitted hard all-in quote debit limit, scaled by the pair's quote_quantity_scale from GetSpotConfig. Present only when that sizing method was submitted.",
+                  "description": "Submitted hard all-in quote debit limit as a decimal string in quote asset units, for example '100'. Present only when that sizing method was submitted.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1720,15 +1886,6 @@
                   "format": "date-time",
                   "type": "string"
                 },
-                "terminalReason": {
-                  "description": "Stable string for terminal_reason_code (e.g. \"POST_ONLY_CROSS\", \"USER_REQUEST\"). Empty for non-terminal orders.",
-                  "type": "string"
-                },
-                "terminalReasonCode": {
-                  "description": "Terminal reason code for canceled/rejected orders. Zero for non-terminal orders.",
-                  "format": "int32",
-                  "type": "integer"
-                },
                 "tif": {
                   "allOf": [
                     {
@@ -1738,17 +1895,17 @@
                   "description": "Time-in-force policy."
                 },
                 "version": {
-                  "description": "Per-order state version. Starts at 1 and increases for every published state change. Use this field to reconcile API and realtime updates.",
+                  "description": "Per-order state version: 0 while the order is accepted but not yet on the book (status PENDING), then 1 from its first book state and higher for every later published execution-state change. Higher values identify newer execution state. Fee totals and requested enrichments are not covered by this version and may differ between responses with the same version.",
                   "format": "int32",
                   "type": "integer"
                 }
               },
               "required": [
                 "avgPx",
-                "batchRequestId",
                 "clientOrderId",
                 "createdAt",
                 "cumQty",
+                "cumQuote",
                 "feeAsset",
                 "inheritedCumQty",
                 "leavesQty",
@@ -1765,8 +1922,6 @@
                 "status",
                 "stpMode",
                 "symbol",
-                "terminalReason",
-                "terminalReasonCode",
                 "tif",
                 "version"
               ],
@@ -1851,12 +2006,12 @@
                   "type": "string"
                 },
                 "price": {
-                  "description": "Execution price in quote units scaled by 1e9.",
+                  "description": "Execution price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "qty": {
-                  "description": "Executed quantity scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+                  "description": "Executed quantity as a decimal string in base asset units, for example '0.001'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -1882,6 +2037,7 @@
                 "executedAt",
                 "fee",
                 "feeAsset",
+                "feeIsRebate",
                 "isMaker",
                 "lineage",
                 "matchId",
@@ -1982,6 +2138,446 @@
           "RUNNING": "Trigger is executing runtime work (for example multi-step workflows)."
         }
       },
+      "polyester.rest.enum.orders.v1.CancelReason": {
+        "enum": [
+          "USER_REQUEST",
+          "IOC_REMAINDER",
+          "MARKET_REMAINDER",
+          "STP_EXPIRE_MAKER",
+          "STP_EXPIRE_TAKER",
+          "STP_EXPIRE_BOTH",
+          "REPLACED",
+          "GTD_EXPIRED",
+          "QTY_AT_OR_BELOW_FILLED",
+          "PAIR_DRAIN",
+          "ATTACHED_RISK_REFUSED",
+          "CANCEL_ALL_AFTER",
+          "ACCOUNT_REPAIR",
+          "TWAP_ROLLOVER",
+          "STRATEGY_CANCEL",
+          "SYSTEM",
+          "MARKET_HALTED",
+          "ATTACHED_EXIT_FIRED"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "ACCOUNT_REPAIR": "Canceled by the exchange while it recovered the account. Place new orders once the account trades again.",
+          "ATTACHED_EXIT_FIRED": "The order's attached take-profit, stop-loss or trailing stop fired while the order still rested: the exchange canceled the order's unfilled remainder before placing the attached order, so the two never trade with each other. Fills before the cancel stand.",
+          "ATTACHED_RISK_REFUSED": "The market refused one of the order's attached take-profit, stop-loss or trailing-stop legs, so the order's remainder and its other legs were canceled.",
+          "CANCEL_ALL_AFTER": "The account's cancel-all-after timer reached its deadline without a heartbeat.",
+          "GTD_EXPIRED": "A good-till-date order reached its expiry time.",
+          "IOC_REMAINDER": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a quote amount (max_quote_debit_scaled) that spends that amount ends FILLED instead.",
+          "MARKET_HALTED": "The market was halted: the exchange canceled every open order of the market. Fills before the cancel stand. The market refuses new orders until it trades again.",
+          "MARKET_REMAINDER": "The unfilled remainder of a market order: the book ran out, the next price was past the order's protection price, or the order reached the market's maximum order quantity. A market buy sized by a quote amount (max_quote_debit_scaled) that spends that amount, so that what is left buys no further quantity step, ends FILLED instead.",
+          "PAIR_DRAIN": "The market was disabled: the exchange canceled its resting orders.",
+          "QTY_AT_OR_BELOW_FILLED": "An amend or replace set the order's total quantity at or below its filled quantity, so the order ended at its filled quantity.",
+          "REPLACED": "A replace ended this order and created its successor.",
+          "STP_EXPIRE_BOTH": "Self-trade prevention canceled both this order and the order belonging to the same root account, including another subaccount of that root, that it would have matched.",
+          "STP_EXPIRE_MAKER": "Self-trade prevention canceled this resting order when an incoming order belonging to the same root account, including another subaccount of that root, would have matched it.",
+          "STP_EXPIRE_TAKER": "Self-trade prevention canceled this incoming order instead of matching a resting order belonging to the same root account, including another subaccount of that root.",
+          "STRATEGY_CANCEL": "An order a trigger placed, such as a TWAP slice, a ladder level, a stop's child or an attached leg's exit, canceled because its trigger ended or another leg took over the exit.",
+          "SYSTEM": "The exchange canceled the order for a reason it does not name.",
+          "TWAP_ROLLOVER": "A TWAP slice its TWAP canceled at the next slice's due time; its unfilled remainder moves to the TWAP's later slices.",
+          "USER_REQUEST": "A cancel the account sent: a cancel, a batch cancel or a cancel-all."
+        }
+      },
+      "polyester.rest.enum.orders.v1.ErrorCode": {
+        "enum": [
+          "BAD_REQUEST",
+          "INVALID_ARGUMENT",
+          "INSUFFICIENT_FUNDS",
+          "UNKNOWN_SYMBOL",
+          "BAD_PRICE",
+          "BAD_QTY",
+          "MIN_NOTIONAL",
+          "QTY_STEP_SIZE",
+          "CONFLICT_DUPLICATE_CLIENT_ORDER_ID",
+          "UNAVAILABLE",
+          "UNAUTHENTICATED",
+          "PERMISSION_DENIED",
+          "NOT_FOUND",
+          "UPSTREAM_ERROR",
+          "FEE_ASSET_NOT_ALLOWED",
+          "PAIR_DISABLED",
+          "ORDER_UNKNOWN",
+          "INTERNAL_ERROR",
+          "SUBACCOUNT_INACTIVE",
+          "POLICY_MARKET_DENY",
+          "POLICY_MAX_NOTIONAL",
+          "POLICY_TRADING_HALTED",
+          "POLICY_SPOT_TRADE_DENY",
+          "API_KEY_ROOT_SCOPE_ONLY",
+          "API_KEY_SUB_SCOPE_ONLY",
+          "API_KEY_SUBACCOUNT_MISMATCH",
+          "API_KEY_POLICY_REQUIRED",
+          "API_KEY_UNKNOWN",
+          "API_KEY_MARKET_DENY",
+          "PRICE_TICK_SIZE",
+          "MIN_QTY",
+          "POST_ONLY_LIMIT_ONLY",
+          "BATCH_TOO_LARGE",
+          "POLICY_MAX_OPEN_ORDERS",
+          "MODIFICATION_REQUIRES_REPLACE",
+          "CONFLICT_IDEMPOTENCY_KEY_REUSE",
+          "MARKET_PRICE_UNAVAILABLE",
+          "PAIR_NOT_LISTED_YET",
+          "PAIR_DELISTED",
+          "PAIR_CANCEL_ONLY",
+          "PAIR_POST_ONLY",
+          "PAIR_REDUCE_ONLY",
+          "RISK_LIMIT",
+          "MARKET_HALTED",
+          "ACCOUNT_UNKNOWN",
+          "POST_ONLY_CROSS",
+          "REDUCE_ONLY_BLOCKED",
+          "PRICE_BAND_VIOLATION",
+          "MARKET_CAP_VIOLATION",
+          "EMPTY_BOOK",
+          "FOK_INSUFFICIENT_LIQUIDITY",
+          "ORDER_ALREADY_TERMINAL",
+          "TRIGGER_PRICE_INVALID",
+          "TRIGGER_PRICE_SOURCE_UNSUPPORTED",
+          "TRAILING_DISTANCE_INVALID",
+          "TRIGGER_NOT_FOUND",
+          "TRIGGER_STATUS_INVALID",
+          "TRIGGER_NOT_MODIFIABLE",
+          "CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID",
+          "MAX_SLIPPAGE_INVALID",
+          "STALE_QUOTE",
+          "VALIDATION_ERROR",
+          "OVERLOADED",
+          "MAX_QUOTE_DEBIT_TOO_SMALL",
+          "RATE_LIMIT_EXCEEDED",
+          "SUBACCOUNT_READ_FORBIDDEN",
+          "POLICY_SPOT_READ_DENY",
+          "API_KEY_SPOT_READ_DENY",
+          "CANCEL_REQUEST_EXPIRED",
+          "MAX_QTY",
+          "MAX_NOTIONAL",
+          "QTY_AT_OR_BELOW_FILLED",
+          "GATEWAY_MISCONFIGURED",
+          "INVALID_ORDER_ID",
+          "CHILD_QTY_RAISE_NOT_ALLOWED",
+          "ATTACHED_RISK_NOT_SUPPORTED",
+          "SETTLEMENT_BACKLOGGED",
+          "PRICE_LEVEL_QUANTITY_LIMIT",
+          "MARKET_QUOTE_STALE",
+          "MARKET_QUOTE_UNHEALTHY",
+          "INVALID_TIME_IN_FORCE",
+          "QUICKSWAP_NOT_PERMITTED",
+          "DUPLICATE_ORDER_ID",
+          "MAX_OPEN_ORDERS_TOTAL",
+          "STP_MODE_NOT_ALLOWED",
+          "PAIR_BACKLOGGED",
+          "PRICE_LEVELS_EXHAUSTED",
+          "CLIENT_ORDER_IDS_EXHAUSTED",
+          "ORDER_ID_CONFLICT",
+          "INVALID_SIDE",
+          "INVALID_ORDER_TYPE",
+          "INVALID_STP_MODE",
+          "INVALID_ORDER_FLAGS",
+          "BATCH_OTHER_ITEM_INVALID",
+          "REPLACE_ONTO_OWN_ID",
+          "INVALID_CLIENT_ORDER_ID",
+          "ORDER_SEQUENCE_EXHAUSTED",
+          "INVALID_HANDLING_MODE",
+          "FEE_SCHEDULE_UNAVAILABLE",
+          "POLICY_UNAVAILABLE",
+          "CANCEL_ALL_AFTER_TIMEOUT_INVALID",
+          "CANCEL_SCOPE_TOO_LARGE",
+          "RATE_LIMIT_POLICY_UNAVAILABLE",
+          "SYSTEM_RATE_LIMITED",
+          "ORDER_MODIFY_IN_PROGRESS",
+          "ORDER_PLACEMENT_PENDING",
+          "INVALID_MODIFY_BEHAVIOR",
+          "BATCH_REPLACE_ONLY_REQUIRED",
+          "BATCH_SINGLE_SYMBOL_REQUIRED",
+          "REQUEST_RECEIPTS_EXHAUSTED",
+          "INTENT_ID_INVALID",
+          "DRY_RUN_INVALID",
+          "CANCEL_ALL_AFTER_SCOPE_CONFLICT",
+          "NEW_ACCOUNT_CAPACITY_REACHED",
+          "TRIGGER_CHILD_PRICE_NOT_MODIFIABLE",
+          "TRIGGER_GENERATIONS_EXHAUSTED",
+          "TRIGGER_CONTROL_SHARE_EXHAUSTED",
+          "TRIGGER_CONTROLS_BUSY",
+          "TRIGGER_TYPE_NOT_SUPPORTED",
+          "INVALID_TRIGGER_TYPE",
+          "TRIGGER_DIRECTION_INVALID",
+          "TRIGGER_QTY_INVALID",
+          "TRIGGER_BUY_REQUIRES_LIMIT",
+          "ACCOUNT_ROUTING_INVALID",
+          "TRIGGER_LIMIT_EXCEEDED",
+          "TRIGGER_CONTROL_IN_PROGRESS",
+          "TRIGGER_PATCH_EMPTY",
+          "CLIENT_TRIGGER_ID_INVALID",
+          "TRIGGER_ACTIVATION_PRICE_INVALID",
+          "SLIPPAGE_TICKS_INVALID",
+          "SLIPPAGE_BPS_INVALID",
+          "TRIGGER_CONTROL_OUTCOME_UNKNOWN",
+          "TRIGGER_CAPACITY_REACHED",
+          "RESERVATION_CAPACITY_REACHED",
+          "CLIENT_ORDER_ID_CAPACITY_REACHED",
+          "ACCOUNT_RESERVATION_LIMIT_REACHED",
+          "INVALID_TRIGGER_CONTROL",
+          "TRIGGER_PATCH_NOT_ALLOWED",
+          "TRIGGER_PATCH_FIELD_UNKNOWN",
+          "TRIGGER_PATCH_VALUE_UNMASKED",
+          "TRIGGER_PATCH_PRICE_MODE_INVALID",
+          "ACCOUNT_ORDERS_SUSPENDED",
+          "TRAILING_SIDE_NOT_SUPPORTED",
+          "TRAILING_CHILD_NOT_MARKET",
+          "TWAP_DURATION_INVALID",
+          "LIMIT_CHILD_SLIPPAGE_SET",
+          "SLIPPAGE_BOUNDS_CONFLICT",
+          "TWAP_INTERVAL_INVALID",
+          "LADDER_LEVEL_REJECTED",
+          "LADDER_RANGE_TOO_NARROW",
+          "LADDER_LEVELS_INVALID",
+          "ORDER_LIMITS_UNAVAILABLE",
+          "ORDER_TYPE_NOT_ALLOWED_IN_AUCTION",
+          "POST_ONLY_NOT_ALLOWED_IN_AUCTION",
+          "QUICKSWAP_FEE_DETAILS_INCOMPLETE",
+          "QUICKSWAP_MARKET_NOT_PRICED",
+          "QUICKSWAP_BROKER_FEE_TERMS_MISMATCH",
+          "QUICKSWAP_FEE_RECIPIENT_IS_PAYER",
+          "QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE",
+          "QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE",
+          "QUICKSWAP_ACCOUNT_OWNER_UNKNOWN",
+          "QUICKSWAP_DISABLED",
+          "QUICKSWAP_ATTACHED_RISK_NOT_ALLOWED",
+          "QUICKSWAP_ORDER_NOT_MODIFIABLE",
+          "QUICKSWAP_FEE_TOTAL_TOO_HIGH",
+          "QUICKSWAP_BROKER_FEE_TERMS_INVALID",
+          "QUICKSWAP_BROKER_INVALID",
+          "QUICKSWAP_FEE_SCHEDULE_INVALID",
+          "QUICKSWAP_MARKET_FEE_INVALID",
+          "QUICKSWAP_SETUP_INVALID",
+          "QUICKSWAP_CAPACITY_REACHED",
+          "ATTACHED_EXIT_WORKING",
+          "MARKET_TRIGGER_LIMIT_EXCEEDED",
+          "MARKET_TWAP_LIMIT_EXCEEDED",
+          "MARKET_LADDER_LIMIT_EXCEEDED",
+          "CHILD_QTY_EXCEEDS_REMAINING",
+          "ORDER_CANCEL_OUTCOME_UNKNOWN",
+          "ORDER_MODIFY_OUTCOME_UNKNOWN",
+          "ORDER_REPAIRING",
+          "ACCOUNT_REPAIRING",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+          "ORDER_CREATE_OUTCOME_UNKNOWN",
+          "TRIGGER_CREATE_OUTCOME_UNKNOWN",
+          "TRIGGER_SYMBOL_MISMATCH",
+          "MAX_OPEN_ORDERS_PER_PAIR",
+          "SELF_TRADE_PREVENTED",
+          "ATTACHED_LEGS_EXCEEDED",
+          "FEE_ASSET_INVALID",
+          "FEE_CEILING_INVALID",
+          "UNSUPPORTED_FIELD_SET",
+          "TRIGGER_FIRE_LIMIT_REACHED",
+          "CONDITION_FLAGS_INVALID",
+          "CONDITION_PARAMETER_SET",
+          "TWAP_CAPACITY_REACHED",
+          "CHILD_ORDER_INCONSISTENT"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "ACCOUNT_ORDERS_SUSPENDED": "New orders, changes and trigger orders on this account are suspended until a balance issue is resolved; cancels still work. Nothing changed.",
+          "ACCOUNT_REPAIRING": "This account's orders are being canceled while its balances are brought back in line, so new orders, changes and trigger orders are paused for a short time. Nothing changed; cancels still work. Try again shortly.",
+          "ACCOUNT_RESERVATION_LIMIT_REACHED": "The account's open orders and triggers hold its maximum number of fund reservations.",
+          "ACCOUNT_ROUTING_INVALID": "The account's trading route is not configured for triggers, so the trigger was not admitted. Contact support if it persists.",
+          "ACCOUNT_UNKNOWN": "Referenced account could not be resolved by the trading service.",
+          "API_KEY_MARKET_DENY": "API key policy does not allow trading this market, even though the sub-account policy does.",
+          "API_KEY_POLICY_REQUIRED": "API key must have an attached policy before it can be used for trading.",
+          "API_KEY_ROOT_SCOPE_ONLY": "API key is scoped to the master/root account and cannot trade on sub-accounts.",
+          "API_KEY_SPOT_READ_DENY": "API key policy does not allow reading spot data.",
+          "API_KEY_SUBACCOUNT_MISMATCH": "API key is scoped to a different sub-account than the one requested.",
+          "API_KEY_SUB_SCOPE_ONLY": "API key is scoped to a specific sub-account and cannot trade on the master/root account.",
+          "API_KEY_UNKNOWN": "API key referenced in the request could not be resolved by the Orders service.",
+          "ATTACHED_EXIT_WORKING": "An exit order placed by one of the order's attached take-profit or stop legs is still working, so the order's attached legs can't be added, edited, paused or resumed now; removing a leg is still accepted. Nothing changed; retry once the exit completes.",
+          "ATTACHED_LEGS_EXCEEDED": "The order already carries every attached leg it may hold, so another attached leg was refused. Legs being cancelled count until they end: retry once they have ended.",
+          "ATTACHED_RISK_NOT_SUPPORTED": "Attached take-profit, stop-loss or trailing legs can't be applied here: this market takes none, an attached trailing stop isn't offered yet, or the modify changes them together with the order's price, quantity, client order ID or a replace. Nothing changed.",
+          "BAD_PRICE": "Price is invalid for the requested order.",
+          "BAD_QTY": "Quantity is invalid for the requested order.",
+          "BAD_REQUEST": "Request could not be parsed or was structurally invalid.",
+          "BATCH_OTHER_ITEM_INVALID": "Another item of the same batch was invalid, so this item was not applied either. Nothing in the batch changed.",
+          "BATCH_REPLACE_ONLY_REQUIRED": "No longer returned: each BatchReplaceOrders item follows ModifyOrder's default amend-or-replace rule. The value stays reserved.",
+          "BATCH_SINGLE_SYMBOL_REQUIRED": "An item of the batch modify named no symbol, or another symbol than the batch's first item, so the batch was refused.",
+          "BATCH_TOO_LARGE": "Batch size exceeds the maximum allowed.",
+          "CANCEL_ALL_AFTER_SCOPE_CONFLICT": "A cancel-all-after is already due to fire, and the re-arm's scope does not cover every symbol of the pending one.",
+          "CANCEL_ALL_AFTER_TIMEOUT_INVALID": "The cancel-all-after timeout is neither 0, which disarms it, nor between 10 and 120 seconds.",
+          "CANCEL_REQUEST_EXPIRED": "The cancel request exceeded its bounded internal replay window.",
+          "CANCEL_SCOPE_TOO_LARGE": "The cancel-all request named more than 100 symbols.",
+          "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
+          "CHILD_QTY_EXCEEDS_REMAINING": "The new quantity of a TWAP order's slice would leave more than the TWAP's remaining quantity. Nothing changed; a slice can be raised up to what the TWAP still has to execute.",
+          "CHILD_QTY_RAISE_NOT_ALLOWED": "The quantity of a trigger's child order or a ladder order can't be raised above its planned quantity. Nothing changed.",
+          "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
+          "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
+          "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID is empty, longer than 36 bytes or otherwise not valid.",
+          "CONDITION_FLAGS_INVALID": "The trigger's condition flags were not valid.",
+          "CONDITION_PARAMETER_SET": "The trigger set a condition parameter its condition does not take.",
+          "CONFLICT_DUPLICATE_CLIENT_ORDER_ID": "Client order ID is already in use on this account, by an open order or by an order that ended recently; an ended order keeps its client order ID reserved for at least 60 seconds. Reuse returns this code even with the same payload. Use GetOrder to reconcile, then retry with a new client order ID.",
+          "CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID": "Client trigger ID is already used, either by a trigger with a different payload or by an earlier create that failed or was rolled back. List triggers to reconcile by client trigger ID, then retry with a new client trigger ID.",
+          "CONFLICT_IDEMPOTENCY_KEY_REUSE": "Idempotency key was reused with a different payload.",
+          "DRY_RUN_INVALID": "The cancel-all request's dry-run flag was neither 0 nor 1.",
+          "DUPLICATE_ORDER_ID": "The order identifier assigned to the request is already in use by another order of the market. Nothing changed.",
+          "EMPTY_BOOK": "Market order could not execute due to empty book.",
+          "FEE_ASSET_INVALID": "The trigger's fee asset was not valid.",
+          "FEE_ASSET_NOT_ALLOWED": "Requested fee asset is not allowed for this order.",
+          "FEE_CEILING_INVALID": "The trigger's maximum fee rate was not valid.",
+          "FEE_SCHEDULE_UNAVAILABLE": "The fees that apply to the order cannot be determined right now, so it was not admitted. Retry later.",
+          "FOK_INSUFFICIENT_LIQUIDITY": "FOK order rejected due to insufficient immediate liquidity.",
+          "GATEWAY_MISCONFIGURED": "The trading gateway that took the request is misconfigured for the order service behind it. An operator must correct it; retrying does not help.",
+          "INSUFFICIENT_FUNDS": "Account does not have enough available balance for the order.",
+          "INTENT_ID_INVALID": "The cancel-all or cancel-all-after request carried an intent identifier of zero.",
+          "INTERNAL_ERROR": "Order processing failed because of an unexpected error.",
+          "INVALID_ARGUMENT": "Request fields failed validation.",
+          "INVALID_CLIENT_ORDER_ID": "The client order ID is longer than 36 bytes or otherwise not valid.",
+          "INVALID_HANDLING_MODE": "The order handling mode is not a known or accepted mode.",
+          "INVALID_MODIFY_BEHAVIOR": "The modify behavior is not a known behavior.",
+          "INVALID_ORDER_FLAGS": "An order flag is unknown, or not accepted with this order type or time in force, or on a trigger's child order.",
+          "INVALID_ORDER_ID": "The order identifier or the replacement order identifier is not valid.",
+          "INVALID_ORDER_TYPE": "The order type, or a trigger's child order type, is not a known order type.",
+          "INVALID_SIDE": "The order side, or a trigger's child order side, is not a known side.",
+          "INVALID_STP_MODE": "The self-trade prevention mode is not a known mode.",
+          "INVALID_TIME_IN_FORCE": "The time in force, or its expiry time, is not accepted for this order or for a trigger's child order type.",
+          "INVALID_TRIGGER_CONTROL": "The requested trigger operation is not a known operation.",
+          "INVALID_TRIGGER_TYPE": "The trigger type is not a known type.",
+          "LADDER_LEVELS_INVALID": "A ladder places from 2 to 100 orders.",
+          "LADDER_LEVEL_REJECTED": "One of the ladder's orders can't be placed, so the ladder was not created. Nothing changed.",
+          "LADDER_RANGE_TOO_NARROW": "The ladder's price range is too narrow to place its orders at least one price tick apart.",
+          "LIMIT_CHILD_SLIPPAGE_SET": "The TWAP sets a slippage bound, but its slices are LIMIT orders, which take none.",
+          "MARKET_CAP_VIOLATION": "Market-cap guard rejected the order.",
+          "MARKET_HALTED": "Market is halted.",
+          "MARKET_LADDER_LIMIT_EXCEEDED": "The account already has the most ladder orders one account may have on this market. Nothing changed; retry once one of them ends.",
+          "MARKET_PRICE_UNAVAILABLE": "MARKET BUY cannot be reserved because no reference/top-of-book price is available.",
+          "MARKET_QUOTE_STALE": "The market order carried no client reference price, and the pair's reference quote (top of book) was older than its freshness bound when the order was admitted.",
+          "MARKET_QUOTE_UNHEALTHY": "The market order carried no client reference price, and the pair's reference quote could not be used to price it, for example because it postdated the order or carried an invalid price.",
+          "MARKET_TRIGGER_LIMIT_EXCEEDED": "The account already has the most triggers one account may have on this market, attached take-profit, stop-loss and trailing legs included. Nothing changed; retry once one of them ends.",
+          "MARKET_TWAP_LIMIT_EXCEEDED": "The account already has the most TWAP orders one account may have on this market. Nothing changed; retry once one of them ends.",
+          "MAX_NOTIONAL": "Order notional is above the pair maximum (quote units). A stricter sub-account policy cap returns POLICY_MAX_NOTIONAL instead.",
+          "MAX_OPEN_ORDERS_PER_PAIR": "The account has reached its maximum number of resting orders in this market. Good-till-cancelled and good-till-date orders count until they end; immediate-or-cancel, fill-or-kill and market orders never count, and a replace keeps its order's place. Nothing changed; cancel a resting order in this market first.",
+          "MAX_OPEN_ORDERS_TOTAL": "The account has reached its maximum number of open orders across all markets. A stricter sub-account policy cap returns POLICY_MAX_OPEN_ORDERS instead.",
+          "MAX_QTY": "Quantity is above the pair maximum: the market-order maximum for MARKET orders, the limit-order maximum otherwise (base units).",
+          "MAX_QUOTE_DEBIT_TOO_SMALL": "The all-in quote budget cannot resolve one valid step-aligned base quantity.",
+          "MAX_SLIPPAGE_INVALID": "Max slippage (ticks or bps) is out of range or leaves no valid execution price bound. Applies to market orders and to standalone and attached trailing stops, on create and on modify; for example, a 10000 bps cap on a market order or trailing stop that sells.",
+          "MIN_NOTIONAL": "Order notional is below the pair minimum.",
+          "MIN_QTY": "Quantity is below the pair minimum quantity (base units).",
+          "MODIFICATION_REQUIRES_REPLACE": "Modify request in AMEND_ONLY mode requires replace semantics.",
+          "NEW_ACCOUNT_CAPACITY_REACHED": "The venue holds its maximum number of account access records, so an account trading this market for the first time cannot be admitted. Retry later.",
+          "NOT_FOUND": "Requested order or resource was not found.",
+          "ORDER_ALREADY_TERMINAL": "The order has already ended (filled, canceled or expired).",
+          "ORDER_CANCEL_OUTCOME_UNKNOWN": "The order cancellation was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch cancellation, every item's outcome is unknown; read them back. For a cancel all, some or all of the matching orders may be canceled; read open orders. For a cancel all after heartbeat, the switch may or may not have been armed, refreshed or disabled; send the heartbeat again.",
+          "ORDER_CREATE_OUTCOME_UNKNOWN": "The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or repeat the batch with the same request ID and payload within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice.",
+          "ORDER_ID_CONFLICT": "The order identifier is held by a different, earlier order, so the request was not applied. Nothing changed.",
+          "ORDER_LIMITS_UNAVAILABLE": "This market's order limits aren't set yet, so it can't take new orders.",
+          "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. Retry once it completes.",
+          "ORDER_MODIFY_OUTCOME_UNKNOWN": "The order modification was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch replacement, every item's outcome is unknown; read them back.",
+          "ORDER_PLACEMENT_PENDING": "The order, or the replace that created it, has not been placed on the book yet, so it cannot be modified. Retry shortly.",
+          "ORDER_REPAIRING": "This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.",
+          "ORDER_SEQUENCE_EXHAUSTED": "The account used every order identifier available to it in this market. Retrying does not help; contact support.",
+          "ORDER_TYPE_NOT_ALLOWED_IN_AUCTION": "This market is in an auction call and takes only limit orders that rest without crossing the book; market, immediate-or-cancel and fill-or-kill orders are refused. Nothing changed.",
+          "ORDER_UNKNOWN": "Referenced order could not be resolved.",
+          "OVERLOADED": "The account already has its maximum order requests in flight; nothing was admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after one of the outstanding requests completes.",
+          "PAIR_BACKLOGGED": "The trading pair is busy with the account's earlier requests, so this one was not admitted and nothing was reserved. Retry shortly.",
+          "PAIR_CANCEL_ONLY": "Pair is in cancel-only mode.",
+          "PAIR_DELISTED": "Pair was delisted and is no longer tradable.",
+          "PAIR_DISABLED": "Pair is disabled and does not accept orders.",
+          "PAIR_NOT_LISTED_YET": "Pair exists but is not listed yet.",
+          "PAIR_POST_ONLY": "Pair is in post-only mode and requires post_only=true.",
+          "PAIR_REDUCE_ONLY": "Pair is in reduce-only mode and does not accept new spot orders.",
+          "PERMISSION_DENIED": "Caller is authenticated but not allowed to perform this action.",
+          "POLICY_MARKET_DENY": "Sub-account policy prevented trading on this market (e.g. pair mask).",
+          "POLICY_MAX_NOTIONAL": "Sub-account policy max order notional exceeded.",
+          "POLICY_MAX_OPEN_ORDERS": "Sub-account policy maximum number of open orders has been reached.",
+          "POLICY_SPOT_READ_DENY": "Sub-account policy does not allow reading spot data.",
+          "POLICY_SPOT_TRADE_DENY": "Sub-account policy does not allow spot trading (action mask).",
+          "POLICY_TRADING_HALTED": "Trading has been globally halted for this sub-account.",
+          "POLICY_UNAVAILABLE": "The account's trading policy cannot be evaluated right now, so the order was not admitted. Retry later.",
+          "POST_ONLY_CROSS": "Post-only order would cross the book.",
+          "POST_ONLY_LIMIT_ONLY": "Post-only is only valid for LIMIT orders.",
+          "POST_ONLY_NOT_ALLOWED_IN_AUCTION": "This market is in an auction call; new post-only orders are refused. Nothing changed.",
+          "PRICE_BAND_VIOLATION": "Price band guard rejected the order.",
+          "PRICE_LEVELS_EXHAUSTED": "The order book of the market holds its maximum number of distinct price levels, so an order at a new price cannot rest. Nothing changed.",
+          "PRICE_LEVEL_QUANTITY_LIMIT": "The order would take the total quantity resting at its price past the most a price level can hold, even if some quantity still fits. Nothing changed: a new order was not placed, a modified order keeps resting as it was, and the other orders at that price are unchanged. Another price or a smaller quantity, or the same order once less quantity rests at that price, is accepted.",
+          "PRICE_TICK_SIZE": "Price must align with the pair tick size, including trigger and activation prices.",
+          "QTY_AT_OR_BELOW_FILLED": "The replacement total quantity is at or below the order's filled quantity: the order ended at its filled quantity and no replacement order was created.",
+          "QTY_STEP_SIZE": "Quantity does not align with the pair step size.",
+          "QUICKSWAP_ACCOUNT_OWNER_UNKNOWN": "The QuickSwap account is not ready yet; no order was placed. Retry shortly.",
+          "QUICKSWAP_ATTACHED_RISK_NOT_ALLOWED": "QuickSwap orders can't carry take-profit or stop-loss legs.",
+          "QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE": "The broker's fee account isn't available yet; retry shortly.",
+          "QUICKSWAP_BROKER_FEE_TERMS_INVALID": "The broker fee terms are invalid and can't be used.",
+          "QUICKSWAP_BROKER_FEE_TERMS_MISMATCH": "The broker fee terms belong to another broker.",
+          "QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE": "The broker fee terms aren't available yet; retry shortly.",
+          "QUICKSWAP_BROKER_INVALID": "The broker's QuickSwap setup is invalid and can't be used.",
+          "QUICKSWAP_CAPACITY_REACHED": "QuickSwap's capacity for fee settings is reached; this order can't be placed.",
+          "QUICKSWAP_DISABLED": "QuickSwap isn't enabled for this account's trading.",
+          "QUICKSWAP_FEE_DETAILS_INCOMPLETE": "The request's QuickSwap fee details are incomplete: a fee schedule needs a broker, and a broker or broker fee terms need a fee schedule.",
+          "QUICKSWAP_FEE_RECIPIENT_IS_PAYER": "A QuickSwap fee would be paid into the account placing the order.",
+          "QUICKSWAP_FEE_SCHEDULE_INVALID": "The QuickSwap fee schedule is invalid and can't be used.",
+          "QUICKSWAP_FEE_TOTAL_TOO_HIGH": "The QuickSwap fees together would exceed the order's value.",
+          "QUICKSWAP_MARKET_FEE_INVALID": "The QuickSwap fee for this market is invalid and can't be used.",
+          "QUICKSWAP_MARKET_NOT_PRICED": "The requested QuickSwap fee schedule doesn't price this market.",
+          "QUICKSWAP_NOT_PERMITTED": "The request carried QuickSwap terms that the account or market does not accept.",
+          "QUICKSWAP_ORDER_NOT_MODIFIABLE": "QuickSwap orders can't be amended or replaced.",
+          "QUICKSWAP_SETUP_INVALID": "QuickSwap's setup is invalid, so QuickSwap orders can't be placed.",
+          "RATE_LIMIT_EXCEEDED": "The account exhausted its current order-admission quota.",
+          "RATE_LIMIT_POLICY_UNAVAILABLE": "No usable rate-limit policy applies to the account right now, so the request was refused rather than admitted unlimited. Retry later.",
+          "REDUCE_ONLY_BLOCKED": "Reduce-only policy blocked the order.",
+          "REPLACE_ONTO_OWN_ID": "The replacement order identifier equals the identifier of the order it replaces.",
+          "REQUEST_RECEIPTS_EXHAUSTED": "The account keeps its maximum number of recent modify or batch requests for duplicate detection. Retry once earlier ones expire.",
+          "RESERVATION_CAPACITY_REACHED": "The venue's capacity for fund reservations is exhausted right now, so the trigger's child order could not be reserved. Retry later.",
+          "RISK_LIMIT": "Account-level risk limits were exceeded.",
+          "SELF_TRADE_PREVENTED": "Self-trade prevention expired the order of an attached take-profit, stop-loss or trailing stop because it would have traded with another of the account's resting orders. It is reported as the trigger's fire refusal reason, never as the answer to a request: the attached order stays active. New trades and price updates do not fire it while the other order is first in line at the best price; once that order is gone or no longer first there, it fires again if its trigger condition still holds.",
+          "SETTLEMENT_BACKLOGGED": "The account has too many filled or ended orders whose settlement has not completed yet. Nothing changed; the request is accepted again once settlement catches up.",
+          "SLIPPAGE_BOUNDS_CONFLICT": "The slippage bound is given both in ticks and in basis points; give only one.",
+          "SLIPPAGE_BPS_INVALID": "The trigger's slippage bound in basis points is not valid for its child order.",
+          "SLIPPAGE_TICKS_INVALID": "The trigger's slippage bound in ticks is not valid for its child order.",
+          "STALE_QUOTE": "Client reference price is stale compared to server-side BBO/drift policy.",
+          "STP_MODE_NOT_ALLOWED": "The self-trade prevention mode is not one the venue accepts for this order.",
+          "SUBACCOUNT_INACTIVE": "Sub-account is present but not in an active state (disabled, deleted, etc.).",
+          "SUBACCOUNT_READ_FORBIDDEN": "Caller has a sub-account role that does not allow reading spot data.",
+          "SYSTEM_RATE_LIMITED": "The venue-wide admission rate that the account shares with other accounts is exhausted. The account's own limit was not reached; retry shortly.",
+          "TRAILING_CHILD_NOT_MARKET": "A trailing stop that sells must have a MARKET child order.",
+          "TRAILING_DISTANCE_INVALID": "Trailing stop distance must be positive.",
+          "TRAILING_SIDE_NOT_SUPPORTED": "A trailing stop's side is not supported. Trailing stops accept either side, so this code is not currently returned.",
+          "TRIGGER_ACTIVATION_PRICE_INVALID": "The trailing trigger's activation price is not positive or not on the pair's tick.",
+          "TRIGGER_BUY_REQUIRES_LIMIT": "A buy trailing stop's child order is not a LIMIT order with a maximum price; its funds are reserved at that price.",
+          "TRIGGER_CAPACITY_REACHED": "The venue holds its maximum number of triggers across accounts right now. Retry later.",
+          "TRIGGER_CHILD_PRICE_NOT_MODIFIABLE": "The modify patched the trigger's child limit price or price mode, which the trigger does not accept.",
+          "TRIGGER_CONTROLS_BUSY": "The venue's capacity for pending trigger changes is exhausted across accounts. Retry shortly.",
+          "TRIGGER_CONTROL_IN_PROGRESS": "An earlier change of the trigger has not completed yet. Retry once it completes.",
+          "TRIGGER_CONTROL_OUTCOME_UNKNOWN": "The trigger change was not confirmed within its time bound. Its outcome is unknown and it may still apply; read the trigger before retrying.",
+          "TRIGGER_CONTROL_SHARE_EXHAUSTED": "The account has its maximum number of trigger changes whose outcome is still pending. Retry shortly.",
+          "TRIGGER_CREATE_OUTCOME_UNKNOWN": "The trigger was sent but not confirmed in time. Its outcome is unknown and it may have been created; read the triggers for its client trigger ID before retrying.",
+          "TRIGGER_DIRECTION_INVALID": "The trigger direction is neither ABOVE nor BELOW.",
+          "TRIGGER_FIRE_LIMIT_REACHED": "The trigger could not fire again.",
+          "TRIGGER_GENERATIONS_EXHAUSTED": "The trigger reached its last modification. Nothing changed; cancel it and create a new trigger instead.",
+          "TRIGGER_LIMIT_EXCEEDED": "The account has its maximum number of live and recently ended triggers.",
+          "TRIGGER_NOT_FOUND": "Trigger not found (for cancel/get operations).",
+          "TRIGGER_NOT_MODIFIABLE": "Trigger type/state does not support requested lifecycle operation.",
+          "TRIGGER_PATCH_EMPTY": "The trigger modify named no field to change.",
+          "TRIGGER_PATCH_FIELD_UNKNOWN": "The trigger modify named a field that is not known.",
+          "TRIGGER_PATCH_NOT_ALLOWED": "A trigger operation other than modify carried field changes.",
+          "TRIGGER_PATCH_PRICE_MODE_INVALID": "The trigger modify's price mode is not a known mode.",
+          "TRIGGER_PATCH_VALUE_UNMASKED": "The trigger modify carried a value for a field its change mask does not name.",
+          "TRIGGER_PRICE_INVALID": "Trigger-specific error codes (40-49 range). Trigger price is invalid (e.g., TP below current price for long).",
+          "TRIGGER_PRICE_SOURCE_UNSUPPORTED": "Trigger price source not supported (e.g., INDEX_PRICE before it's available).",
+          "TRIGGER_QTY_INVALID": "The trigger's child order quantity is not positive.",
+          "TRIGGER_STATUS_INVALID": "Trigger status does not allow requested lifecycle operation.",
+          "TRIGGER_SYMBOL_MISMATCH": "The request names a listed trading pair other than the trigger's own, so it was refused. Nothing changed; name the trigger's own pair, or omit the symbol. A pair that is not listed is ERROR_CODE_UNKNOWN_SYMBOL.",
+          "TRIGGER_TYPE_NOT_SUPPORTED": "The trigger type is valid but not supported on this venue yet.",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The change would act on the trigger at once. The new trigger price of a stop-loss or take-profit, or the trigger price a new trailing distance gives an activated trailing stop, is already reached by the price the trigger watches (at or past it), so the trigger would fire at once and send its order; or the new activation price of a trailing stop not yet activated is already reached by that price, so it would activate at once. Nothing changed; the trigger keeps its previous settings. Returned by ModifyTrigger, and by an order modify that moves an attached take-profit, stop-loss or trailing stop of an order with a fill. Choose a price the market has not reached.",
+          "TWAP_CAPACITY_REACHED": "The market had no room for another TWAP order.",
+          "TWAP_DURATION_INVALID": "The TWAP duration is shorter than 1 second or longer than about 292 years, the longest the venue's clock represents.",
+          "TWAP_INTERVAL_INVALID": "The TWAP slice interval is shorter than 100 milliseconds or longer than its duration.",
+          "UNAUTHENTICATED": "Caller is not authenticated.",
+          "UNAVAILABLE": "Service is temporarily unavailable.",
+          "UNKNOWN_SYMBOL": "Requested trading symbol is unknown.",
+          "UNSUPPORTED_FIELD_SET": "The trigger set a field that must be left unset.",
+          "UPSTREAM_ERROR": "Upstream dependency returned an error.",
+          "VALIDATION_ERROR": "Request failed structural or cross-field validation."
+        }
+      },
       "polyester.rest.enum.orders.v1.FeeAsset": {
         "enum": [
           "QUOTE",
@@ -2020,7 +2616,7 @@
         "type": "string",
         "x-poly-enum-descriptions": {
           "CANCELED": "Canceled and no longer working.",
-          "FILLED": "Fully filled (no remaining quantity).",
+          "FILLED": "Fully filled (no remaining quantity). A buy sized by a quote amount (max_quote_debit_scaled) is fully filled once it has spent that amount: what is left of it buys no further quantity step at the next price the order could fill at. Its quantity is then what it bought.",
           "PENDING": "Accepted and submitted for execution, but not yet confirmed as working.",
           "PENDING_CANCEL": "Cancel requested; may still be working until cancel is confirmed.",
           "REJECTED": "Rejected and never entered the working state.",
@@ -2093,11 +2689,29 @@
           "GTD": "Good-til-date; the order may remain active only before its exact expiry time.",
           "IOC": "Immediate-or-cancel."
         }
+      },
+      "polyester.rest.enum.orders.v1.TriggerPriceSource": {
+        "enum": [
+          "LAST_PRICE",
+          "INDEX_PRICE",
+          "MARK_PRICE"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "INDEX_PRICE": "The market's index price, aggregated from external exchanges. A trigger that watches it acts only on a current index value: while the index is stale or unavailable the trigger stays armed and waits, and never fires on an outdated value.",
+          "LAST_PRICE": "Last traded price on the market (default for spot).",
+          "MARK_PRICE": "Mark price for perpetuals; not supported on spot markets."
+        }
       }
     },
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "BrokerApiKeyAuth": {
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. The broker's members create, rotate and revoke keys through the QuickSwap broker API, and a key may rotate itself.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -2112,7 +2726,7 @@
   "paths": {
     "/v1/orders/history": {
       "get": {
-        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.",
+        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination. While the current state of an order on the page is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than returning a stale state; retry the same request.",
         "operationId": "OrdersReadService_GetOrderHistory",
         "parameters": [
           {
@@ -2121,7 +2735,7 @@
             "name": "endTime",
             "required": false,
             "schema": {
-              "example": "1735689600000000000",
+              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
             }
@@ -2183,7 +2797,7 @@
             "name": "startTime",
             "required": false,
             "schema": {
-              "example": "1735689600000000000",
+              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
             }
@@ -2254,7 +2868,8 @@
                         "stopLoss": {
                           "policy": {
                             "child": {},
-                            "triggerPrice": "0.005"
+                            "triggerPrice": "61000.25",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2267,7 +2882,8 @@
                         "takeProfit": {
                           "policy": {
                             "child": {},
-                            "triggerPrice": "0.005"
+                            "triggerPrice": "61000.25",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2279,9 +2895,11 @@
                         },
                         "trailingStop": {
                           "policy": {
-                            "activationPrice": "0.005",
+                            "activationPrice": "61000.25",
+                            "limitPrice": "61000.25",
                             "maxSlippageTicks": 1,
-                            "trailingDistanceTicks": "0.000000001"
+                            "trailingDistance": "0.000000001",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2292,25 +2910,32 @@
                           }
                         }
                       },
-                      "avgPx": "0.005",
+                      "avgPx": "18.446744073709551617",
                       "batchRequestId": "2",
+                      "cancelReason": "USER_REQUEST",
                       "clientOrderId": "cli-ord-20250101-001",
                       "createdAt": "2025-01-01T00:00:00Z",
-                      "cumQty": "100000",
+                      "cumQty": "0.001",
+                      "cumQuote": "184.46744073709551617",
                       "expireAt": "2025-01-01T00:00:00Z",
                       "feeAsset": "QUOTE",
-                      "inheritedCumQty": "100000",
-                      "leavesQty": "100000",
+                      "feeTotal": {
+                        "amount": "18.446744073709551617",
+                        "isRebate": false,
+                        "qty": "0.001"
+                      },
+                      "inheritedCumQty": "0.001",
+                      "leavesQty": "0.001",
                       "lineage": {
                         "generation": 1,
                         "id": "2"
                       },
-                      "marketClientRefPrice": "0.005",
+                      "marketClientRefPrice": "61000.25",
                       "marketMaxSlippageBps": 1,
                       "marketMaxSlippageTicks": 1,
                       "orderId": "5USXJZmk",
                       "orderType": "LIMIT",
-                      "origQty": "100000",
+                      "origQty": "0.001",
                       "origin": {
                         "childSeq": 1,
                         "parentOrderId": "5USXJZmk",
@@ -2319,17 +2944,16 @@
                         "triggerType": "STOP_LOSS"
                       },
                       "postOnly": false,
-                      "price": "0.005",
+                      "price": "61000.25",
+                      "rejectReason": "BAD_REQUEST",
                       "side": "BUY",
                       "status": "PENDING",
                       "stpMode": "EXPIRE_MAKER",
-                      "submittedMaxQuoteDebit": "1",
+                      "submittedMaxQuoteDebit": "100",
                       "symbol": "BTC-USDT",
                       "terminalAt": "2025-01-01T00:00:00Z",
-                      "terminalReason": "USER_REQUEST",
-                      "terminalReasonCode": 1,
                       "tif": "GTC",
-                      "version": 1
+                      "version": 0
                     }
                   ]
                 },
@@ -2360,7 +2984,7 @@
     },
     "/v1/orders/open": {
       "get": {
-        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.",
+        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination. While the current state of an order in scope is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than omitting the order or returning a stale state; retry the same request.",
         "operationId": "OrdersReadService_GetOpenOrders",
         "parameters": [
           {
@@ -2470,7 +3094,8 @@
                         "stopLoss": {
                           "policy": {
                             "child": {},
-                            "triggerPrice": "0.005"
+                            "triggerPrice": "61000.25",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2483,7 +3108,8 @@
                         "takeProfit": {
                           "policy": {
                             "child": {},
-                            "triggerPrice": "0.005"
+                            "triggerPrice": "61000.25",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2495,9 +3121,11 @@
                         },
                         "trailingStop": {
                           "policy": {
-                            "activationPrice": "0.005",
+                            "activationPrice": "61000.25",
+                            "limitPrice": "61000.25",
                             "maxSlippageTicks": 1,
-                            "trailingDistanceTicks": "0.000000001"
+                            "trailingDistance": "0.000000001",
+                            "triggerPriceSource": "LAST_PRICE"
                           },
                           "state": {
                             "armedAt": "2025-01-01T00:00:00Z",
@@ -2508,25 +3136,26 @@
                           }
                         }
                       },
-                      "avgPx": "0.005",
+                      "avgPx": "18.446744073709551617",
                       "batchRequestId": "2",
                       "clientOrderId": "cli-ord-20250101-001",
                       "createdAt": "2025-01-01T00:00:00Z",
-                      "cumQty": "100000",
+                      "cumQty": "0.001",
+                      "cumQuote": "184.46744073709551617",
                       "expireAt": "2025-01-01T00:00:00Z",
                       "feeAsset": "QUOTE",
-                      "inheritedCumQty": "100000",
-                      "leavesQty": "100000",
+                      "inheritedCumQty": "0.001",
+                      "leavesQty": "0.001",
                       "lineage": {
                         "generation": 1,
                         "id": "2"
                       },
-                      "marketClientRefPrice": "0.005",
+                      "marketClientRefPrice": "61000.25",
                       "marketMaxSlippageBps": 1,
                       "marketMaxSlippageTicks": 1,
                       "orderId": "5USXJZmk",
                       "orderType": "LIMIT",
-                      "origQty": "100000",
+                      "origQty": "0.001",
                       "origin": {
                         "childSeq": 1,
                         "parentOrderId": "5USXJZmk",
@@ -2535,14 +3164,14 @@
                         "triggerType": "STOP_LOSS"
                       },
                       "postOnly": false,
-                      "price": "0.005",
+                      "price": "61000.25",
                       "side": "BUY",
                       "status": "PENDING",
                       "stpMode": "EXPIRE_MAKER",
-                      "submittedMaxQuoteDebit": "1",
+                      "submittedMaxQuoteDebit": "100",
                       "symbol": "BTC-USDT",
                       "tif": "GTC",
-                      "version": 1
+                      "version": 0
                     }
                   ]
                 },
@@ -2573,7 +3202,7 @@
     },
     "/v1/spot/orders/{order_id}": {
       "get": {
-        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. Projections are eventually consistent.",
+        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. The order shows a fill as soon as it executes and its trades are recorded shortly after: executionsComplete is true once the trades through this generation, across every page, add up to the order's cumulative quantity, and false while a recent execution is still being recorded. Transfers are eventually consistent.",
         "operationId": "OrdersReadService_GetOrder",
         "parameters": [
           {
@@ -2614,9 +3243,9 @@
             "required": false,
             "schema": {
               "default": true,
-              "example": false,
               "type": "boolean"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Maximum trades on the embedded execution page. Requires execution history.",
@@ -2625,9 +3254,11 @@
             "required": false,
             "schema": {
               "default": 100,
-              "example": 100,
+              "maximum": 1000,
+              "minimum": 1,
               "type": "integer"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Cursor from nextPageToken; use the same physical order ID for subsequent pages.",
@@ -2635,8 +3266,10 @@
             "name": "pageToken",
             "required": false,
             "schema": {
+              "maxLength": 512,
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "in": "query",
@@ -2654,6 +3287,7 @@
             "content": {
               "application/json": {
                 "example": {
+                  "executionsComplete": false,
                   "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
                   "order": {
                     "attachedRisk": {
@@ -2661,7 +3295,8 @@
                       "stopLoss": {
                         "policy": {
                           "child": {},
-                          "triggerPrice": "0.005"
+                          "triggerPrice": "61000.25",
+                          "triggerPriceSource": "LAST_PRICE"
                         },
                         "state": {
                           "armedAt": "2025-01-01T00:00:00Z",
@@ -2674,7 +3309,8 @@
                       "takeProfit": {
                         "policy": {
                           "child": {},
-                          "triggerPrice": "0.005"
+                          "triggerPrice": "61000.25",
+                          "triggerPriceSource": "LAST_PRICE"
                         },
                         "state": {
                           "armedAt": "2025-01-01T00:00:00Z",
@@ -2686,9 +3322,11 @@
                       },
                       "trailingStop": {
                         "policy": {
-                          "activationPrice": "0.005",
+                          "activationPrice": "61000.25",
+                          "limitPrice": "61000.25",
                           "maxSlippageTicks": 1,
-                          "trailingDistanceTicks": "0.000000001"
+                          "trailingDistance": "0.000000001",
+                          "triggerPriceSource": "LAST_PRICE"
                         },
                         "state": {
                           "armedAt": "2025-01-01T00:00:00Z",
@@ -2699,25 +3337,32 @@
                         }
                       }
                     },
-                    "avgPx": "0.005",
+                    "avgPx": "18.446744073709551617",
                     "batchRequestId": "2",
+                    "cancelReason": "USER_REQUEST",
                     "clientOrderId": "cli-ord-20250101-001",
                     "createdAt": "2025-01-01T00:00:00Z",
-                    "cumQty": "100000",
+                    "cumQty": "0.001",
+                    "cumQuote": "184.46744073709551617",
                     "expireAt": "2025-01-01T00:00:00Z",
                     "feeAsset": "QUOTE",
-                    "inheritedCumQty": "100000",
-                    "leavesQty": "100000",
+                    "feeTotal": {
+                      "amount": "18.446744073709551617",
+                      "isRebate": false,
+                      "qty": "0.001"
+                    },
+                    "inheritedCumQty": "0.001",
+                    "leavesQty": "0.001",
                     "lineage": {
                       "generation": 1,
                       "id": "2"
                     },
-                    "marketClientRefPrice": "0.005",
+                    "marketClientRefPrice": "61000.25",
                     "marketMaxSlippageBps": 1,
                     "marketMaxSlippageTicks": 1,
                     "orderId": "5USXJZmk",
                     "orderType": "LIMIT",
-                    "origQty": "100000",
+                    "origQty": "0.001",
                     "origin": {
                       "childSeq": 1,
                       "parentOrderId": "5USXJZmk",
@@ -2726,17 +3371,16 @@
                       "triggerType": "STOP_LOSS"
                     },
                     "postOnly": false,
-                    "price": "0.005",
+                    "price": "61000.25",
+                    "rejectReason": "BAD_REQUEST",
                     "side": "BUY",
                     "status": "PENDING",
                     "stpMode": "EXPIRE_MAKER",
-                    "submittedMaxQuoteDebit": "1",
+                    "submittedMaxQuoteDebit": "100",
                     "symbol": "BTC-USDT",
                     "terminalAt": "2025-01-01T00:00:00Z",
-                    "terminalReason": "USER_REQUEST",
-                    "terminalReasonCode": 1,
                     "tif": "GTC",
-                    "version": 1
+                    "version": 0
                   },
                   "trades": [
                     {
@@ -2751,8 +3395,8 @@
                       },
                       "matchId": "100001",
                       "orderId": "5USXJZmk",
-                      "price": "0.005",
-                      "qty": "100000",
+                      "price": "61000.25",
+                      "qty": "0.001",
                       "referralShare": "18.446744073709551617",
                       "side": "BUY",
                       "symbol": "BTC-USDT"
@@ -2807,17 +3451,17 @@
             "name": "afterMatchId",
             "required": false,
             "schema": {
-              "example": "100001",
               "pattern": "^[1-9][0-9]*$",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "in": "query",
             "name": "endTime",
             "required": false,
             "schema": {
-              "example": "1735689600000000000",
+              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
             }
@@ -2851,7 +3495,8 @@
             "schema": {
               "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Exact physical order ID; mutually exclusive with lineageId.",
@@ -2859,10 +3504,10 @@
             "name": "orderId",
             "required": false,
             "schema": {
-              "example": "5USXJZmk",
               "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "in": "query",
@@ -2890,7 +3535,7 @@
             "name": "startTime",
             "required": false,
             "schema": {
-              "example": "1735689600000000000",
+              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
             }
@@ -2910,9 +3555,9 @@
             "name": "symbol",
             "required": false,
             "schema": {
-              "example": "BTC-USDT",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Inclusive generation ceiling; requires lineageId.",
@@ -2920,9 +3565,10 @@
             "name": "throughGeneration",
             "required": false,
             "schema": {
-              "example": 1,
+              "minimum": 1,
               "type": "integer"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           }
         ],
         "responses": {
@@ -2944,8 +3590,8 @@
                       },
                       "matchId": "100001",
                       "orderId": "5USXJZmk",
-                      "price": "0.005",
-                      "qty": "100000",
+                      "price": "61000.25",
+                      "qty": "0.001",
                       "referralShare": "18.446744073709551617",
                       "side": "BUY",
                       "symbol": "BTC-USDT"

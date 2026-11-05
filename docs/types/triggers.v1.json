@@ -24,7 +24,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account for authorization.",
+            "doc": "Optional public subaccount ID for authorization. When omitted,\n subaccount-scoped API keys use their bound subaccount; other callers use\n their authenticated root account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -78,7 +78,7 @@
     {
       "name": "triggers.v1.ConditionalChildExecution",
       "kind": "message",
-      "doc": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. BUY market children are not supported in spot.",
+      "doc": "ConditionalChildExecution selects the child submitted by a stop-loss or\n take-profit trigger. Either side may use any child.",
       "message": {
         "oneofs": [
           {
@@ -133,13 +133,6 @@
       "kind": "message",
       "doc": "ConditionalTrigger configures a standalone stop-loss or take-profit.",
       "message": {
-        "cel": [
-          {
-            "id": "conditional_trigger.buy_requires_limit",
-            "message": "BUY stop-loss and take-profit triggers require a limit child",
-            "expression": "this.side != 1 || !has(this.child.market_ioc)"
-          }
-        ],
         "fields": [
           {
             "name": "trigger_price_ticks",
@@ -179,6 +172,18 @@
             "validate": {
               "required": true
             }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 4,
+            "doc": "Price the trigger watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -186,14 +191,14 @@
     {
       "name": "triggers.v1.CreateTriggerRequest",
       "kind": "message",
-      "doc": "CreateTriggerRequest submits one standalone trigger intent for admission.",
+      "doc": "CreateTriggerRequest submits one standalone trigger intent for admission.\n A create sent but not confirmed in time fails with\n TRIGGER_CREATE_OUTCOME_UNKNOWN: the trigger may have been created, so read\n the triggers for its client_trigger_id before retrying. UNAVAILABLE means\n the trigger was not created.",
       "message": {
         "fields": [
           {
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account. When omitted, uses the caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -279,7 +284,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account for authorization.",
+            "doc": "Optional public subaccount ID for authorization. When omitted,\n subaccount-scoped API keys use their bound subaccount; other callers use\n their authenticated root account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -347,7 +352,7 @@
             "name": "executed_qty_scaled",
             "jsonName": "executedQtyScaled",
             "number": 5,
-            "doc": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed,\n including when the parent completed because all children were canceled.",
+            "doc": "Cumulative filled child-order base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero means no quantity executed.\n The total is kept when the ladder ends, whether it is completed, canceled\n or failed.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -494,7 +499,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account (authorization). When empty or omitted, uses the\n caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -581,7 +586,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Optional sub-account to list triggers for. When empty or omitted, uses the\n caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -692,7 +697,7 @@
     {
       "name": "triggers.v1.ModifyTriggerRequest",
       "kind": "message",
-      "doc": "ModifyTriggerRequest applies a limited patch to an existing trigger.",
+      "doc": "ModifyTriggerRequest applies a limited patch to an existing trigger.\n Supported for stop-loss, take-profit and trailing-stop triggers; ladder and\n TWAP triggers support only cancel and answer TRIGGER_NOT_MODIFIABLE.",
       "message": {
         "oneofs": [
           {
@@ -729,7 +734,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account for authorization.",
+            "doc": "Optional public subaccount ID for authorization. When omitted,\n subaccount-scoped API keys use their bound subaccount; other callers use\n their authenticated root account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -738,15 +743,10 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
+            "doc": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
+            "format": "int32"
           },
           {
             "name": "trigger_price_ticks",
@@ -766,7 +766,7 @@
             "name": "limit_price_ticks",
             "jsonName": "limitPriceTicks",
             "number": 11,
-            "doc": "Updated limit price in quote units scaled by 1e9 for LIMIT child orders.",
+            "doc": "Not modifiable: a trigger's child limit price is fixed at create. Setting\n this field rejects the whole request with\n ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE (InvalidArgument, HTTP 400)\n and leaves the trigger unchanged; cancel the trigger and create a new one\n to change the child limit price.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -835,7 +835,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 16,
-            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap.",
+            "doc": "Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to\n zero to clear the cap. A buy stop-loss or take-profit with a market\n child accepts 1 to 10000, as at creation. A trailing stop on either\n side, and a sell stop-loss or take-profit, accept 1 to 9999: 10000 is\n rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap would\n leave a sell no positive price, and a trailing stop takes none on\n either side.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -896,7 +896,7 @@
     {
       "name": "triggers.v1.PauseTriggerRequest",
       "kind": "message",
-      "doc": "PauseTriggerRequest pauses an active trigger by ID.",
+      "doc": "PauseTriggerRequest pauses an active trigger by ID. Supported for\n stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers\n support only cancel and answer TRIGGER_NOT_MODIFIABLE.",
       "message": {
         "fields": [
           {
@@ -917,7 +917,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account for authorization.",
+            "doc": "Optional public subaccount ID for authorization. When omitted,\n subaccount-scoped API keys use their bound subaccount; other callers use\n their authenticated root account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -971,7 +971,7 @@
     {
       "name": "triggers.v1.ResumeTriggerRequest",
       "kind": "message",
-      "doc": "ResumeTriggerRequest resumes a paused trigger by ID.",
+      "doc": "ResumeTriggerRequest resumes a paused trigger by ID. Supported for\n stop-loss, take-profit and trailing-stop triggers; ladder and TWAP triggers\n support only cancel and answer TRIGGER_NOT_MODIFIABLE.",
       "message": {
         "fields": [
           {
@@ -992,7 +992,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional sub-account for authorization.",
+            "doc": "Optional public subaccount ID for authorization. When omitted,\n subaccount-scoped API keys use their bound subaccount; other callers use\n their authenticated root account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1001,15 +1001,10 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Trading symbol numeric identifier. Required for API-key market policy and\n must match the stored trigger.",
+            "doc": "Optional trading symbol numeric identifier. Zero or omitted means the\n trigger's own pair. When set, it must be the trigger's pair: another\n listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a\n pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the\n trigger unchanged. An API key limited to specific markets must name the\n trigger's pair.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
+            "format": "int32"
           }
         ]
       }
@@ -1192,7 +1187,7 @@
     {
       "name": "triggers.v1.TrailingStopTrigger",
       "kind": "message",
-      "doc": "TrailingStopTrigger configures a spot trailing-stop strategy.\n Standalone triggers currently support SELL market-IOC children. Attached\n trailing stops may use either side, opposite their parent order.",
+      "doc": "TrailingStopTrigger configures a spot trailing-stop strategy. A trailing\n stop that sells tracks the highest price since it activated and fires a\n market IOC child when the price falls the trailing distance from it. A\n trailing stop that buys tracks the lowest price since it activated and\n fires when the price rises the trailing distance from it; its child is an\n IOC limit order at its maximum price, or at its slippage cap above the fire\n price when that is lower, so it never buys above the maximum price. Without\n an activation price, tracking starts when the trigger is placed. Attached\n trailing stops may use either side, opposite their parent order.",
       "message": {
         "oneofs": [
           {
@@ -1276,7 +1271,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 5,
-            "doc": "Maximum slippage in basis points (1 bp = 0.01%).",
+            "doc": "Maximum slippage in basis points (1 bp = 0.01%). Values below 10000\n are accepted; a 100% cap would leave a trailing stop that sells no\n positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -1300,6 +1295,32 @@
                 "notIn": [
                   0
                 ]
+              }
+            }
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 7,
+            "doc": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the price it watches (trigger_price_source) when no activation price\n is set. A rise that fires above it still fires, and the child fills only\n at or below it. Must be unset when `side` is SELL. Fixed at create.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 8,
+            "doc": "Price the trailing stop watches: its activation, its peak or trough and\n its fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; a market\n without an index price fails the trigger with\n TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE. MARK_PRICE is not\n supported. Fixed at create: to change it, cancel the trigger and create a\n new one.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
               }
             }
           }
@@ -1533,10 +1554,19 @@
             "name": "completed_at",
             "jsonName": "completedAt",
             "number": 64,
-            "doc": "Timestamp when the trigger reached a terminal successful state.",
+            "doc": "Instant the trigger became terminal, matching its terminal event timestamp.\n Set for completed, canceled (for any reason), or failed triggers,\n including terminal expiry or rejection. Absent while the trigger is live.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "version",
+            "jsonName": "version",
+            "number": 65,
+            "doc": "Per-trigger state version: 1 for the trigger's first state, then higher\n for every later published state change, whether a request or the market\n caused it. A higher version is always newer, and two copies of a trigger\n with the same version show the same state. GetTrigger, ListTriggers and\n realtime trigger updates carry the same version for the same state. List\n results can briefly lag realtime updates, and after a reconnect or a\n service recovery a realtime update can repeat an earlier state, so keep\n the copy of each trigger with the highest version and ignore any copy\n whose version is not higher than the one you hold.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -1550,17 +1580,52 @@
           {
             "name": "TRIGGER_CANCEL_REASON_USER_REQUEST",
             "number": 1,
-            "doc": "The user explicitly canceled the trigger."
+            "doc": "The user explicitly canceled the trigger, or canceled an order that\n ended it, alone, with a cancel-all or by the dead-man switch: an\n attached leg's working exit (with oco set, the parent's other legs end\n with it), or a level of a ladder that ended with nothing filled."
           },
           {
             "name": "TRIGGER_CANCEL_REASON_OCO",
             "number": 2,
-            "doc": "A linked one-cancels-the-other trigger fired."
+            "doc": "An attached leg ended because its parent order is terminal and another of\n the parent's legs made the last exit, leaving no position to protect."
           },
           {
             "name": "TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL",
             "number": 3,
             "doc": "The parent order ended without a fill, so its attached trigger was canceled."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_SELF_TRADE_PREVENTION",
+            "number": 4,
+            "doc": "Self-trade prevention canceled the trigger's child orders."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_ACCOUNT_REPAIR",
+            "number": 8,
+            "doc": "Ended by the exchange while it recovered your account. The account's\n open orders on the market were canceled at the same time; place new\n orders and triggers once the account trades again."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TRIGGER",
+            "number": 9,
+            "doc": "The market was disabled: the exchange ended the stop-loss, take-profit or\n trailing stop and released its reserved funds. The market's open orders\n were canceled at the same time."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_TWAP",
+            "number": 10,
+            "doc": "The market was disabled: the exchange ended the TWAP and canceled its\n resting slice, releasing its reserved funds."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_LADDER",
+            "number": 11,
+            "doc": "The market was disabled: the exchange ended the ladder and canceled its\n resting levels, releasing their reserved funds."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_PAIR_DRAIN_ATTACHED_LEG",
+            "number": 12,
+            "doc": "The market was disabled: the exchange ended the order's attached\n take-profit or stop-loss and canceled the order and its working exit."
+          },
+          {
+            "name": "TRIGGER_CANCEL_REASON_MARKET_HALTED",
+            "number": 13,
+            "doc": "The market was halted: the exchange ended every open trigger of the\n market, attached take-profit and stop-loss included, and released its\n reserved funds. The market's open orders were canceled at the same time.\n The market refuses new triggers until it trades again."
           },
           {
             "name": "TRIGGER_CANCEL_REASON_MISSING_REASON_CODE",
@@ -1662,7 +1727,7 @@
             "name": "fire_price_ticks",
             "jsonName": "firePriceTicks",
             "number": 13,
-            "doc": "Price that caused a conditional trigger to fire, in quote units scaled by\n 1e9. Absent for time-scheduled triggers such as TWAP.",
+            "doc": "Price that fired the trigger: for a stop-loss or take-profit, the price\n that crossed its trigger price; for a trailing stop, its trailing trigger\n threshold when it fired; for a ladder, the level's price. A market child\n order's slippage cap is measured from it. In quote units scaled by 1e9.\n Absent for time-scheduled triggers such as TWAP.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -1687,6 +1752,30 @@
             "doc": "Why an admitted trigger failed.",
             "protoRef": "triggers.v1.TriggerFailureReason",
             "oneof": "terminal_reason"
+          },
+          {
+            "name": "fire_refusal_reason",
+            "jsonName": "fireRefusalReason",
+            "number": 22,
+            "doc": "Why the attempt named by child_seq was refused while the trigger stayed\n live. Set only on EVENT_FIRE_REFUSED; other event types leave it unset.",
+            "protoRef": "triggers.v1.TriggerFailureReason"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triggers.v1.TriggerEventBatch",
+      "kind": "message",
+      "doc": "TriggerEventBatch is one realtime publication on an account's trigger event\n stream: every event queued for the stream when it was sent, at most 256 and\n at most 64 KiB. Events of one trading symbol arrive in the order they\n happened; events of different symbols have no defined order relative to each\n other.\n\n (trigger_id, event_type, child_seq, ts_ns) identifies an event. Apply events\n in array order and in publication order; an event whose identity was\n already received replaces the earlier copy. When the subscription reports\n that missed publications could not be recovered, reload recent events over\n REST.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Trigger events, oldest first per trading symbol. At least one event.",
+            "repeated": true,
+            "protoRef": "triggers.v1.TriggerEvent"
           }
         ]
       }
@@ -1720,7 +1809,17 @@
           {
             "name": "EVENT_ACTIVATED",
             "number": 5,
-            "doc": "A standalone trailing trigger's activation condition was satisfied and tracking began."
+            "doc": "A trailing stop's activation condition was satisfied and tracking began,\n for a standalone or an attached trailing stop."
+          },
+          {
+            "name": "EVENT_ARMED",
+            "number": 6,
+            "doc": "An attached take-profit, stop-loss or trailing stop started protecting\n its parent order's filled quantity, once, when the parent's first fill\n made it live (or at its resume, when it was paused before that fill).\n Later fills that resize it, and later pauses and resumes, do not repeat\n it. An attached trailing stop still reports EVENT_ACTIVATED when it\n starts tracking."
+          },
+          {
+            "name": "EVENT_FIRE_REFUSED",
+            "number": 7,
+            "doc": "A fire of the trigger was refused and the trigger stayed live: an\n attached take-profit, stop-loss or trailing stop waits for the next price\n through its trigger price, or, refused because its order would be below\n the market's minimums, waits until its position changes; a trigger\n refused for a rate limit or an account repair fires again shortly. An\n attached take-profit, stop-loss or trailing stop whose order self-trade\n prevention expired against another of the account's resting orders stays\n live too (TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED), reported once\n while that order blocks it. New trades and price updates do not fire it\n while the other order is first in line at the best price; once that order\n is gone or no longer first there, it fires again if its trigger condition\n still holds. Not terminal: the trigger keeps its status. child_seq names\n the refused attempt, which placed no child order, and fire_refusal_reason\n says why; the next fire takes the next child_seq.\n With TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED, child_seq names the\n expired child order instead, which was placed and canceled by self-trade\n prevention. A refusal that ends the trigger is EVENT_FAILED instead."
           }
         ]
       }
@@ -1857,6 +1956,11 @@
             "doc": "The applicable fee rate exceeded the maximum accepted by the trigger."
           },
           {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_TIME_IN_FORCE",
+            "number": 26,
+            "doc": "The child order's time in force was not accepted."
+          },
+          {
             "name": "TRIGGER_FAILURE_REASON_TRIGGER_PRICE_INVALID",
             "number": 40,
             "doc": "The configured trigger price was invalid."
@@ -1922,6 +2026,281 @@
             "doc": "The maximum slippage could not produce a valid execution price bound."
           },
           {
+            "name": "TRIGGER_FAILURE_REASON_DUPLICATE_ORDER_ID",
+            "number": 57,
+            "doc": "The child order's identifier was already in use by another order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MAX_QUANTITY",
+            "number": 60,
+            "doc": "The child order quantity was above the pair's maximum."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MAX_NOTIONAL",
+            "number": 61,
+            "doc": "The child order notional was above the pair's maximum."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_PAIR_POST_ONLY",
+            "number": 62,
+            "doc": "The market took only post-only orders when the trigger fired."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MAX_OPEN_ORDERS_TOTAL",
+            "number": 64,
+            "doc": "The account had its maximum number of open orders."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MAX_OPEN_ORDERS_PER_PAIR",
+            "number": 65,
+            "doc": "The account had its maximum number of resting orders in this market when\n a limit TWAP slice was due."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_STP_MODE_NOT_ALLOWED",
+            "number": 66,
+            "doc": "The child order's self-trade prevention mode was not accepted."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_PAIR_BACKLOGGED",
+            "number": 67,
+            "doc": "The trading pair was busy with the account's earlier requests."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MODE_NOT_SUPPORTED",
+            "number": 68,
+            "doc": "The market does not support a trigger of this shape, including a\n trailing stop whose child order is not a market order when it fires."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MARKET_QUOTE_STALE",
+            "number": 69,
+            "doc": "The market's reference quote was too old to price the market child order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_MARKET_QUOTE_UNHEALTHY",
+            "number": 70,
+            "doc": "The market's reference quote could not be used to price the market child\n order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_QTY_INVALID",
+            "number": 103,
+            "doc": "The trigger's quantity was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_LIMIT_PRICE_INVALID",
+            "number": 104,
+            "doc": "The trigger's limit price was not valid, including a buy trailing stop's\n maximum price below the price it watches (the last traded price or the\n index price) when it was placed without an activation price."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TWAP_INTERVAL_INVALID",
+            "number": 105,
+            "doc": "The TWAP interval was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_LADDER_RANGE_TOO_NARROW",
+            "number": 106,
+            "doc": "The ladder's price range was too narrow for its number of levels."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_LADDER_LEVELS_INVALID",
+            "number": 107,
+            "doc": "The ladder's number of levels was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ATTACHED_LEGS_EXCEEDED",
+            "number": 108,
+            "doc": "The order carried more attached legs than allowed."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_PRICE_LEVELS_EXHAUSTED",
+            "number": 109,
+            "doc": "The market held its maximum number of price levels."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_SETTLEMENT_BACKLOGGED",
+            "number": 110,
+            "doc": "The account had too many filled orders whose settlement had not completed."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CLIENT_ORDER_IDS_EXHAUSTED",
+            "number": 111,
+            "doc": "The account reserved its maximum number of client order IDs."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_ORDER_ID",
+            "number": 112,
+            "doc": "The child order's identifier was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ORDER_ID_CONFLICT",
+            "number": 113,
+            "doc": "The child order's identifier was held by a different order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_SIDE",
+            "number": 114,
+            "doc": "The child order's side was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_ORDER_TYPE",
+            "number": 115,
+            "doc": "The child order's type was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_STP_MODE",
+            "number": 116,
+            "doc": "The child order's self-trade prevention mode was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INVALID_ORDER_FLAGS",
+            "number": 117,
+            "doc": "The child order's flags were not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_PRICE_LEVEL_QUANTITY_LIMIT",
+            "number": 121,
+            "doc": "The child order would take the total quantity resting at its price past\n the most a price level can hold, even if some quantity still fits; it was\n not placed."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CHILD_QTY_RAISE_NOT_ALLOWED",
+            "number": 122,
+            "doc": "One of the trigger's child orders went past its planned quantity, so the\n trigger ended."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TRIGGERS_EXHAUSTED",
+            "number": 140,
+            "doc": "The market held its maximum number of triggers."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ORDER_SEQUENCE_EXHAUSTED",
+            "number": 144,
+            "doc": "The account used every order identifier available to it in this market."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_FEE_SCHEDULE_UNAVAILABLE",
+            "number": 146,
+            "doc": "The fees that apply to the child order could not be determined."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_POLICY_UNAVAILABLE",
+            "number": 148,
+            "doc": "The account's trading policy could not be evaluated."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ACCOUNT_ROUTING_INVALID",
+            "number": 164,
+            "doc": "The trigger could not be installed on its market's current route."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CLIENT_TRIGGER_ID_INVALID",
+            "number": 165,
+            "doc": "The client trigger ID was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TRIGGER_DIRECTION_INVALID",
+            "number": 166,
+            "doc": "The trigger direction was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_FEE_ASSET_INVALID",
+            "number": 167,
+            "doc": "The fee asset was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_FEE_CEILING_INVALID",
+            "number": 168,
+            "doc": "The trigger's maximum fee rate was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_UNSUPPORTED_FIELD_SET",
+            "number": 169,
+            "doc": "The trigger set a field that must be left unset."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TRIGGER_FIRE_LIMIT_REACHED",
+            "number": 176,
+            "doc": "The trigger could not fire again."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CONDITION_FLAGS_INVALID",
+            "number": 202,
+            "doc": "The trigger's condition flags were not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CONDITION_PARAMETER_SET",
+            "number": 203,
+            "doc": "The trigger set a condition parameter its condition does not take."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_SLIPPAGE_TICKS_INVALID",
+            "number": 204,
+            "doc": "The trigger's slippage bound in ticks was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_SLIPPAGE_BPS_INVALID",
+            "number": 205,
+            "doc": "The trigger's slippage bound in basis points was not valid."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_SLIPPAGE_BOUNDS_CONFLICT",
+            "number": 206,
+            "doc": "The trigger set both slippage bounds where only one is accepted."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_LIMIT_CHILD_SLIPPAGE_SET",
+            "number": 207,
+            "doc": "The trigger set a slippage bound on a LIMIT child order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_NEW_ACCOUNT_CAPACITY_REACHED",
+            "number": 216,
+            "doc": "The venue could not admit the account to this market."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ORDER_TYPE_NOT_ALLOWED_IN_AUCTION",
+            "number": 225,
+            "doc": "The trigger's order type isn't taken while the market is in an auction\n call."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_POST_ONLY_NOT_ALLOWED_IN_AUCTION",
+            "number": 226,
+            "doc": "The trigger's post-only order isn't taken while the market is in an auction\n call."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TWAP_CAPACITY_REACHED",
+            "number": 227,
+            "doc": "The market had no room for another TWAP order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_CHILD_ORDER_INCONSISTENT",
+            "number": 235,
+            "doc": "The trigger's child order did not match the order the trigger requested,\n so the trigger failed and the child order was canceled."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ORDER_LIMITS_UNAVAILABLE",
+            "number": 238,
+            "doc": "The market's order limits weren't set yet when the trigger fired."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_ACCOUNT_REPAIRING",
+            "number": 239,
+            "doc": "The account was under an automatic repair, so the fire was retried\n shortly instead of placing its child order."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_INDEX_PRICE_UNAVAILABLE",
+            "number": 241,
+            "doc": "The trigger watches the index price and the market has no index price."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+            "number": 244,
+            "doc": "The trigger price, or a trailing stop's activation price, was already\n reached by the price the trigger watches when the trigger was submitted\n (at or past it), so the trigger would have fired or activated at once. It\n never armed and sent no order; its reserved funds were released. A price\n that reaches it after submission fires or activates the trigger normally."
+          },
+          {
+            "name": "TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED",
+            "number": 249,
+            "doc": "Self-trade prevention expired the order of an attached take-profit,\n stop-loss or trailing stop because it would have traded with another of\n the account's resting orders. Reported only as a fire refusal reason\n (EVENT_FIRE_REFUSED): the attached order stays active. New trades and price\n updates do not fire it while the other order is first in line at the best\n price; once that order is gone or no longer first there, it fires again if\n its trigger condition still holds."
+          },
+          {
             "name": "TRIGGER_FAILURE_REASON_MISSING_REASON_CODE",
             "number": 998,
             "doc": "The terminal state did not contain a failure reason."
@@ -1937,7 +2316,7 @@
     {
       "name": "triggers.v1.TriggerIntent",
       "kind": "message",
-      "doc": "TriggerIntent contains one standalone trigger's immutable configuration.",
+      "doc": "TriggerIntent contains one standalone trigger's initial configuration.",
       "message": {
         "oneofs": [
           {
@@ -1997,7 +2376,7 @@
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
             "number": 4,
-            "doc": "Child self-trade prevention mode. Defaults to EXPIRE_MAKER.",
+            "doc": "Child self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER.",
             "protoRef": "orders.v1.SelfTradePreventionMode",
             "validate": {
               "enum": {
@@ -2009,7 +2388,7 @@
             "name": "client_trigger_id",
             "jsonName": "clientTriggerId",
             "number": 5,
-            "doc": "Client-provided trigger ID for idempotency.",
+            "doc": "Client-provided trigger ID for idempotency, unique per sub-account, pair\n and trigger type. While the trigger is active and for 60 seconds after it\n reaches a terminal status, retrying the create with the identical intent\n returns the same trigger, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is\n free: a create that uses it is a new intent and creates a new trigger. To\n learn the outcome of an earlier create after that window, read the\n triggers with ListTriggers, which return each trigger's\n client_trigger_id, instead of retrying the create. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2038,7 +2417,7 @@
             "name": "trailing_stop",
             "jsonName": "trailingStop",
             "number": 12,
-            "doc": "SELL market-IOC trailing stop.",
+            "doc": "Trailing stop: a market-IOC sell or a maximum-price IOC buy.",
             "protoRef": "triggers.v1.TrailingStopTrigger",
             "oneof": "strategy"
           },
@@ -2141,9 +2520,50 @@
     {
       "name": "triggers.v1.TriggerMarketIoc",
       "kind": "message",
-      "doc": "TriggerMarketIoc configures an immediate market child.",
+      "doc": "TriggerMarketIoc configures an immediate market child. When the trigger\n fires, the child is protected like a market order: it fills only within its\n slippage cap of the price that fired it. A market child with a cap never\n fills worse than the cap; on a gap past it, it may fill partly or not at all.\n A buy reserves its funds when it is created, at the trigger price raised by\n the cap, and its child never buys above that price.",
       "message": {
-        "fields": []
+        "oneofs": [
+          {
+            "name": "max_slippage",
+            "fields": [
+              "max_slippage_ticks",
+              "max_slippage_bps"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "max_slippage_ticks",
+            "jsonName": "maxSlippageTicks",
+            "number": 1,
+            "doc": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "max_slippage"
+          },
+          {
+            "name": "max_slippage_bps",
+            "jsonName": "maxSlippageBps",
+            "number": 2,
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%). A sell child\n accepts values below 10000; a 100% cap would leave it no positive price\n to sell at.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "10000"
+              }
+            },
+            "oneof": "max_slippage"
+          }
+        ]
       }
     },
     {
@@ -2170,17 +2590,17 @@
           {
             "name": "STATUS_COMPLETED",
             "number": 4,
-            "doc": "Trigger completed successfully (all child orders placed/filled)."
+            "doc": "Trigger completed. A ladder completes once none of its child orders\n remains open and at least one of them was placed on the book, unless it\n ends canceled (see STATUS_CANCELED). A ladder that filled any quantity\n completes however its other child orders ended. Some of its child orders\n may have been rejected. Completed does not mean the ladder filled: its\n executed quantity and executed levels state what filled, and each child\n order's own status states how it ended."
           },
           {
             "name": "STATUS_CANCELED",
             "number": 5,
-            "doc": "Trigger was canceled by user."
+            "doc": "Trigger was canceled. The cancel reason states why, for example a user\n request or another attached leg's exit closing its parent's position. A\n ladder is canceled when the ladder itself is canceled. A ladder whose\n child orders the user canceled with none filled, one by one, with a\n cancel-all or by the dead man's switch, is canceled too, with a user\n request reason, once none of them remains open. A ladder whose child\n orders were canceled only by self-trade prevention, or by the exchange\n while it recovered the account, with none filled, completes instead."
           },
           {
             "name": "STATUS_FAILED",
             "number": 6,
-            "doc": "Trigger failed (for example, reservation failure, child order rejection)."
+            "doc": "Trigger failed (for example, reservation failure, child order rejection).\n A ladder fails when every child order was rejected before it was placed\n on the book; the failure reason is the first rejected child order's."
           },
           {
             "name": "STATUS_PAUSED",
@@ -2358,8 +2778,8 @@
         "cel": [
           {
             "id": "twap_trigger.window",
-            "message": "slice_interval_ms must be between 100 and duration_ms",
-            "expression": "this.duration_ms \u003e= 1000 \u0026\u0026 this.slice_interval_ms \u003e= 100 \u0026\u0026 this.slice_interval_ms \u003c= this.duration_ms"
+            "message": "slice_interval_ms must not exceed duration_ms",
+            "expression": "this.slice_interval_ms \u003c= this.duration_ms"
           }
         ],
         "oneofs": [
@@ -2392,19 +2812,29 @@
             "name": "duration_ms",
             "jsonName": "durationMs",
             "number": 2,
-            "doc": "Total execution duration in milliseconds.",
+            "doc": "Total execution duration in milliseconds, at least 1000.",
             "protoScalar": "int64",
             "jsonType": "string",
-            "format": "int64"
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "1000"
+              }
+            }
           },
           {
             "name": "slice_interval_ms",
             "jsonName": "sliceIntervalMs",
             "number": 3,
-            "doc": "Interval between slices in milliseconds.",
+            "doc": "Interval between slices in milliseconds, at least 100 and at most\n duration_ms.",
             "protoScalar": "int64",
             "jsonType": "string",
-            "format": "int64"
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "100"
+              }
+            }
           },
           {
             "name": "market_ioc",

@@ -12,6 +12,7 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "ledger/read/v1/ledger_read.proto";
 import "polyester/api/options.proto";
+import "polyester/api/validation/v1/predefined_string_rules.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
 
@@ -99,6 +100,13 @@ enum SubaccountPermission {
   SUBACCOUNT_PERMISSION_READ_GUARD_SIGNER_STATUS = 24;
   // Create, sign with, rotate, or export the sub-account Guard Signer wallet.
   SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER = 25;
+  // View the sub-account's auto-withdraw rule and its runs.
+  SUBACCOUNT_PERMISSION_READ_AUTO_WITHDRAW = 26;
+  // Create, change, or disable the sub-account's auto-withdraw rule; requires
+  // fresh MFA and is never available to API keys.
+  SUBACCOUNT_PERMISSION_MANAGE_AUTO_WITHDRAW = 27;
+  // Quote, create, and view Swaps of the sub-account's Trading balance.
+  SUBACCOUNT_PERMISSION_SWAP = 28;
 }
 
 // User-facing metadata for one stable sub-account permission.
@@ -186,7 +194,8 @@ message SubaccountRoleView {
 message Subaccount {
   // Sub-account identifier (opaque ID).
   fixed64 id = 1;
-  // Role of the current caller on this sub-account.
+  // Role of the current caller on this sub-account. SUBACCOUNT_ROLE_UNSPECIFIED
+  // when removed is true.
   SubaccountRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
   // Optional human-readable label for this sub-account.
   string label = 3 [(buf.validate.field).string.max_len = 64];
@@ -221,11 +230,24 @@ message Subaccount {
   optional uint32 smart_account_salt_nonce = 13;
   // Time in UTC when this sub-account's configuration was last changed. For the
   // same sub-account, later is fresher, equal is an idempotent replay, and
-  // earlier is stale. Equal timestamps with different configuration indicate
-  // an invariant failure.
+  // earlier is stale. Equal timestamps with different configuration, other
+  // than role and removed, indicate an invariant failure.
   google.protobuf.Timestamp updated_at = 14;
   // Monotonic resource revision used for conditional updates.
   uint64 revision = 15;
+  // True when the caller no longer has access to this sub-account, for
+  // example after its owner removed the caller as a member: remove the
+  // sub-account from the caller's list. Only real-time updates set it;
+  // responses list only sub-accounts the caller can access. A change of the
+  // caller's role or access does not change revision or updated_at, so
+  // real-time updates deliver such changes in order and each one applies as
+  // it arrives. Ending access also ends the caller's subscriptions to this
+  // sub-account's real-time channels, and can, rarely, also end a
+  // subscription made after access was granted again. When the server ends a
+  // subscription to one of this sub-account's channels while the latest
+  // update lists this sub-account with a role and removed false, subscribe
+  // again: access is checked again on subscribe.
+  bool removed = 16;
 }
 
 // Request to list sub-accounts owned by or shared with the caller.
@@ -279,11 +301,7 @@ message CreateSubaccountRequest {
   // Optional human label for display in UI.
   string label = 1 [
     (buf.validate.field).string.max_len = 64,
-    (buf.validate.field).cel = {
-      id: "label.no_angle_brackets"
-      message: "label must not contain '<' or '>'"
-      expression: "!this.contains('<') && !this.contains('>')"
-    },
+    (buf.validate.field).string.(polyester.api.validation.v1.display_label) = true,
     (buf.validate.field).string.example = "Treasury"
   ];
 
@@ -301,7 +319,8 @@ message CreateSubaccountRequest {
     (buf.validate.field).string.example = "0x0000000000000000000000000000000000000000",
     (google.api.field_behavior) = REQUIRED
   ];
-  // Exact EIP-191 authorization returned by CreateSubaccountChallenge.
+  // Exact EIP-191 authorization returned by CreateSubaccountChallenge. Maximum
+  // length is 4096 UTF-8 bytes.
   string message = 3 [
     (buf.validate.field).string = {min_len: 1, max_bytes: 4096},
     (google.api.field_behavior) = REQUIRED
@@ -334,11 +353,7 @@ message SubaccountUpdateSpec {
   // Label for the sub-account. Empty clears the label when selected.
   string label = 1 [
     (buf.validate.field).string.max_len = 64,
-    (buf.validate.field).cel = {
-      id: "label.no_angle_brackets"
-      message: "label must not contain '<' or '>'"
-      expression: "!this.contains('<') && !this.contains('>')"
-    },
+    (buf.validate.field).string.(polyester.api.validation.v1.display_label) = true,
     (buf.validate.field).string.example = "Treasury"
   ];
   // User-chosen icon/emoji for UI display. Empty clears the icon when selected.
@@ -627,7 +642,11 @@ message GetSubaccountRequest {
   bool include_invites = 4;
   // Include the attached sub-account policy, when one is attached. Every current member may receive it.
   bool include_policy = 5;
-  // Include current balances for this sub-account.
+  // Include current balances for this sub-account. The caller needs the READ_BALANCES action on
+  // the sub-account: its role, any attached sub-account policy and, for an API key, the key's
+  // policy must allow it, or the request fails with PermissionDenied. When balances cannot be
+  // read right now, the request fails with Unavailable and AUTH_TEMPORARILY_UNAVAILABLE; retry
+  // the same request.
   bool include_balances = 6;
 
   // Optional invitation direction filter. An omitted value includes both scopes.
@@ -647,7 +666,7 @@ message GetSubaccountResponse {
   repeated SubaccountInvite invites = 4;
   // Attached policy when include_policy is true, the caller is a current member, and the sub-account has a policy.
   SubaccountPolicyView policy = 5;
-  // Current balances when include_balances is true.
+  // Current balances when include_balances is true, in the same shape as GetBalances.
   ledger.read.v1.GetBalancesResponse balances = 6;
 }
 
@@ -744,7 +763,8 @@ message ActivityEvent {
   // Account that performed the action (opaque ID).
   fixed64 actor_account_id = 8;
 
-  // Structured event details as a JSON string. Maximum 64 KiB.
+  // Structured event details as a JSON string. Maximum 64 KiB (65536 UTF-8
+  // bytes).
   string payload_json = 9 [(buf.validate.field).string.max_bytes = 65536];
 }
 
@@ -775,8 +795,12 @@ message ListSubaccountEventsResponse {
 
 // Read service for aggregated sub-account pages.
 service SubaccountViewService {
+  option (polyester.api.docs_group) = "account";
+
   // Aggregate commonly-needed read data for a sub-account dashboard page.
   rpc GetSubaccount(GetSubaccountRequest) returns (GetSubaccountResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Subaccount View"
@@ -790,6 +814,8 @@ service SubaccountViewService {
 
   // List audit and activity events for a sub-account.
   rpc ListSubaccountActivity(ListSubaccountEventsRequest) returns (ListSubaccountEventsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/subaccounts/{subaccount_id}/events"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccount Activity"
@@ -801,8 +827,12 @@ service SubaccountViewService {
 
 // Service for creating, updating, sharing, and listing sub-accounts.
 service SubaccountService {
+  option (polyester.api.docs_group) = "account";
+
   // List sub-accounts owned by or shared with the caller.
   rpc ListSubaccounts(ListSubaccountsRequest) returns (ListSubaccountsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/subaccounts"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccounts"
@@ -931,6 +961,8 @@ service SubaccountService {
 
   // List incoming invitations and invitations for administered sub-accounts.
   rpc ListSubaccountInvites(ListSubaccountInvitesRequest) returns (ListSubaccountInvitesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/subaccounts:invites"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccount Invites"
@@ -958,6 +990,8 @@ service SubaccountService {
 
 // Read-only discovery of built-in role capabilities and caller-effective permissions.
 service SubaccountRoleService {
+  option (polyester.api.docs_group) = "account";
+
   // List the authoritative built-in role and permission catalog. This metadata is public.
   rpc ListSubaccountRoles(ListSubaccountRolesRequest) returns (ListSubaccountRolesResponse) {
     option (polyester.api.public) = true;

@@ -16,9 +16,6 @@ option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1"
 // Write-style actions also grant the matching read visibility where needed by
 // the product experience.
 enum PolicyAction {
-  reserved 2, 7, 13;
-  reserved "TRADE_PERP", "READ_PERP", "READ_TRANSFER_DESTINATIONS", "MANAGE_TRANSFER_WHITELISTS";
-
   // No policy action selected. An empty API-key action list grants no access;
   // sub-account policies retain their mandatory read-only actions.
   UNSPECIFIED = 0;
@@ -41,13 +38,23 @@ enum PolicyAction {
   READ_SPOT = 6;
   // Allow reading internal transfer history.
   READ_INTERNAL_TRANSFERS = 8;
-  reserved 9;
-  reserved "READ_EXTERNAL_WITHDRAWALS";
   // Allow reading saved, recent, and whitelisted address-book destinations.
   READ_ADDRESS_BOOK = 11;
   // Allow creating, updating, deleting, and copying saved destination entries,
-  // including reading the address book.
+  // including reading the address book. Address-book writes accept only a
+  // session token, so on an API-key policy this grants address-book reads only.
   MANAGE_ADDRESS_BOOK = 12;
+  // Allow reading the auto-withdraw rule and its runs.
+  READ_AUTO_WITHDRAW = 14;
+  // Allow creating, changing, and disabling the auto-withdraw rule, including
+  // reading it. A rule pays value out, so changing one also requires
+  // EXTERNAL_WITHDRAW, and API keys can never change one.
+  MANAGE_AUTO_WITHDRAW = 15;
+  // Allow quoting, creating, and reading Swaps: market conversions of the
+  // account's own Trading balance from one asset into another. Each Swap places
+  // spot orders on the account's behalf, which also remain subject to the
+  // sub-account's spot trading policy.
+  SWAP = 16;
 }
 
 // MarketScope describes how a policy applies to spot markets.
@@ -79,12 +86,6 @@ message SpotMarketRule {
 
 // SubaccountPolicyView is the public view of a sub-account policy.
 message SubaccountPolicyView {
-  reserved 5, 7, 12, 15 to 19, 22, 24 to 26;
-  reserved "perp_markets", "perp_market_scope", "global_notional_cap", "max_open_positions",
-    "global_perp_leverage_x", "daily_internal_transfer_out_limit", "daily_withdraw_limit",
-    "internal_transfers_own_only", "enforce_withdraw_whitelist", "liquidation_only",
-    "daily_loss_limit", "intraday_drawdown_limit_bps";
-
   // Policy identifier (opaque ID).
   fixed64 id = 1;
   // Human-readable policy name.
@@ -194,12 +195,6 @@ message GetSubaccountPolicyResponse {
 
 // SubaccountPolicySpec contains the mutable configuration of a sub-account policy.
 message SubaccountPolicySpec {
-  reserved 4, 6, 12, 15 to 20, 22 to 24;
-  reserved "perp_markets", "perp_market_scope", "global_notional_cap", "max_open_positions",
-    "global_perp_leverage_x", "daily_internal_transfer_out_limit", "daily_withdraw_limit",
-    "internal_transfers_own_only", "enforce_withdraw_whitelist", "liquidation_only",
-    "daily_loss_limit", "intraday_drawdown_limit_bps";
-
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
@@ -335,10 +330,6 @@ message SetSubaccountPolicyResponse {}
 // ApiPolicyView is the public view of an API key policy template. Its action
 // and spot-market floor cannot exceed an attached sub-account policy.
 message ApiPolicyView {
-  reserved 5, 8, 13, 17, 18;
-  reserved "perp_markets", "perp_market_scope", "daily_internal_transfer_out_limit",
-    "daily_withdraw_limit", "max_order_notional";
-
   // Policy identifier (opaque ID).
   fixed64 id = 1;
   // Human-readable policy name.
@@ -420,10 +411,6 @@ message GetApiPolicyResponse {
 
 // ApiPolicySpec contains the mutable configuration of an API key policy.
 message ApiPolicySpec {
-  reserved 4, 6, 13, 17, 18;
-  reserved "perp_markets", "perp_market_scope", "daily_internal_transfer_out_limit",
-    "daily_withdraw_limit", "max_order_notional";
-
   option (buf.validate.message).cel = {
     id: "spot_allowlist_requires_markets"
     message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
@@ -547,6 +534,8 @@ message SetApiKeyPolicyResponse {}
 
 // PolicyService manages sub-account and API key policy templates and bindings.
 service PolicyService {
+  option (polyester.api.docs_group) = "account";
+
   // List sub-account policy templates available to the caller.
   rpc ListSubaccountPolicies(ListSubaccountPoliciesRequest) returns (ListSubaccountPoliciesResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;

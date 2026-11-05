@@ -116,6 +116,39 @@ message NextVIPTierThresholds {
   ];
 }
 
+// VIPMetricStatus describes how complete one rolling 30-day qualification
+// metric is.
+enum VIPMetricStatus {
+  // No metric status was specified.
+  METRIC_UNSPECIFIED = 0;
+
+  // Every hour in the rolling window has complete evidence.
+  COMPLETE = 1;
+
+  // Every hour in the rolling window is present, but some hours contain
+  // executions or holdings without an admissible USD reference price at the
+  // required time. Those contributions are not estimated.
+  PRICE_UNAVAILABLE = 2;
+
+  // Some hours in the rolling window are missing or contain other incomplete
+  // evidence.
+  INCOMPLETE_HISTORY = 3;
+}
+
+// VIPMetricQuality explains the completeness of one rolling 30-day
+// qualification metric.
+message VIPMetricQuality {
+  // Completeness status of the metric.
+  VIPMetricStatus status = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  // Number of hourly buckets in the rolling 720-hour window that are missing
+  // or incomplete. Zero when status is COMPLETE.
+  uint32 incomplete_hours = 2 [(buf.validate.field).uint32.lte = 720];
+}
+
 // GetVIPStatusRequest requests VIP status for the authenticated caller's root
 // account. All subaccounts inherit that root status, so this request has no
 // subaccount selector.
@@ -136,8 +169,11 @@ message GetVIPStatusResponse {
   uint32 aop_tier = 3 [(buf.validate.field).uint32.lte = 10];
 
   // Rolling 30-day settled spot volume in USD, encoded as a non-negative
-  // base-10 decimal string without separators or a currency symbol. Omitted
-  // when complete qualification metrics are unavailable for the assignment.
+  // base-10 decimal string without separators or a currency symbol. When
+  // settled_volume_quality.status is PRICE_UNAVAILABLE, this is a lower bound
+  // that excludes executions without an admissible USD reference price.
+  // Omitted when settled_volume_quality is omitted or its status is
+  // INCOMPLETE_HISTORY.
   optional string settled_volume_30d_usd = 4 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 40,
@@ -146,7 +182,7 @@ message GetVIPStatusResponse {
 
   // Rolling 30-day average portfolio value in USD, encoded as a non-negative
   // base-10 decimal string without separators or a currency symbol. Omitted
-  // when complete qualification metrics are unavailable for the assignment.
+  // unless average_aop_quality.status is COMPLETE.
   optional string average_aop_30d_usd = 5 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 40,
@@ -168,20 +204,37 @@ message GetVIPStatusResponse {
   optional google.protobuf.Timestamp evaluated_at = 9;
 
   // UTC cutoff of the rolling metrics used for this assignment. Omitted when
-  // complete qualification metrics are unavailable.
+  // neither settled_volume_30d_usd nor average_aop_30d_usd is present.
   optional google.protobuf.Timestamp metrics_as_of = 10;
 
   // Entry thresholds for the tier immediately above the effective tier.
   // Omitted when the effective tier is VIP10.
   optional NextVIPTierThresholds next_tier_thresholds = 11;
+
+  // Completeness of the rolling 30-day settled spot volume. An incomplete
+  // volume metric can raise the volume tier when its proven lower bound meets
+  // a higher threshold, but it never lowers the tier. Omitted when the
+  // assignment carries no automatic qualification evidence, such as the
+  // default VIP0 tier of a new account.
+  VIPMetricQuality settled_volume_quality = 12;
+
+  // Completeness of the rolling 30-day average portfolio value. An incomplete
+  // average portfolio value keeps its previous tier. Omitted when the
+  // assignment carries no automatic qualification evidence, such as the
+  // default VIP0 tier of a new account.
+  VIPMetricQuality average_aop_quality = 13;
 }
 
 // VIPService serves public VIP policy reference data and the authenticated
 // caller-root qualification status.
 service VIPService {
+  option (polyester.api.docs_group) = "account";
+
   // List the complete active VIP0 through VIP10 tier catalog in ascending tier
   // order.
+  // This public, caller-independent catalog supports cacheable ConnectRPC GET.
   rpc ListVIPTiers(ListVIPTiersRequest) returns (ListVIPTiersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/vip/tiers"};
     option (gnostic.openapi.v3.operation) = {

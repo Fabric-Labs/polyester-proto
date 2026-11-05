@@ -43,6 +43,7 @@
                   "code": "ORDER_NOT_FOUND",
                   "error": {
                     "code": "ERROR_CODE_BAD_REQUEST",
+                    "existingOrderId": "9876543210123",
                     "rateLimit": {
                       "limit": "100",
                       "operationId": "value",
@@ -100,20 +101,22 @@
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPriceTicks": "5000000"
+                      "triggerPriceSource": "LAST_PRICE",
+                      "triggerPriceTicks": "61000250000000"
                     },
                     "takeProfit": {
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPriceTicks": "5000000"
+                      "triggerPriceSource": "LAST_PRICE",
+                      "triggerPriceTicks": "61000250000000"
                     }
                   },
                   "baseQtyScaled": "100000",
                   "clientOrderId": "cli-ord-20250101-001",
                   "feeAsset": "QUOTE",
                   "marketIoc": {
-                    "clientRefPriceTicks": "5000000",
+                    "clientRefPriceTicks": "61000250000000",
                     "maxSlippageTicks": "1"
                   },
                   "selfTradePreventionMode": "EXPIRE_MAKER",
@@ -133,7 +136,7 @@
                     "orderId": "9876543210123",
                     "resolvedBaseQtyScaled": "100000",
                     "stopLossTriggerId": "9155001234567",
-                    "submittedMaxQuoteDebitScaled": "1",
+                    "submittedMaxQuoteDebitScaled": "100000000",
                     "takeProfitTriggerId": "9155001234567",
                     "trailingStopTriggerId": "9155001234567"
                   },
@@ -150,8 +153,8 @@
           "path": "orders.v1.OrdersService/BatchReplaceOrders",
           "requestType": "orders.v1.BatchReplaceOrdersRequest",
           "responseType": "orders.v1.BatchReplaceOrdersResponse",
-          "summary": "Replaces same-symbol orders and returns after authoritative admission.",
-          "doc": "Replaces same-symbol orders and returns after authoritative admission.",
+          "summary": "Amends or replaces same-symbol orders and returns after authoritative",
+          "doc": "Amends or replaces same-symbol orders and returns after authoritative\n admission.",
           "tags": [
             "trading"
           ],
@@ -174,17 +177,19 @@
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPriceTicks": "5000000"
+                      "triggerPriceSource": "LAST_PRICE",
+                      "triggerPriceTicks": "61000250000000"
                     },
                     "takeProfit": {
                       "child": {
                         "marketIoc": {}
                       },
-                      "triggerPriceTicks": "5000000"
+                      "triggerPriceSource": "LAST_PRICE",
+                      "triggerPriceTicks": "61000250000000"
                     }
                   },
                   "newClientOrderId": "cli-ord-20250101-001",
-                  "newPriceTicks": "5000000",
+                  "newPriceTicks": "61000250000000",
                   "newQtyScaled": "100000",
                   "orderId": "9876543210123"
                 }
@@ -206,6 +211,7 @@
                   "code": "value",
                   "error": {
                     "code": "ERROR_CODE_BAD_REQUEST",
+                    "existingOrderId": "9876543210123",
                     "rateLimit": {
                       "limit": "100",
                       "operationId": "value",
@@ -241,7 +247,7 @@
           "requestType": "orders.v1.CancelAllAfterRequest",
           "responseType": "orders.v1.CancelAllAfterResponse",
           "summary": "Set cancel-all-after (dead-man switch).",
-          "doc": "Set cancel-all-after (dead-man switch).\n Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.",
+          "doc": "Set cancel-all-after (dead-man switch).\n Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.\n When the switch fires, it cancels what CancelAllOrders with the same\n symbol and side scope cancels: open orders, including those that\n triggers placed, and no trigger. Armed stop-loss, take-profit and\n trailing stops, running TWAPs and attached legs without a working exit\n stay active and can place new orders after it fires, exactly as after\n CancelAllOrders. The switch does not stop them: only\n TriggersService.CancelTrigger cancels a trigger.",
           "tags": [
             "trading"
           ],
@@ -260,10 +266,15 @@
               "side": "BUY",
               "subaccountId": "6789012345678",
               "symbolId": 1,
-              "timeoutSec": 1
+              "timeoutSec": 60
             },
             "response": {
-              "effectiveTimeoutSec": 1,
+              "effectiveScope": {
+                "accountId": "7563897446546",
+                "side": "BUY",
+                "symbolId": 1
+              },
+              "effectiveTimeoutSec": 60,
               "expiresAtTsNs": "1735689600000000000",
               "status": "ARMED",
               "ts": "2025-01-01T00:00:00Z",
@@ -277,7 +288,7 @@
           "requestType": "orders.v1.CancelAllOrdersRequest",
           "responseType": "orders.v1.CancelAllOrdersResponse",
           "summary": "Cancels all matching open orders for an account (kill switch).",
-          "doc": "Cancels all matching open orders for an account (kill switch).\n Evaluates matching orders from a consistent snapshot at request start.\n Final state is confirmed via the order update stream or read path.",
+          "doc": "Cancels all matching open orders for an account (kill switch).\n Evaluates matching orders from a consistent snapshot at request start and\n requests cancellation of every one, however many match. The response\n lists up to 200 of them, oldest first, with the total count.\n Final state is confirmed via the order update stream or read path.\n\n It cancels orders, not triggers. Open orders that triggers placed match\n like any other order and are canceled: a TWAP's working slice, a\n ladder's levels, the order a fired stop placed, and the working exit of\n an attached take-profit, stop-loss or trailing stop. The triggers\n themselves are not canceled, and their reserved funds stay reserved:\n - A stop-loss, take-profit or trailing stop that has not fired stays\n   armed and places its order when its condition is met.\n - A TWAP keeps running and places its next slice when it is due.\n - A ladder ends once none of its levels remains open: canceled when\n   none of them filled, completed when any did.\n - An attached leg whose working exit is canceled ends canceled, and so\n   do the parent's other legs when oco is set. Attached legs without a\n   working exit keep protecting the parent's filled position, even when\n   the parent order itself is canceled; they end only if the parent is\n   canceled before any fill.\n - A paused trigger stays paused and can be resumed.\n\n To stop all automated trading, cancel each live trigger with\n TriggersService.CancelTrigger, then cancel the orders: a trigger that\n fires before its cancel places an order that the cancel-all then\n cancels. TriggersService.ListTriggers with the statuses STATUS_CREATED,\n STATUS_ARMED, STATUS_RUNNING and STATUS_PAUSED lists the live triggers,\n attached legs included.",
           "tags": [
             "trading"
           ],
@@ -301,10 +312,19 @@
               ]
             },
             "response": {
+              "cancelledOrders": [
+                {
+                  "clientOrderId": "cli-ord-20250101-001",
+                  "orderId": "9876543210123"
+                }
+              ],
               "failedCancels": 1,
+              "listingStatus": "INCLUDED",
               "matchedOrders": 1,
               "status": "SUBMITTED",
               "submittedCancels": 1,
+              "totalCancelled": 1,
+              "truncated": false,
               "ts": "2025-01-01T00:00:00Z",
               "tsNs": "1735689600000000000"
             }
@@ -316,7 +336,7 @@
           "requestType": "orders.v1.CancelOrderRequest",
           "responseType": "orders.v1.CancelOrderResponse",
           "summary": "Cancels an existing order by id or client order id.",
-          "doc": "Cancels an existing order by id or client order id.\n REST clients submit base58 order IDs. ConnectRPC clients submit fixed64\n order IDs.",
+          "doc": "Cancels an existing order by id or client order id.\n REST clients submit base58 order IDs. ConnectRPC clients submit fixed64\n order IDs.\n A cancel of an order that has already ended returns\n ERROR_CODE_ORDER_ALREADY_TERMINAL, including a cancel retried after a\n timeout once the order has ended: treat it as already done. A repeat\n while an earlier cancel of the order is still in progress is accepted\n again and changes nothing. A client order ID keeps naming its order for\n at least a minute after the order ends; a cancel by client order ID sent\n later may return ERROR_CODE_ORDER_UNKNOWN instead. Retry by order ID, or\n read the order, to tell an ended order from an unknown one.",
           "tags": [
             "trading"
           ],
@@ -371,20 +391,22 @@
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPriceTicks": "5000000"
+                    "triggerPriceSource": "LAST_PRICE",
+                    "triggerPriceTicks": "61000250000000"
                   },
                   "takeProfit": {
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPriceTicks": "5000000"
+                    "triggerPriceSource": "LAST_PRICE",
+                    "triggerPriceTicks": "61000250000000"
                   }
                 },
                 "baseQtyScaled": "100000",
                 "clientOrderId": "cli-ord-20250101-001",
                 "feeAsset": "QUOTE",
                 "marketIoc": {
-                  "clientRefPriceTicks": "5000000",
+                  "clientRefPriceTicks": "61000250000000",
                   "maxSlippageTicks": "1"
                 },
                 "selfTradePreventionMode": "EXPIRE_MAKER",
@@ -400,7 +422,7 @@
               "orderId": "9876543210123",
               "resolvedBaseQtyScaled": "100000",
               "stopLossTriggerId": "8734243232987",
-              "submittedMaxQuoteDebitScaled": "1",
+              "submittedMaxQuoteDebitScaled": "100000000",
               "takeProfitTriggerId": "2352352532523",
               "trailingStopTriggerId": "9155001234569"
             }
@@ -434,17 +456,19 @@
                   "child": {
                     "marketIoc": {}
                   },
-                  "triggerPriceTicks": "5000000"
+                  "triggerPriceSource": "LAST_PRICE",
+                  "triggerPriceTicks": "61000250000000"
                 },
                 "takeProfit": {
                   "child": {
                     "marketIoc": {}
                   },
-                  "triggerPriceTicks": "5000000"
+                  "triggerPriceSource": "LAST_PRICE",
+                  "triggerPriceTicks": "61000250000000"
                 }
               },
               "newClientOrderId": "cli-ord-20250101-001",
-              "newPriceTicks": "5000000",
+              "newPriceTicks": "61000250000000",
               "newQtyScaled": "100000",
               "orderId": "9876543210123",
               "requestId": "request_01J0EXAMPLE",
@@ -492,20 +516,22 @@
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPriceTicks": "5000000"
+                    "triggerPriceSource": "LAST_PRICE",
+                    "triggerPriceTicks": "61000250000000"
                   },
                   "takeProfit": {
                     "child": {
                       "marketIoc": {}
                     },
-                    "triggerPriceTicks": "5000000"
+                    "triggerPriceSource": "LAST_PRICE",
+                    "triggerPriceTicks": "61000250000000"
                   }
                 },
                 "baseQtyScaled": "100000",
                 "clientOrderId": "cli-ord-20250101-001",
                 "feeAsset": "QUOTE",
                 "marketIoc": {
-                  "clientRefPriceTicks": "5000000",
+                  "clientRefPriceTicks": "61000250000000",
                   "maxSlippageTicks": "1"
                 },
                 "selfTradePreventionMode": "EXPIRE_MAKER",
@@ -517,9 +543,10 @@
             "response": {
               "admissible": false,
               "evaluatedAt": "2025-01-01T00:00:00Z",
-              "protectedPriceBoundTicks": "5000000",
+              "protectedPriceBoundTicks": "61000250000000",
               "rejection": {
                 "code": "ERROR_CODE_BAD_REQUEST",
+                "existingOrderId": "9876543210123",
                 "rateLimit": {
                   "limit": "100",
                   "operationId": "value",

@@ -31,7 +31,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "True when the take-profit and stop leg are linked as one-cancels-the-other.",
+            "doc": "True while the parent's legs were placed with oco and both the\n take-profit and a stop leg (stop-loss or trailing stop) are present.\n False once either leg is removed. A leg that ended, including one\n canceled with TRIGGER_CANCEL_REASON_OCO, stays present.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -204,7 +204,7 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Optional symbol routing hint.",
+            "doc": "Optional trading symbol numeric identifier. When set, it must match the\n order's symbol, or the item is refused as an unknown order. When omitted,\n the order's own symbol is used.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -222,7 +222,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -438,7 +438,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -447,7 +447,7 @@
             "name": "request_id",
             "jsonName": "requestId",
             "number": 2,
-            "doc": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes replays the original\n per-item results and timestamp. Reusing it with a different payload during\n that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "doc": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes returns each decided\n item's original result and result time, and retries the items still\n unresolved, never admitting an already admitted item again. Reusing it\n with a different payload during that window returns\n CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat\n is a new request and can place its orders again, so read the items back\n instead of repeating an older batch.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -616,7 +616,7 @@
             "name": "old_order_id",
             "jsonName": "oldOrderId",
             "number": 3,
-            "doc": "Original order targeted by the replacement.",
+            "doc": "Original order targeted by the replacement: the requested order ID, or the\n order the requested client order ID names. Rejected items keep it too. Unset\n only when the requested client order ID names no order.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -625,7 +625,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "doc": "Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED\n item, whose order keeps old_order_id, and for rejected items.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -634,7 +634,7 @@
             "name": "client_order_id",
             "jsonName": "clientOrderId",
             "number": 5,
-            "doc": "Client order ID assigned to the successor when available.",
+            "doc": "Client order ID assigned to the successor, for a REPLACED item only.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -657,7 +657,7 @@
             "name": "action_taken",
             "jsonName": "actionTaken",
             "number": 8,
-            "doc": "REPLACED admits a successor. AMENDED cancels the original order's remaining quantity\n without a successor; keep tracking old_order_id until its terminal state is confirmed.\n Unspecified for rejected items.",
+            "doc": "REPLACED admits a successor under replacement_order_id, with queue priority\n reset. AMENDED keeps the order under old_order_id with no successor: the\n order is amended in place and keeps its queue priority, or, when the new\n total quantity is at or below its filled quantity, ends at its filled\n quantity. Keep tracking old_order_id for an AMENDED item. Not set for\n rejected items; JSON and REST responses then omit it.",
             "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
@@ -672,7 +672,7 @@
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "Every requested operation was admitted, including cancel-only outcomes."
+            "doc": "Every requested operation was admitted, amended items included."
           },
           {
             "name": "BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED",
@@ -696,7 +696,7 @@
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED",
             "number": 1,
-            "doc": "The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes."
+            "doc": "The operation was admitted and handed to execution. action_taken tells whether\n the order was amended under its own order ID or replaced by a successor."
           },
           {
             "name": "BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED",
@@ -709,7 +709,7 @@
     {
       "name": "orders.v1.BatchReplaceOrderItem",
       "kind": "message",
-      "doc": "BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.",
+      "doc": "BatchReplaceOrderItem identifies one order to modify inside a quote-refresh\n batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item\n that keeps the order's price (new_price_ticks unset or equal to it), does not\n raise its total quantity and keeps its client order ID amends the order in\n place, under the same order ID and with its queue priority kept. A new\n price, a larger total quantity or a new client order ID replaces it with a\n successor order under a new order ID, with its queue priority reset. To\n force a replacement, use ModifyOrder with REPLACE_ONLY.",
       "message": {
         "cel": [
           {
@@ -799,7 +799,7 @@
             "name": "new_client_order_id",
             "jsonName": "newClientOrderId",
             "number": 6,
-            "doc": "Optional new client order id when replace path is taken.",
+            "doc": "Optional client order ID for the successor. A value other than the order's\n client order ID makes the item a replacement.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -815,7 +815,7 @@
     {
       "name": "orders.v1.BatchReplaceOrdersRequest",
       "kind": "message",
-      "doc": "BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.",
+      "doc": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.",
       "message": {
         "cel": [
           {
@@ -829,7 +829,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -838,7 +838,7 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 2,
-            "doc": "Trading symbol shared by every replacement.",
+            "doc": "Trading symbol shared by every replacement. An item whose order is on\n another symbol is refused alone as an unknown order.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32",
@@ -958,12 +958,12 @@
           {
             "name": "BATCH_REPLACE_PHASE_ADMITTED",
             "number": 1,
-            "doc": "The operation was admitted and handed to execution, including cancel-only outcomes."
+            "doc": "The operation was admitted and handed to execution, amended items included."
           },
           {
             "name": "BATCH_REPLACE_PHASE_WORKING",
             "number": 2,
-            "doc": "The successor order is active."
+            "doc": "The successor order, or the amended order, is active."
           },
           {
             "name": "BATCH_REPLACE_PHASE_REJECTED",
@@ -973,7 +973,7 @@
           {
             "name": "BATCH_REPLACE_PHASE_TERMINAL",
             "number": 4,
-            "doc": "The successor, or original order for a cancel-only outcome, reached a terminal state."
+            "doc": "The successor, or the amended order, reached a terminal state."
           }
         ]
       }
@@ -1013,7 +1013,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.",
+            "doc": "Assigned successor order ID. Zero for an amended item or rejection before assignment.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1022,7 +1022,7 @@
             "name": "order_status",
             "jsonName": "orderStatus",
             "number": 5,
-            "doc": "Current successor status, or original order status for a cancel-only outcome, when available.",
+            "doc": "Current successor status, or the amended order's status, when available.",
             "protoRef": "orders.v1.OrderStatus"
           },
           {
@@ -1046,7 +1046,7 @@
             "name": "action_taken",
             "jsonName": "actionTaken",
             "number": 8,
-            "doc": "REPLACED admits a successor. AMENDED is cancel-only: no successor exists and\n order_status describes old_order_id. Unspecified for rejected items.",
+            "doc": "REPLACED admits a successor. AMENDED keeps the order under old_order_id with\n no successor, and order_status describes it. Unspecified for rejected items.",
             "protoRef": "orders.v1.ModifyActionTaken"
           }
         ]
@@ -1055,7 +1055,7 @@
     {
       "name": "orders.v1.CancelAllAfterRequest",
       "kind": "message",
-      "doc": "CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.",
+      "doc": "CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.\n When the switch fires, it cancels what a CancelAllOrders with the same\n scope cancels: open orders, never triggers. See CancelAllAfter.",
       "message": {
         "cel": [
           {
@@ -1069,7 +1069,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1180,6 +1180,13 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "effective_scope",
+            "jsonName": "effectiveScope",
+            "number": 6,
+            "doc": "Recorded scope after arming or refreshing. Absent when disabled.\n Describes the current armed switch only. Cancellations already in progress\n are unaffected by a later refresh or disable.",
+            "protoRef": "orders.v1.DeadManSwitchScope"
           }
         ]
       }
@@ -1187,14 +1194,14 @@
     {
       "name": "orders.v1.CancelAllOrdersRequest",
       "kind": "message",
-      "doc": "CancelAllOrdersRequest cancels all matching open orders for an account.",
+      "doc": "CancelAllOrdersRequest cancels all matching open orders for an account.\n It cancels orders only, never triggers: see CancelAllOrders for what\n happens to stop-loss, take-profit and trailing stops, TWAPs, ladders and\n attached legs, and how to stop them too.",
       "message": {
         "fields": [
           {
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1255,7 +1262,7 @@
     {
       "name": "orders.v1.CancelAllOrdersResponse",
       "kind": "message",
-      "doc": "CancelAllOrdersResponse returns the result of a cancel-all operation.",
+      "doc": "CancelAllOrdersResponse returns the result of a cancel-all operation.\n The response confirms that cancellation was requested for every matching\n order; each order's final state is reported on the order update stream and\n read paths.",
       "message": {
         "fields": [
           {
@@ -1274,7 +1281,7 @@
             "name": "matched_orders",
             "jsonName": "matchedOrders",
             "number": 2,
-            "doc": "Number of orders that matched the filter.",
+            "doc": "Number of open orders that matched the filter when the request was\n accepted, including orders whose cancellation was already in progress\n and open orders that triggers placed. Triggers themselves are never\n counted. Orders placed after acceptance are not counted. Unless\n `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1283,7 +1290,7 @@
             "name": "submitted_cancels",
             "jsonName": "submittedCancels",
             "number": 3,
-            "doc": "Number of cancel requests submitted for processing.",
+            "doc": "Number of matched orders for which cancellation was requested, including\n orders whose cancellation was already in progress. Observe order updates or\n reads for final outcomes; orders may execute before cancellation takes\n effect. Zero when `dry_run` is set.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1292,7 +1299,7 @@
             "name": "failed_cancels",
             "jsonName": "failedCancels",
             "number": 4,
-            "doc": "Number of cancels that could not be submitted (already canceled, etc.).",
+            "doc": "Number of matched orders that could not be submitted for cancellation\n because the cancel-all could not be recorded for their symbol. This\n request does not cancel them; send a new cancel-all with a new\n `request_id` if they are still open. Zero when `dry_run` is set.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1314,6 +1321,48 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "cancelled_orders",
+            "jsonName": "cancelledOrders",
+            "number": 7,
+            "doc": "Orders whose cancellation was requested, oldest first (the order in\n which they were created), at most 200. When more orders were canceled,\n these are the 200 oldest and `truncated` is true; the order update stream\n and read paths report every one. Empty when `dry_run` is set. Retrying\n with the same `request_id` and criteria within 120 seconds returns the\n original status, counts and timestamp, an empty list, and\n `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new\n cancellations. Read open orders for current state and use order updates\n for final outcomes.",
+            "repeated": true,
+            "protoRef": "orders.v1.CancelledOrder",
+            "validate": {
+              "repeated": {
+                "maxItems": 200
+              }
+            }
+          },
+          {
+            "name": "total_cancelled",
+            "jsonName": "totalCancelled",
+            "number": 8,
+            "doc": "Number of orders whose cancellation was requested, including those not\n listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when\n `dry_run` is set.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "truncated",
+            "jsonName": "truncated",
+            "number": 9,
+            "doc": "True when more orders were canceled than `cancelled_orders` lists.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "listing_status",
+            "jsonName": "listingStatus",
+            "number": 10,
+            "doc": "Availability of the historical listing. An empty retry listing does not\n change the original counts or mean that no cancellations were requested.",
+            "protoRef": "orders.v1.CancelAllOrdersResponse.ListingStatus",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
           }
         ]
       }
@@ -1375,7 +1424,7 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Optional symbol_id for routing; when omitted, resolved from order directory.",
+            "doc": "Optional trading symbol numeric identifier. When set, it must match the\n order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN)\n and nothing is canceled. An order that ended a while ago may instead be\n reported ended (ERROR_CODE_ORDER_ALREADY_TERMINAL). When omitted, the\n order's own symbol is used.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1384,7 +1433,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 4,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1441,16 +1490,141 @@
       }
     },
     {
+      "name": "orders.v1.CancelReason",
+      "kind": "enum",
+      "doc": "CancelReason is why a CANCELED order ended. A cancel is no error: a\n refused order is REJECTED and names its refusal with an ErrorCode instead.\n Fills before the cancel stand, and the order's remaining reserved funds are\n released.",
+      "enum": {
+        "values": [
+          {
+            "name": "CANCEL_REASON_USER_REQUEST",
+            "number": 1,
+            "doc": "A cancel the account sent: a cancel, a batch cancel or a cancel-all."
+          },
+          {
+            "name": "CANCEL_REASON_IOC_REMAINDER",
+            "number": 2,
+            "doc": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a\n quote amount (max_quote_debit_scaled) that spends that amount ends\n FILLED instead."
+          },
+          {
+            "name": "CANCEL_REASON_MARKET_REMAINDER",
+            "number": 3,
+            "doc": "The unfilled remainder of a market order: the book ran out, the next\n price was past the order's protection price, or the order reached the\n market's maximum order quantity. A market buy sized by a quote amount\n (max_quote_debit_scaled) that spends that amount, so that what is left\n buys no further quantity step, ends FILLED instead."
+          },
+          {
+            "name": "CANCEL_REASON_STP_EXPIRE_MAKER",
+            "number": 4,
+            "doc": "Self-trade prevention canceled this resting order when an incoming order\n belonging to the same root account, including another subaccount of that\n root, would have matched it."
+          },
+          {
+            "name": "CANCEL_REASON_STP_EXPIRE_TAKER",
+            "number": 5,
+            "doc": "Self-trade prevention canceled this incoming order instead of matching a\n resting order belonging to the same root account, including another\n subaccount of that root."
+          },
+          {
+            "name": "CANCEL_REASON_STP_EXPIRE_BOTH",
+            "number": 6,
+            "doc": "Self-trade prevention canceled both this order and the order belonging to\n the same root account, including another subaccount of that root, that it\n would have matched."
+          },
+          {
+            "name": "CANCEL_REASON_REPLACED",
+            "number": 7,
+            "doc": "A replace ended this order and created its successor."
+          },
+          {
+            "name": "CANCEL_REASON_GTD_EXPIRED",
+            "number": 8,
+            "doc": "A good-till-date order reached its expiry time."
+          },
+          {
+            "name": "CANCEL_REASON_QTY_AT_OR_BELOW_FILLED",
+            "number": 9,
+            "doc": "An amend or replace set the order's total quantity at or below its filled\n quantity, so the order ended at its filled quantity."
+          },
+          {
+            "name": "CANCEL_REASON_PAIR_DRAIN",
+            "number": 10,
+            "doc": "The market was disabled: the exchange canceled its resting orders."
+          },
+          {
+            "name": "CANCEL_REASON_ATTACHED_RISK_REFUSED",
+            "number": 11,
+            "doc": "The market refused one of the order's attached take-profit, stop-loss or\n trailing-stop legs, so the order's remainder and its other legs were\n canceled."
+          },
+          {
+            "name": "CANCEL_REASON_CANCEL_ALL_AFTER",
+            "number": 12,
+            "doc": "The account's cancel-all-after timer reached its deadline without a\n heartbeat."
+          },
+          {
+            "name": "CANCEL_REASON_ACCOUNT_REPAIR",
+            "number": 13,
+            "doc": "Canceled by the exchange while it recovered the account. Place new orders\n once the account trades again."
+          },
+          {
+            "name": "CANCEL_REASON_TWAP_ROLLOVER",
+            "number": 14,
+            "doc": "A TWAP slice its TWAP canceled at the next slice's due time; its unfilled\n remainder moves to the TWAP's later slices."
+          },
+          {
+            "name": "CANCEL_REASON_STRATEGY_CANCEL",
+            "number": 15,
+            "doc": "An order a trigger placed, such as a TWAP slice, a ladder level, a stop's\n child or an attached leg's exit, canceled because its trigger ended or\n another leg took over the exit."
+          },
+          {
+            "name": "CANCEL_REASON_SYSTEM",
+            "number": 16,
+            "doc": "The exchange canceled the order for a reason it does not name."
+          },
+          {
+            "name": "CANCEL_REASON_MARKET_HALTED",
+            "number": 17,
+            "doc": "The market was halted: the exchange canceled every open order of the\n market. Fills before the cancel stand. The market refuses new orders until\n it trades again."
+          },
+          {
+            "name": "CANCEL_REASON_ATTACHED_EXIT_FIRED",
+            "number": 18,
+            "doc": "The order's attached take-profit, stop-loss or trailing stop fired while\n the order still rested: the exchange canceled the order's unfilled\n remainder before placing the attached order, so the two never trade with\n each other. Fills before the cancel stand."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.CancelledOrder",
+      "kind": "message",
+      "doc": "CancelledOrder identifies one order whose cancellation a cancel-all\n requested.",
+      "message": {
+        "fields": [
+          {
+            "name": "order_id",
+            "jsonName": "orderId",
+            "number": 1,
+            "doc": "Order ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "client_order_id",
+            "jsonName": "clientOrderId",
+            "number": 2,
+            "doc": "The order's client order ID; empty when the order has none.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.CreateOrderRequest",
       "kind": "message",
-      "doc": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.",
+      "doc": "CreateOrderRequest submits one independent order intent for admission.\n Single creates do not provide exact replay and are not automatically retried\n after an ambiguous transport timeout. Supply client_order_id to reconcile\n through GetOrder; without it, a lost acknowledgement may leave the outcome\n unknown. An immediate lookup miss does not prove that admission failed.\n A create sent but not confirmed in time fails with\n ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it\n back before retrying. UNAVAILABLE means the order was not accepted.",
       "message": {
         "fields": [
           {
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1558,6 +1732,45 @@
       }
     },
     {
+      "name": "orders.v1.DeadManSwitchScope",
+      "kind": "message",
+      "doc": "DeadManSwitchScope describes the recorded scope of an armed dead-man switch.\n Expiry cancels working orders in this scope, including orders that\n triggers placed. It cancels no trigger: armed stop-loss, take-profit and\n trailing stops and running TWAPs remain active and may create further\n orders after expiry. Cancel them with TriggersService.CancelTrigger.",
+      "message": {
+        "fields": [
+          {
+            "name": "account_id",
+            "jsonName": "accountId",
+            "number": 1,
+            "doc": "Public ID of the account or sub-account whose orders are canceled.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 2,
+            "doc": "Symbol ID whose orders are canceled. Zero or omitted means all symbols.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 3,
+            "doc": "Order side that is canceled. Not set means both sides; JSON and REST\n responses then omit it.",
+            "protoRef": "orders.v1.Side",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "orders.v1.ErrorCode",
       "kind": "enum",
       "doc": "ErrorCode enumerates stable machine-readable error codes for the Orders API.\n These mirror the REST problem+json \"code\" field for parity between REST and\n ConnectRPC clients.",
@@ -1606,7 +1819,7 @@
           {
             "name": "ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID",
             "number": 9,
-            "doc": "Client order ID is already in use for a different active order."
+            "doc": "Client order ID is already in use on this account, by an open order or by\n an order that ended recently; an ended order keeps its client order ID\n reserved for at least 60 seconds. Reuse returns this code even with the\n same payload. Use GetOrder to reconcile, then retry with a new client\n order ID."
           },
           {
             "name": "ERROR_CODE_UNAVAILABLE",
@@ -1711,7 +1924,7 @@
           {
             "name": "ERROR_CODE_PRICE_TICK_SIZE",
             "number": 30,
-            "doc": "Price must align with the pair tick size (LIMIT orders)."
+            "doc": "Price must align with the pair tick size, including trigger and activation prices."
           },
           {
             "name": "ERROR_CODE_MIN_QTY",
@@ -1821,7 +2034,7 @@
           {
             "name": "ERROR_CODE_ORDER_ALREADY_TERMINAL",
             "number": 64,
-            "doc": "Client order ID points to an order that already reached terminal state."
+            "doc": "The order has already ended (filled, canceled or expired)."
           },
           {
             "name": "ERROR_CODE_TRIGGER_PRICE_INVALID",
@@ -1844,11 +2057,6 @@
             "doc": "Trigger not found (for cancel/get operations)."
           },
           {
-            "name": "ERROR_CODE_TRIGGER_CANCEL_REJECTED",
-            "number": 44,
-            "doc": "Trigger cannot be canceled in current state."
-          },
-          {
             "name": "ERROR_CODE_TRIGGER_STATUS_INVALID",
             "number": 45,
             "doc": "Trigger status does not allow requested lifecycle operation."
@@ -1861,12 +2069,12 @@
           {
             "name": "ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID",
             "number": 47,
-            "doc": "Duplicate client trigger ID was reused with a different trigger payload."
+            "doc": "Client trigger ID is already used, either by a trigger with a different\n payload or by an earlier create that failed or was rolled back. List\n triggers to reconcile by client trigger ID, then retry with a new client\n trigger ID."
           },
           {
             "name": "ERROR_CODE_MAX_SLIPPAGE_INVALID",
             "number": 48,
-            "doc": "Trailing-stop max slippage (ticks or bps) is invalid."
+            "doc": "Max slippage (ticks or bps) is out of range or leaves no valid execution\n price bound. Applies to market orders and to standalone and attached\n trailing stops, on create and on modify; for example, a 10000 bps cap on a\n market order or trailing stop that sells."
           },
           {
             "name": "ERROR_CODE_STALE_QUOTE",
@@ -1881,7 +2089,7 @@
           {
             "name": "ERROR_CODE_OVERLOADED",
             "number": 67,
-            "doc": "This edge is at its bounded concurrent BatchReplace admission capacity."
+            "doc": "The account already has its maximum order requests in flight; nothing was\n admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns\n HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after\n one of the outstanding requests completes."
           },
           {
             "name": "ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL",
@@ -1912,6 +2120,636 @@
             "name": "ERROR_CODE_CANCEL_REQUEST_EXPIRED",
             "number": 73,
             "doc": "The cancel request exceeded its bounded internal replay window."
+          },
+          {
+            "name": "ERROR_CODE_MAX_QTY",
+            "number": 74,
+            "doc": "Quantity is above the pair maximum: the market-order maximum for MARKET\n orders, the limit-order maximum otherwise (base units)."
+          },
+          {
+            "name": "ERROR_CODE_MAX_NOTIONAL",
+            "number": 75,
+            "doc": "Order notional is above the pair maximum (quote units). A stricter\n sub-account policy cap returns POLICY_MAX_NOTIONAL instead."
+          },
+          {
+            "name": "ERROR_CODE_QTY_AT_OR_BELOW_FILLED",
+            "number": 76,
+            "doc": "The replacement total quantity is at or below the order's filled\n quantity: the order ended at its filled quantity and no replacement order\n was created."
+          },
+          {
+            "name": "ERROR_CODE_GATEWAY_MISCONFIGURED",
+            "number": 77,
+            "doc": "The trading gateway that took the request is misconfigured for the order\n service behind it. An operator must correct it; retrying does not help."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_ORDER_ID",
+            "number": 80,
+            "doc": "The order identifier or the replacement order identifier is not valid."
+          },
+          {
+            "name": "ERROR_CODE_CHILD_QTY_RAISE_NOT_ALLOWED",
+            "number": 81,
+            "doc": "The quantity of a trigger's child order or a ladder order can't be raised\n above its planned quantity. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_ATTACHED_RISK_NOT_SUPPORTED",
+            "number": 82,
+            "doc": "Attached take-profit, stop-loss or trailing legs can't be applied here:\n this market takes none, an attached trailing stop isn't offered yet, or\n the modify changes them together with the order's price, quantity, client\n order ID or a replace. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_SETTLEMENT_BACKLOGGED",
+            "number": 84,
+            "doc": "The account has too many filled or ended orders whose settlement has not\n completed yet. Nothing changed; the request is accepted again once settlement\n catches up."
+          },
+          {
+            "name": "ERROR_CODE_PRICE_LEVEL_QUANTITY_LIMIT",
+            "number": 127,
+            "doc": "The order would take the total quantity resting at its price past the\n most a price level can hold, even if some quantity still fits. Nothing\n changed: a new order was not placed, a modified order keeps resting as it\n was, and the other orders at that price are unchanged. Another price or a\n smaller quantity, or the same order once less quantity rests at that\n price, is accepted."
+          },
+          {
+            "name": "ERROR_CODE_MARKET_QUOTE_STALE",
+            "number": 200,
+            "doc": "The market order carried no client reference price, and the pair's reference\n quote (top of book) was older than its freshness bound when the order was\n admitted."
+          },
+          {
+            "name": "ERROR_CODE_MARKET_QUOTE_UNHEALTHY",
+            "number": 201,
+            "doc": "The market order carried no client reference price, and the pair's reference\n quote could not be used to price it, for example because it postdated the\n order or carried an invalid price."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_TIME_IN_FORCE",
+            "number": 202,
+            "doc": "The time in force, or its expiry time, is not accepted for this order or for\n a trigger's child order type."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_NOT_PERMITTED",
+            "number": 203,
+            "doc": "The request carried QuickSwap terms that the account or market does not\n accept."
+          },
+          {
+            "name": "ERROR_CODE_DUPLICATE_ORDER_ID",
+            "number": 204,
+            "doc": "The order identifier assigned to the request is already in use by another\n order of the market. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_MAX_OPEN_ORDERS_TOTAL",
+            "number": 205,
+            "doc": "The account has reached its maximum number of open orders across all markets.\n A stricter sub-account policy cap returns POLICY_MAX_OPEN_ORDERS instead."
+          },
+          {
+            "name": "ERROR_CODE_STP_MODE_NOT_ALLOWED",
+            "number": 206,
+            "doc": "The self-trade prevention mode is not one the venue accepts for this order."
+          },
+          {
+            "name": "ERROR_CODE_PAIR_BACKLOGGED",
+            "number": 207,
+            "doc": "The trading pair is busy with the account's earlier requests, so this one was\n not admitted and nothing was reserved. Retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_PRICE_LEVELS_EXHAUSTED",
+            "number": 208,
+            "doc": "The order book of the market holds its maximum number of distinct price\n levels, so an order at a new price cannot rest. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_CLIENT_ORDER_IDS_EXHAUSTED",
+            "number": 209,
+            "doc": "The account reserves its maximum number of client order IDs, including those\n of recently ended orders. Retry once they expire, or send the request without\n a client order ID."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_ID_CONFLICT",
+            "number": 210,
+            "doc": "The order identifier is held by a different, earlier order, so the request\n was not applied. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_SIDE",
+            "number": 211,
+            "doc": "The order side, or a trigger's child order side, is not a known side."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_ORDER_TYPE",
+            "number": 212,
+            "doc": "The order type, or a trigger's child order type, is not a known order type."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_STP_MODE",
+            "number": 213,
+            "doc": "The self-trade prevention mode is not a known mode."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_ORDER_FLAGS",
+            "number": 214,
+            "doc": "An order flag is unknown, or not accepted with this order type or time in\n force, or on a trigger's child order."
+          },
+          {
+            "name": "ERROR_CODE_BATCH_OTHER_ITEM_INVALID",
+            "number": 215,
+            "doc": "Another item of the same batch was invalid, so this item was not applied\n either. Nothing in the batch changed."
+          },
+          {
+            "name": "ERROR_CODE_REPLACE_ONTO_OWN_ID",
+            "number": 216,
+            "doc": "The replacement order identifier equals the identifier of the order it\n replaces."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_CLIENT_ORDER_ID",
+            "number": 217,
+            "doc": "The client order ID is longer than 36 bytes or otherwise not valid."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_SEQUENCE_EXHAUSTED",
+            "number": 218,
+            "doc": "The account used every order identifier available to it in this market.\n Retrying does not help; contact support."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_HANDLING_MODE",
+            "number": 219,
+            "doc": "The order handling mode is not a known or accepted mode."
+          },
+          {
+            "name": "ERROR_CODE_FEE_SCHEDULE_UNAVAILABLE",
+            "number": 220,
+            "doc": "The fees that apply to the order cannot be determined right now, so it was\n not admitted. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_POLICY_UNAVAILABLE",
+            "number": 221,
+            "doc": "The account's trading policy cannot be evaluated right now, so the order was\n not admitted. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_CANCEL_ALL_AFTER_TIMEOUT_INVALID",
+            "number": 222,
+            "doc": "The cancel-all-after timeout is neither 0, which disarms it, nor between 10\n and 120 seconds."
+          },
+          {
+            "name": "ERROR_CODE_CANCEL_SCOPE_TOO_LARGE",
+            "number": 223,
+            "doc": "The cancel-all request named more than 100 symbols."
+          },
+          {
+            "name": "ERROR_CODE_RATE_LIMIT_POLICY_UNAVAILABLE",
+            "number": 224,
+            "doc": "No usable rate-limit policy applies to the account right now, so the request\n was refused rather than admitted unlimited. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_SYSTEM_RATE_LIMITED",
+            "number": 225,
+            "doc": "The venue-wide admission rate that the account shares with other accounts is\n exhausted. The account's own limit was not reached; retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_MODIFY_IN_PROGRESS",
+            "number": 226,
+            "doc": "An earlier amend or replace of the order has not completed yet. Retry once it\n completes."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_PLACEMENT_PENDING",
+            "number": 227,
+            "doc": "The order, or the replace that created it, has not been placed on the book\n yet, so it cannot be modified. Retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_MODIFY_BEHAVIOR",
+            "number": 228,
+            "doc": "The modify behavior is not a known behavior."
+          },
+          {
+            "name": "ERROR_CODE_BATCH_REPLACE_ONLY_REQUIRED",
+            "number": 229,
+            "doc": "No longer returned: each BatchReplaceOrders item follows ModifyOrder's\n default amend-or-replace rule. The value stays reserved."
+          },
+          {
+            "name": "ERROR_CODE_BATCH_SINGLE_SYMBOL_REQUIRED",
+            "number": 230,
+            "doc": "An item of the batch modify named no symbol, or another symbol than the\n batch's first item, so the batch was refused."
+          },
+          {
+            "name": "ERROR_CODE_REQUEST_RECEIPTS_EXHAUSTED",
+            "number": 231,
+            "doc": "The account keeps its maximum number of recent modify or batch requests for\n duplicate detection. Retry once earlier ones expire."
+          },
+          {
+            "name": "ERROR_CODE_INTENT_ID_INVALID",
+            "number": 232,
+            "doc": "The cancel-all or cancel-all-after request carried an intent identifier of\n zero."
+          },
+          {
+            "name": "ERROR_CODE_DRY_RUN_INVALID",
+            "number": 233,
+            "doc": "The cancel-all request's dry-run flag was neither 0 nor 1."
+          },
+          {
+            "name": "ERROR_CODE_CANCEL_ALL_AFTER_SCOPE_CONFLICT",
+            "number": 234,
+            "doc": "A cancel-all-after is already due to fire, and the re-arm's scope does not\n cover every symbol of the pending one."
+          },
+          {
+            "name": "ERROR_CODE_NEW_ACCOUNT_CAPACITY_REACHED",
+            "number": 235,
+            "doc": "The venue holds its maximum number of account access records, so an account\n trading this market for the first time cannot be admitted. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE",
+            "number": 236,
+            "doc": "The modify patched the trigger's child limit price or price mode, which the\n trigger does not accept."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_GENERATIONS_EXHAUSTED",
+            "number": 237,
+            "doc": "The trigger reached its last modification. Nothing changed; cancel it and\n create a new trigger instead."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CONTROL_SHARE_EXHAUSTED",
+            "number": 238,
+            "doc": "The account has its maximum number of trigger changes whose outcome is still\n pending. Retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CONTROLS_BUSY",
+            "number": 239,
+            "doc": "The venue's capacity for pending trigger changes is exhausted across\n accounts. Retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_TYPE_NOT_SUPPORTED",
+            "number": 240,
+            "doc": "The trigger type is valid but not supported on this venue yet."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_TRIGGER_TYPE",
+            "number": 241,
+            "doc": "The trigger type is not a known type."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_DIRECTION_INVALID",
+            "number": 242,
+            "doc": "The trigger direction is neither ABOVE nor BELOW."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_QTY_INVALID",
+            "number": 243,
+            "doc": "The trigger's child order quantity is not positive."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_BUY_REQUIRES_LIMIT",
+            "number": 244,
+            "doc": "A buy trailing stop's child order is not a LIMIT order with a maximum\n price; its funds are reserved at that price."
+          },
+          {
+            "name": "ERROR_CODE_ACCOUNT_ROUTING_INVALID",
+            "number": 245,
+            "doc": "The account's trading route is not configured for triggers, so the trigger\n was not admitted. Contact support if it persists."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_LIMIT_EXCEEDED",
+            "number": 246,
+            "doc": "The account has its maximum number of live and recently ended triggers."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CONTROL_IN_PROGRESS",
+            "number": 247,
+            "doc": "An earlier change of the trigger has not completed yet. Retry once it\n completes."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_PATCH_EMPTY",
+            "number": 248,
+            "doc": "The trigger modify named no field to change."
+          },
+          {
+            "name": "ERROR_CODE_CLIENT_TRIGGER_ID_INVALID",
+            "number": 249,
+            "doc": "The client trigger ID is empty, longer than 36 bytes or otherwise not valid."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_ACTIVATION_PRICE_INVALID",
+            "number": 250,
+            "doc": "The trailing trigger's activation price is not positive or not on the pair's\n tick."
+          },
+          {
+            "name": "ERROR_CODE_SLIPPAGE_TICKS_INVALID",
+            "number": 251,
+            "doc": "The trigger's slippage bound in ticks is not valid for its child order."
+          },
+          {
+            "name": "ERROR_CODE_SLIPPAGE_BPS_INVALID",
+            "number": 252,
+            "doc": "The trigger's slippage bound in basis points is not valid for its child\n order."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CONTROL_OUTCOME_UNKNOWN",
+            "number": 253,
+            "doc": "The trigger change was not confirmed within its time bound. Its outcome is\n unknown and it may still apply; read the trigger before retrying."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CAPACITY_REACHED",
+            "number": 254,
+            "doc": "The venue holds its maximum number of triggers across accounts right now.\n Retry later."
+          },
+          {
+            "name": "ERROR_CODE_RESERVATION_CAPACITY_REACHED",
+            "number": 255,
+            "doc": "The venue's capacity for fund reservations is exhausted right now, so the\n trigger's child order could not be reserved. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_CLIENT_ORDER_ID_CAPACITY_REACHED",
+            "number": 256,
+            "doc": "The venue's capacity for reserved client order IDs is exhausted right now, so\n the trigger's child order could not reserve one. Retry later."
+          },
+          {
+            "name": "ERROR_CODE_ACCOUNT_RESERVATION_LIMIT_REACHED",
+            "number": 257,
+            "doc": "The account's open orders and triggers hold its maximum number of fund\n reservations."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_TRIGGER_CONTROL",
+            "number": 258,
+            "doc": "The requested trigger operation is not a known operation."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_PATCH_NOT_ALLOWED",
+            "number": 259,
+            "doc": "A trigger operation other than modify carried field changes."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_PATCH_FIELD_UNKNOWN",
+            "number": 260,
+            "doc": "The trigger modify named a field that is not known."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_PATCH_VALUE_UNMASKED",
+            "number": 261,
+            "doc": "The trigger modify carried a value for a field its change mask does not name."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_PATCH_PRICE_MODE_INVALID",
+            "number": 262,
+            "doc": "The trigger modify's price mode is not a known mode."
+          },
+          {
+            "name": "ERROR_CODE_ACCOUNT_ORDERS_SUSPENDED",
+            "number": 263,
+            "doc": "New orders, changes and trigger orders on this account are suspended until\n a balance issue is resolved; cancels still work. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_TRAILING_SIDE_NOT_SUPPORTED",
+            "number": 264,
+            "doc": "A trailing stop's side is not supported. Trailing stops accept either\n side, so this code is not currently returned."
+          },
+          {
+            "name": "ERROR_CODE_TRAILING_CHILD_NOT_MARKET",
+            "number": 265,
+            "doc": "A trailing stop that sells must have a MARKET child order."
+          },
+          {
+            "name": "ERROR_CODE_TWAP_DURATION_INVALID",
+            "number": 266,
+            "doc": "The TWAP duration is shorter than 1 second or longer than about 292 years,\n the longest the venue's clock represents."
+          },
+          {
+            "name": "ERROR_CODE_LIMIT_CHILD_SLIPPAGE_SET",
+            "number": 267,
+            "doc": "The TWAP sets a slippage bound, but its slices are LIMIT orders, which take\n none."
+          },
+          {
+            "name": "ERROR_CODE_SLIPPAGE_BOUNDS_CONFLICT",
+            "number": 268,
+            "doc": "The slippage bound is given both in ticks and in basis points; give only one."
+          },
+          {
+            "name": "ERROR_CODE_TWAP_INTERVAL_INVALID",
+            "number": 269,
+            "doc": "The TWAP slice interval is shorter than 100 milliseconds or longer than its\n duration."
+          },
+          {
+            "name": "ERROR_CODE_LADDER_LEVEL_REJECTED",
+            "number": 270,
+            "doc": "One of the ladder's orders can't be placed, so the ladder was not created.\n Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_LADDER_RANGE_TOO_NARROW",
+            "number": 271,
+            "doc": "The ladder's price range is too narrow to place its orders at least one\n price tick apart."
+          },
+          {
+            "name": "ERROR_CODE_LADDER_LEVELS_INVALID",
+            "number": 272,
+            "doc": "A ladder places from 2 to 100 orders."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_LIMITS_UNAVAILABLE",
+            "number": 273,
+            "doc": "This market's order limits aren't set yet, so it can't take new orders."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_TYPE_NOT_ALLOWED_IN_AUCTION",
+            "number": 274,
+            "doc": "This market is in an auction call and takes only limit orders that rest\n without crossing the book; market, immediate-or-cancel and fill-or-kill\n orders are refused. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_POST_ONLY_NOT_ALLOWED_IN_AUCTION",
+            "number": 275,
+            "doc": "This market is in an auction call; new post-only orders are refused.\n Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_FEE_DETAILS_INCOMPLETE",
+            "number": 276,
+            "doc": "The request's QuickSwap fee details are incomplete: a fee schedule needs a\n broker, and a broker or broker fee terms need a fee schedule."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_MARKET_NOT_PRICED",
+            "number": 277,
+            "doc": "The requested QuickSwap fee schedule doesn't price this market."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_MISMATCH",
+            "number": 278,
+            "doc": "The broker fee terms belong to another broker."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_FEE_RECIPIENT_IS_PAYER",
+            "number": 279,
+            "doc": "A QuickSwap fee would be paid into the account placing the order."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE",
+            "number": 280,
+            "doc": "The broker fee terms aren't available yet; retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE",
+            "number": 281,
+            "doc": "The broker's fee account isn't available yet; retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_ACCOUNT_OWNER_UNKNOWN",
+            "number": 301,
+            "doc": "The QuickSwap account is not ready yet; no order was placed. Retry shortly."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_DISABLED",
+            "number": 282,
+            "doc": "QuickSwap isn't enabled for this account's trading."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_ATTACHED_RISK_NOT_ALLOWED",
+            "number": 283,
+            "doc": "QuickSwap orders can't carry take-profit or stop-loss legs."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_ORDER_NOT_MODIFIABLE",
+            "number": 284,
+            "doc": "QuickSwap orders can't be amended or replaced."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_FEE_TOTAL_TOO_HIGH",
+            "number": 285,
+            "doc": "The QuickSwap fees together would exceed the order's value."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_INVALID",
+            "number": 286,
+            "doc": "The broker fee terms are invalid and can't be used."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_BROKER_INVALID",
+            "number": 287,
+            "doc": "The broker's QuickSwap setup is invalid and can't be used."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_FEE_SCHEDULE_INVALID",
+            "number": 288,
+            "doc": "The QuickSwap fee schedule is invalid and can't be used."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_MARKET_FEE_INVALID",
+            "number": 289,
+            "doc": "The QuickSwap fee for this market is invalid and can't be used."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_SETUP_INVALID",
+            "number": 290,
+            "doc": "QuickSwap's setup is invalid, so QuickSwap orders can't be placed."
+          },
+          {
+            "name": "ERROR_CODE_QUICKSWAP_CAPACITY_REACHED",
+            "number": 291,
+            "doc": "QuickSwap's capacity for fee settings is reached; this order can't be\n placed."
+          },
+          {
+            "name": "ERROR_CODE_ATTACHED_EXIT_WORKING",
+            "number": 292,
+            "doc": "An exit order placed by one of the order's attached take-profit or stop\n legs is still working, so the order's attached legs can't be added,\n edited, paused or resumed now; removing a leg is still accepted. Nothing\n changed; retry once the exit completes."
+          },
+          {
+            "name": "ERROR_CODE_MARKET_TRIGGER_LIMIT_EXCEEDED",
+            "number": 293,
+            "doc": "The account already has the most triggers one account may have on this\n market, attached take-profit, stop-loss and trailing legs included.\n Nothing changed; retry once one of them ends."
+          },
+          {
+            "name": "ERROR_CODE_MARKET_TWAP_LIMIT_EXCEEDED",
+            "number": 294,
+            "doc": "The account already has the most TWAP orders one account may have on\n this market. Nothing changed; retry once one of them ends."
+          },
+          {
+            "name": "ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED",
+            "number": 295,
+            "doc": "The account already has the most ladder orders one account may have on\n this market. Nothing changed; retry once one of them ends."
+          },
+          {
+            "name": "ERROR_CODE_CHILD_QTY_EXCEEDS_REMAINING",
+            "number": 296,
+            "doc": "The new quantity of a TWAP order's slice would leave more than the TWAP's\n remaining quantity. Nothing changed; a slice can be raised up to what the\n TWAP still has to execute."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN",
+            "number": 297,
+            "doc": "The order cancellation was sent but not confirmed in time. Its outcome is\n unknown and it may still apply; read the order before retrying. For a batch\n cancellation, every item's outcome is unknown; read them back. For a cancel\n all, some or all of the matching orders may be canceled; read open orders.\n For a cancel all after heartbeat, the switch may or may not have been armed,\n refreshed or disabled; send the heartbeat again."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN",
+            "number": 298,
+            "doc": "The order modification was sent but not confirmed in time. Its outcome is\n unknown and it may still apply; read the order before retrying. For a batch\n replacement, every item's outcome is unknown; read them back."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_REPAIRING",
+            "number": 299,
+            "doc": "This order is being canceled while the account's balances are brought back\n in line, so it can't be changed. Nothing changed; cancels still work, and\n the account's other orders can still be changed."
+          },
+          {
+            "name": "ERROR_CODE_ACCOUNT_REPAIRING",
+            "number": 300,
+            "doc": "This account's orders are being canceled while its balances are brought\n back in line, so new orders, changes and trigger orders are paused for a\n short time. Nothing changed; cancels still work. Try again shortly."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
+            "number": 302,
+            "doc": "The change would act on the trigger at once. The new trigger price of a\n stop-loss or take-profit, or the trigger price a new trailing distance\n gives an activated trailing stop, is already reached by the price the\n trigger watches (at or past it), so the trigger would fire at once and send\n its order; or the new activation price of a trailing stop not yet\n activated is already reached by that price, so it would activate at once.\n Nothing changed; the trigger keeps its previous settings. Returned by\n ModifyTrigger, and by an order modify that moves an attached take-profit,\n stop-loss or trailing stop of an order with a fill. Choose a price the\n market has not reached."
+          },
+          {
+            "name": "ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN",
+            "number": 303,
+            "doc": "The order was sent but not confirmed in time. Its outcome is unknown and\n it may have been accepted; read the order by its client order ID, or read\n open orders, before retrying. For a batch create, every item's outcome is\n unknown; read them back, or repeat the batch with the same request ID and\n payload within 15 minutes, which returns decided items' original results\n and retries the rest without admitting any item twice."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN",
+            "number": 304,
+            "doc": "The trigger was sent but not confirmed in time. Its outcome is unknown and\n it may have been created; read the triggers for its client trigger ID\n before retrying."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_SYMBOL_MISMATCH",
+            "number": 305,
+            "doc": "The request names a listed trading pair other than the trigger's own, so\n it was refused. Nothing changed; name the trigger's own pair, or omit the\n symbol. A pair that is not listed is ERROR_CODE_UNKNOWN_SYMBOL."
+          },
+          {
+            "name": "ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR",
+            "number": 306,
+            "doc": "The account has reached its maximum number of resting orders in this\n market. Good-till-cancelled and good-till-date orders count until they\n end; immediate-or-cancel, fill-or-kill and market orders never count, and\n a replace keeps its order's place. Nothing changed; cancel a resting order\n in this market first."
+          },
+          {
+            "name": "ERROR_CODE_SELF_TRADE_PREVENTED",
+            "number": 307,
+            "doc": "Self-trade prevention expired the order of an attached take-profit,\n stop-loss or trailing stop because it would have traded with another of\n the account's resting orders. It is reported as the trigger's fire refusal\n reason, never as the answer to a request: the attached order stays active.\n New trades and price updates do not fire it while the other order is first\n in line at the best price; once that order is gone or no longer first\n there, it fires again if its trigger condition still holds."
+          },
+          {
+            "name": "ERROR_CODE_ATTACHED_LEGS_EXCEEDED",
+            "number": 86,
+            "doc": "The order already carries every attached leg it may hold, so another\n attached leg was refused. Legs being cancelled count until they end:\n retry once they have ended."
+          },
+          {
+            "name": "ERROR_CODE_FEE_ASSET_INVALID",
+            "number": 87,
+            "doc": "The trigger's fee asset was not valid."
+          },
+          {
+            "name": "ERROR_CODE_FEE_CEILING_INVALID",
+            "number": 88,
+            "doc": "The trigger's maximum fee rate was not valid."
+          },
+          {
+            "name": "ERROR_CODE_UNSUPPORTED_FIELD_SET",
+            "number": 89,
+            "doc": "The trigger set a field that must be left unset."
+          },
+          {
+            "name": "ERROR_CODE_TRIGGER_FIRE_LIMIT_REACHED",
+            "number": 90,
+            "doc": "The trigger could not fire again."
+          },
+          {
+            "name": "ERROR_CODE_CONDITION_FLAGS_INVALID",
+            "number": 91,
+            "doc": "The trigger's condition flags were not valid."
+          },
+          {
+            "name": "ERROR_CODE_CONDITION_PARAMETER_SET",
+            "number": 92,
+            "doc": "The trigger set a condition parameter its condition does not take."
+          },
+          {
+            "name": "ERROR_CODE_TWAP_CAPACITY_REACHED",
+            "number": 93,
+            "doc": "The market had no room for another TWAP order."
+          },
+          {
+            "name": "ERROR_CODE_CHILD_ORDER_INCONSISTENT",
+            "number": 94,
+            "doc": "The trigger's child order did not match the order the trigger requested,\n so the trigger failed and the child order was canceled."
           }
         ]
       }
@@ -1943,6 +2781,15 @@
             "number": 3,
             "doc": "Structured quota state. Present only for rate-limit rejections.",
             "protoRef": "polyester.ratelimit.v1.RateLimitDetail"
+          },
+          {
+            "name": "existing_order_id",
+            "jsonName": "existingOrderId",
+            "number": 4,
+            "doc": "Public order ID holding this account's client order ID when a create is\n rejected with CONFLICT_DUPLICATE_CLIENT_ORDER_ID. Present only when an\n existing holder is known; omitted for duplicates rejected within the same\n batch before an order is assigned. Use GetOrder to obtain its current state.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -2002,14 +2849,14 @@
     {
       "name": "orders.v1.GetBatchReplaceStatusRequest",
       "kind": "message",
-      "doc": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.",
+      "doc": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.\n Batch admission replay lasts 60 seconds from acceptance. If status is\n unavailable, reconcile the individual orders; absence does not prove rejection.",
       "message": {
         "fields": [
           {
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -2115,7 +2962,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -2261,7 +3108,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -2408,7 +3255,7 @@
             "name": "next_page_token",
             "jsonName": "nextPageToken",
             "number": 2,
-            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "doc": "Opaque cursor for the next page. A page may hold fewer orders than\n requested, or none; continue while this token is non-empty. Empty when no\n more results exist.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2447,7 +3294,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -2546,7 +3393,7 @@
     {
       "name": "orders.v1.GetOrderResponse",
       "kind": "message",
-      "doc": "GetOrderResponse returns order details and a bounded execution page.\n Order state, trades and transfers are eventually consistent;\n one page's execution quantities need not equal the order's cumulative quantity.",
+      "doc": "GetOrderResponse returns order details and a bounded execution page.\n The order shows a fill as soon as it executes; its trades are recorded\n shortly after. executions_complete says whether the trades already account\n for every execution the order shows. Transfers are eventually consistent and\n can trail the trades they settle.",
       "message": {
         "fields": [
           {
@@ -2584,6 +3431,14 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "executions_complete",
+            "jsonName": "executionsComplete",
+            "number": 7,
+            "doc": "True when the order's trades through its generation, across every page,\n add up exactly to its cum_qty_scaled. False while a recent execution is\n still being recorded: trades then lists the executions recorded so far,\n and a later read returns the rest. Always false when execution history is\n not included.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -2624,7 +3479,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -3077,7 +3932,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -3117,7 +3972,7 @@
             "name": "request_id",
             "jsonName": "requestId",
             "number": 4,
-            "doc": "Idempotency key (required).",
+            "doc": "Idempotency key (required). Outstanding modifications retain this key;\n identical retries replay the final result for 60 seconds after the answer.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -3160,7 +4015,7 @@
             "name": "new_attached_risk",
             "jsonName": "newAttachedRisk",
             "number": 7,
-            "doc": "Replacement attached-risk policy for the order.",
+            "doc": "Replacement attached-risk policy for the order. The order's change and its\n take-profit, stop-loss and trailing legs apply together: either all of\n them change, or the whole modify is refused and the order and its legs\n stay as they were.",
             "protoRef": "orders.v1.RiskPolicy"
           },
           {
@@ -3426,10 +4281,31 @@
             "name": "avg_price_ticks",
             "jsonName": "avgPriceTicks",
             "number": 14,
-            "doc": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e9. Zero if no fills.",
+            "doc": "Average execution price across the lineage through this generation,\n in quote units scaled by 1e9, rounded down. Zero if no fills.\n avg_price_e18 carries the exact average.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "avg_price_e18",
+            "jsonName": "avgPriceE18",
+            "number": 36,
+            "doc": "Average execution price across the lineage through this generation, in\n quote units scaled by 1e18: the exact executed quote amount divided by\n cum_qty_scaled, rounded half to even at the 18th decimal. Unset if no\n fills.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "cum_notional",
+            "jsonName": "cumNotional",
+            "number": 37,
+            "doc": "Exact quote amount of the fills across the lineage through this\n generation, before fees: the sum over the fills of their quantity,\n scaled as cum_qty_scaled, times their price in quote units scaled by\n 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with\n the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST\n shows it in quote units. avg_price_e18 is this amount over\n cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down\n to 18 decimal places, which is this amount exactly unless\n base_quantity_scale is above 9.\n\n For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),\n the quote the order used is this amount plus fee_total's amount_e18\n when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,\n since a rebate is credited; it is this amount alone when fee_asset is\n BASE, whose fee is taken from the base received. What it left unspent is\n submitted_max_quote_debit_scaled less the quote it used.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "fee_total",
+            "jsonName": "feeTotal",
+            "number": 38,
+            "doc": "Total fee of the fills across the lineage through this generation, net\n of rebates, in the order's fee asset. Order history reads and\n single-order reads that include execution history (the default) carry\n it. It can trail the order's fills: its quantity shows which fills it\n covers. Open-order reads, single-order reads without execution history\n and private stream order updates leave it unset.",
+            "protoRef": "orders.v1.OrderFeeTotal"
           },
           {
             "name": "price_ticks",
@@ -3459,27 +4335,24 @@
             "format": "uint64"
           },
           {
-            "name": "terminal_reason_code",
-            "jsonName": "terminalReasonCode",
-            "number": 18,
-            "doc": "Terminal reason code for canceled/rejected orders. Zero for non-terminal orders.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32"
+            "name": "reject_reason",
+            "jsonName": "rejectReason",
+            "number": 34,
+            "doc": "For a REJECTED order, why it was refused: the same error code the Orders\n API returns for the same refusal. Not set for every other status; JSON and\n REST responses then omit it.",
+            "protoRef": "orders.v1.ErrorCode"
           },
           {
-            "name": "terminal_reason",
-            "jsonName": "terminalReason",
-            "number": 19,
-            "doc": "Stable string for terminal_reason_code (e.g. \"POST_ONLY_CROSS\", \"USER_REQUEST\").\n Empty for non-terminal orders.",
-            "protoScalar": "string",
-            "jsonType": "string"
+            "name": "cancel_reason",
+            "jsonName": "cancelReason",
+            "number": 35,
+            "doc": "For a CANCELED order, why it ended. Not set for every other status; JSON\n and REST responses then omit it.",
+            "protoRef": "orders.v1.CancelReason"
           },
           {
             "name": "attached_risk",
             "jsonName": "attachedRisk",
             "number": 21,
-            "doc": "Attached risk controls + runtime state on the parent order.\n Empty when no attached risk exists.",
+            "doc": "Attached risk controls + runtime state on the parent order.\n Empty when no attached risk exists. Order reads include it only when the\n request asks for it (include_attached_risk, include_attached_risk_state):\n an omission on request, never a removal. The private WebSocket always\n carries it in full, as a read asking for both does.",
             "protoRef": "orders.v1.AttachedRisk"
           },
           {
@@ -3520,13 +4393,13 @@
             "name": "version",
             "jsonName": "version",
             "number": 26,
-            "doc": "Per-order state version. Starts at 1 and increases for every published\n state change. Use this field to reconcile API and realtime updates.",
+            "doc": "Per-order state version: 0 while the order is accepted but not yet on\n the book (status PENDING), then 1 from its first book state and higher\n for every later published execution-state change. Higher values identify\n newer execution state. Fee totals and requested enrichments are not covered\n by this version and may differ between responses with the same version.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32",
             "validate": {
               "number": {
-                "gte": "1",
+                "gte": "0",
                 "lte": "2147483647"
               }
             }
@@ -3564,6 +4437,39 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.OrderFeeTotal",
+      "kind": "message",
+      "doc": "OrderFeeTotal is the total fee of an order's fills, net of rebates, as\n settled. A fill's fee is recorded shortly after the fill executes, so the\n total can trail the fills the order shows: qty_scaled says which fills it\n covers.",
+      "message": {
+        "fields": [
+          {
+            "name": "amount_e18",
+            "jsonName": "amountE18",
+            "number": 1,
+            "doc": "Net fee magnitude in fixed 18-decimal units of the order's fee_asset:\n the fees of the covered fills less their rebates. Zero when they charged\n no fee.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "is_rebate",
+            "jsonName": "isRebate",
+            "number": 2,
+            "doc": "True when the covered fills' rebates exceed their fees, so the amount\n was credited to the account rather than charged.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "qty_scaled",
+            "jsonName": "qtyScaled",
+            "number": 3,
+            "doc": "Executed quantity of the fills the total covers, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Equal to the order's\n cum_qty_scaled once every fill's fee is recorded. While a fill is still\n being recorded the two differ, and a later read of the order includes\n it.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }
@@ -3655,7 +4561,7 @@
             "name": "max_quote_debit_scaled",
             "jsonName": "maxQuoteDebitScaled",
             "number": 4,
-            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.",
+            "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled. It can carry\n attached_risk: the legs protect the quantity it actually buys.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -3736,7 +4642,7 @@
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
             "number": 22,
-            "doc": "Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.",
+            "doc": "Self-trade prevention mode against orders of the same root account,\n including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified.",
             "protoRef": "orders.v1.SelfTradePreventionMode",
             "validate": {
               "enum": {
@@ -3813,7 +4719,7 @@
             "name": "trigger_type",
             "jsonName": "triggerType",
             "number": 2,
-            "doc": "Trigger strategy that created this order, or unspecified for direct orders.",
+            "doc": "Trigger strategy that created this order. Not set for direct orders; JSON\n and REST responses then omit it.",
             "protoRef": "orders.v1.OrderTriggerType",
             "validate": {
               "enum": {
@@ -3883,7 +4789,7 @@
     {
       "name": "orders.v1.OrderStatus",
       "kind": "enum",
-      "doc": "OrderStatus is specific to the read API (write API uses simple \"accepted\" status string).",
+      "doc": "OrderStatus describes the order's execution lifecycle state on read surfaces.\n CreateOrder acknowledges admission without returning execution status.",
       "enum": {
         "values": [
           {
@@ -3904,7 +4810,7 @@
           {
             "name": "FILLED",
             "number": 4,
-            "doc": "Fully filled (no remaining quantity)."
+            "doc": "Fully filled (no remaining quantity). A buy sized by a quote amount\n (max_quote_debit_scaled) is fully filled once it has spent that amount:\n what is left of it buys no further quantity step at the next price the\n order could fill at. Its quantity is then what it bought."
           },
           {
             "name": "CANCELED",
@@ -4064,7 +4970,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 1,
-            "doc": "Target sub-account numeric ID. When omitted, uses caller's root account.",
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -4085,7 +4991,7 @@
     {
       "name": "orders.v1.PreviewOrderResponse",
       "kind": "message",
-      "doc": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
+      "doc": "PreviewOrderResponse reports whether an order is currently admissible and\n returns any sizing and price-protection values resolved during evaluation.\n Quote debit and fees are not returned.\n The result is advisory: account, market, and policy inputs may change, and\n CreateOrder always evaluates the intent again.",
       "message": {
         "fields": [
           {
@@ -4107,7 +5013,7 @@
             "name": "resolved_base_qty_scaled",
             "jsonName": "resolvedBaseQtyScaled",
             "number": 3,
-            "doc": "Gross base quantity resolved for execution, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
+            "doc": "Gross base quantity resolved for execution. REST returns resolvedBaseQty as\n a decimal string in base asset units, for example \"0.005\". Protobuf uses the\n pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4116,7 +5022,7 @@
             "name": "protected_price_bound_ticks",
             "jsonName": "protectedPriceBoundTicks",
             "number": 4,
-            "doc": "Protective execution boundary in quote units scaled by 1e9. This is not an\n expected fill price. Present when price protection was resolved.",
+            "doc": "Protective execution boundary. REST returns protectedPriceBound as a decimal\n string in quote asset units per base asset unit, for example \"2751.6\".\n Protobuf uses quote units scaled by 1e9. This is not an expected fill price.\n Present when price protection was resolved.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4202,7 +5108,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an\n order. These arm after the parent order fills and fire when conditions are\n met. If the parent order is canceled before any fill, attached risk controls\n are discarded.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
       "message": {
         "cel": [
           {
@@ -4248,7 +5154,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "If true, take-profit and the configured stop leg (stop-loss or trailing-stop)\n form an OCO pair: when one fires, the other is canceled.\n Default is false (no mutual cancellation).",
+            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted. It decides what canceling an\n exit order ends: with oco set, canceling one leg's exit ends both legs;\n without it, only that leg ends and the other keeps protecting the\n remaining position. Changing only this setting with ModifyOrder keeps\n the existing legs, with their IDs, arming and a trailing stop's tracked\n peak; changing a leg's terms, such as its trigger price, limit price or\n trailing distance, still replaces that leg. Default is false.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -4258,7 +5164,7 @@
     {
       "name": "orders.v1.SelfTradePreventionMode",
       "kind": "enum",
-      "doc": "SelfTradePreventionMode controls which orders expire when they would trade\n against another order from the same account.",
+      "doc": "SelfTradePreventionMode controls which orders expire when an order would\n trade against another order of the same root account, including all its\n subaccounts: two subaccounts of one root never trade with each other. The\n incoming order's mode decides which orders expire.",
       "enum": {
         "values": [
           {
@@ -4301,7 +5207,7 @@
     {
       "name": "orders.v1.StopLossPolicy",
       "kind": "message",
-      "doc": "StopLossPolicy defines a stop-loss attached to an order. It evaluates last\n trade price, arms after the parent fills, and submits the selected child.",
+      "doc": "StopLossPolicy defines a stop-loss attached to an order. It watches the last\n traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
@@ -4326,6 +5232,18 @@
             "protoRef": "orders.v1.RiskExecution",
             "validate": {
               "required": true
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 3,
+            "doc": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
             }
           }
         ]
@@ -4334,7 +5252,7 @@
     {
       "name": "orders.v1.TakeProfitPolicy",
       "kind": "message",
-      "doc": "TakeProfitPolicy defines a take-profit attached to an order. It evaluates\n last trade price, arms after the parent fills, and submits the selected child.",
+      "doc": "TakeProfitPolicy defines a take-profit attached to an order. It watches the\n last traded price or the index price (trigger_price_source), arms after the\n parent fills, and submits the selected child.",
       "message": {
         "fields": [
           {
@@ -4359,6 +5277,18 @@
             "protoRef": "orders.v1.RiskExecution",
             "validate": {
               "required": true
+            }
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 3,
+            "doc": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
             }
           }
         ]
@@ -4465,7 +5395,7 @@
             "name": "max_slippage_bps",
             "jsonName": "maxSlippageBps",
             "number": 7,
-            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "doc": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999\n whichever side the exit trades. An order whose trailing stop sets 10000\n is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap\n would leave an exit that sells no positive price to sell at.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32",
@@ -4485,6 +5415,32 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 8,
+            "doc": "Price the trailing stop watches and trails: its peak or trough, activation\n and fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "protoRef": "orders.v1.TriggerPriceSource",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "limit_price_ticks",
+            "jsonName": "limitPriceTicks",
+            "number": 4,
+            "doc": "Maximum price of a trailing stop that buys back, in quote units scaled by\n 1e9: the most its exit pays per unit, at which the quote it may spend is\n reserved with the exit's fee. Required when the parent order sells, so\n the trailing stop buys; must be unset when the parent order buys. A rise\n that fires above it still fires, and the exit fills only at or below it.\n Changing it with ModifyOrder replaces the leg.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
           }
         ]
       }
@@ -4511,23 +5467,23 @@
     {
       "name": "orders.v1.TriggerPriceSource",
       "kind": "enum",
-      "doc": "TriggerPriceSource defines which price feed to use for trigger evaluation.\n v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for\n future.",
+      "doc": "TriggerPriceSource defines which price a trigger watches. Standalone\n stop-loss, take-profit and trailing-stop triggers watch LAST_PRICE unless\n INDEX_PRICE is requested; MARK_PRICE is not supported on spot markets.",
       "enum": {
         "values": [
           {
             "name": "LAST_PRICE",
             "number": 1,
-            "doc": "Last traded price (default for spot)."
+            "doc": "Last traded price on the market (default for spot)."
           },
           {
             "name": "INDEX_PRICE",
             "number": 2,
-            "doc": "Index price aggregated from external exchanges (future)."
+            "doc": "The market's index price, aggregated from external exchanges. A trigger\n that watches it acts only on a current index value: while the index is\n stale or unavailable the trigger stays armed and waits, and never fires on\n an outdated value."
           },
           {
             "name": "MARK_PRICE",
             "number": 3,
-            "doc": "Mark price for perpetuals (future)."
+            "doc": "Mark price for perpetuals; not supported on spot markets."
           }
         ]
       }
@@ -4647,6 +5603,23 @@
             "number": 17,
             "doc": "Logical-order identity and the generation that executed this fill.\n Always populated by execution reads; order_id retains its original identity.",
             "protoRef": "orders.v1.OrderLineage"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.UserTradeBatch",
+      "kind": "message",
+      "doc": "UserTradeBatch is one realtime publication on an account's trade stream:\n every fill queued for the stream when it was sent, at most 256 and at most\n 64 KiB. Fills of one trading symbol arrive in execution order; fills of\n different symbols have no defined order relative to each other.\n\n (match_id, order_id) identifies a fill; order_id tells apart the two fills\n of a trade between two orders of the same account. Apply fills in array\n order and in publication order; a fill whose identity was already received\n replaces the earlier copy. When the subscription reports that missed\n publications could not be recovered, reload recent fills over REST.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Fills, oldest first per trading symbol. At least one fill.",
+            "repeated": true,
+            "protoRef": "orders.v1.UserTrade"
           }
         ]
       }

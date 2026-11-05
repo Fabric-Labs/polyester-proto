@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "ledger/v1/catalog.proto";
 import "orders/v1/orders.proto";
+import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
@@ -15,7 +16,8 @@ option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;order
 // Shared enums (Side, OrderType, TimeInForce, SelfTradePreventionMode,
 // FeeAsset) are imported from orders.proto.
 
-// OrderStatus is specific to the read API (write API uses simple "accepted" status string).
+// OrderStatus describes the order's execution lifecycle state on read surfaces.
+// CreateOrder acknowledges admission without returning execution status.
 enum OrderStatus {
   // Order status was not provided.
   ORDER_STATUS_UNSPECIFIED = 0;
@@ -25,7 +27,10 @@ enum OrderStatus {
   PENDING_CANCEL = 2;
   // Accepted and actively working (resting and/or matching).
   WORKING = 3;
-  // Fully filled (no remaining quantity).
+  // Fully filled (no remaining quantity). A buy sized by a quote amount
+  // (max_quote_debit_scaled) is fully filled once it has spent that amount:
+  // what is left of it buys no further quantity step at the next price the
+  // order could fill at. Its quantity is then what it bought.
   FILLED = 4;
   // Canceled and no longer working.
   CANCELED = 5;
@@ -33,17 +38,87 @@ enum OrderStatus {
   REJECTED = 6;
 }
 
+// CancelReason is why a CANCELED order ended. A cancel is no error: a
+// refused order is REJECTED and names its refusal with an ErrorCode instead.
+// Fills before the cancel stand, and the order's remaining reserved funds are
+// released.
+enum CancelReason {
+  // The order is not canceled.
+  CANCEL_REASON_UNSPECIFIED = 0;
+  // A cancel the account sent: a cancel, a batch cancel or a cancel-all.
+  CANCEL_REASON_USER_REQUEST = 1;
+  // The unfilled remainder of an immediate-or-cancel order. A buy sized by a
+  // quote amount (max_quote_debit_scaled) that spends that amount ends
+  // FILLED instead.
+  CANCEL_REASON_IOC_REMAINDER = 2;
+  // The unfilled remainder of a market order: the book ran out, the next
+  // price was past the order's protection price, or the order reached the
+  // market's maximum order quantity. A market buy sized by a quote amount
+  // (max_quote_debit_scaled) that spends that amount, so that what is left
+  // buys no further quantity step, ends FILLED instead.
+  CANCEL_REASON_MARKET_REMAINDER = 3;
+  // Self-trade prevention canceled this resting order when an incoming order
+  // belonging to the same root account, including another subaccount of that
+  // root, would have matched it.
+  CANCEL_REASON_STP_EXPIRE_MAKER = 4;
+  // Self-trade prevention canceled this incoming order instead of matching a
+  // resting order belonging to the same root account, including another
+  // subaccount of that root.
+  CANCEL_REASON_STP_EXPIRE_TAKER = 5;
+  // Self-trade prevention canceled both this order and the order belonging to
+  // the same root account, including another subaccount of that root, that it
+  // would have matched.
+  CANCEL_REASON_STP_EXPIRE_BOTH = 6;
+  // A replace ended this order and created its successor.
+  CANCEL_REASON_REPLACED = 7;
+  // A good-till-date order reached its expiry time.
+  CANCEL_REASON_GTD_EXPIRED = 8;
+  // An amend or replace set the order's total quantity at or below its filled
+  // quantity, so the order ended at its filled quantity.
+  CANCEL_REASON_QTY_AT_OR_BELOW_FILLED = 9;
+  // The market was disabled: the exchange canceled its resting orders.
+  CANCEL_REASON_PAIR_DRAIN = 10;
+  // The market refused one of the order's attached take-profit, stop-loss or
+  // trailing-stop legs, so the order's remainder and its other legs were
+  // canceled.
+  CANCEL_REASON_ATTACHED_RISK_REFUSED = 11;
+  // The account's cancel-all-after timer reached its deadline without a
+  // heartbeat.
+  CANCEL_REASON_CANCEL_ALL_AFTER = 12;
+  // Canceled by the exchange while it recovered the account. Place new orders
+  // once the account trades again.
+  CANCEL_REASON_ACCOUNT_REPAIR = 13;
+  // A TWAP slice its TWAP canceled at the next slice's due time; its unfilled
+  // remainder moves to the TWAP's later slices.
+  CANCEL_REASON_TWAP_ROLLOVER = 14;
+  // An order a trigger placed, such as a TWAP slice, a ladder level, a stop's
+  // child or an attached leg's exit, canceled because its trigger ended or
+  // another leg took over the exit.
+  CANCEL_REASON_STRATEGY_CANCEL = 15;
+  // The exchange canceled the order for a reason it does not name.
+  CANCEL_REASON_SYSTEM = 16;
+  // The market was halted: the exchange canceled every open order of the
+  // market. Fills before the cancel stand. The market refuses new orders until
+  // it trades again.
+  CANCEL_REASON_MARKET_HALTED = 17;
+  // The order's attached take-profit, stop-loss or trailing stop fired while
+  // the order still rested: the exchange canceled the order's unfilled
+  // remainder before placing the attached order, so the two never trade with
+  // each other. Fills before the cancel stand.
+  CANCEL_REASON_ATTACHED_EXIT_FIRED = 18;
+}
+
 // BatchReplacePhase is the recoverable execution phase for one replacement.
 enum BatchReplacePhase {
   // Phase is unavailable.
   BATCH_REPLACE_PHASE_UNSPECIFIED = 0;
-  // The operation was admitted and handed to execution, including cancel-only outcomes.
+  // The operation was admitted and handed to execution, amended items included.
   BATCH_REPLACE_PHASE_ADMITTED = 1;
-  // The successor order is active.
+  // The successor order, or the amended order, is active.
   BATCH_REPLACE_PHASE_WORKING = 2;
   // The replacement was rejected.
   BATCH_REPLACE_PHASE_REJECTED = 3;
-  // The successor, or original order for a cancel-only outcome, reached a terminal state.
+  // The successor, or the amended order, reached a terminal state.
   BATCH_REPLACE_PHASE_TERMINAL = 4;
 }
 
@@ -87,7 +162,8 @@ enum OrderTriggerType {
 message OrderOrigin {
   // Broad class describing how the order was created.
   OrderOriginScope scope = 1 [(buf.validate.field).enum.defined_only = true];
-  // Trigger strategy that created this order, or unspecified for direct orders.
+  // Trigger strategy that created this order. Not set for direct orders; JSON
+  // and REST responses then omit it.
   OrderTriggerType trigger_type = 2 [(buf.validate.field).enum.defined_only = true];
   // Trigger identifier when the order was created by a trigger.
   optional fixed64 trigger_id = 3;
@@ -166,7 +242,10 @@ message AttachedRisk {
   AttachedRiskStopLoss stop_loss = 2;
   // Trailing-stop leg, if configured or if state exists.
   AttachedRiskTrailingStop trailing_stop = 3;
-  // True when the take-profit and stop leg are linked as one-cancels-the-other.
+  // True while the parent's legs were placed with oco and both the
+  // take-profit and a stop leg (stop-loss or trailing stop) are present.
+  // False once either leg is removed. A leg that ended, including one
+  // canceled with TRIGGER_CANCEL_REASON_OCO, stays present.
   bool oco = 4;
 }
 
@@ -181,6 +260,26 @@ message OrderLineage {
   fixed64 id = 1 [(buf.validate.field).fixed64.gt = 0];
   // One-based replacement generation, distinct from per-order state version.
   uint32 generation = 2 [(buf.validate.field).uint32.gt = 0];
+}
+
+// OrderFeeTotal is the total fee of an order's fills, net of rebates, as
+// settled. A fill's fee is recorded shortly after the fill executes, so the
+// total can trail the fills the order shows: qty_scaled says which fills it
+// covers.
+message OrderFeeTotal {
+  // Net fee magnitude in fixed 18-decimal units of the order's fee_asset:
+  // the fees of the covered fills less their rebates. Zero when they charged
+  // no fee.
+  polyester.type.v1.U128 amount_e18 = 1;
+  // True when the covered fills' rebates exceed their fees, so the amount
+  // was credited to the account rather than charged.
+  bool is_rebate = 2;
+  // Executed quantity of the fills the total covers, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig. Equal to the order's
+  // cum_qty_scaled once every fill's fee is recorded. While a fill is still
+  // being recorded the two differ, and a later read of the order includes
+  // it.
+  int64 qty_scaled = 3;
 }
 
 // Order is the Connect-facing order view with compact binary fields.
@@ -225,8 +324,38 @@ message Order {
   // GetSpotConfig for symbol_id. Zero for terminal orders.
   int64 leaves_qty_scaled = 20;
   // Average execution price across the lineage through this generation,
-  // in quote units scaled by 1e9. Zero if no fills.
+  // in quote units scaled by 1e9, rounded down. Zero if no fills.
+  // avg_price_e18 carries the exact average.
   int64 avg_price_ticks = 14;
+  // Average execution price across the lineage through this generation, in
+  // quote units scaled by 1e18: the exact executed quote amount divided by
+  // cum_qty_scaled, rounded half to even at the 18th decimal. Unset if no
+  // fills.
+  polyester.type.v1.U128 avg_price_e18 = 36;
+  // Exact quote amount of the fills across the lineage through this
+  // generation, before fees: the sum over the fills of their quantity,
+  // scaled as cum_qty_scaled, times their price in quote units scaled by
+  // 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with
+  // the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST
+  // shows it in quote units. avg_price_e18 is this amount over
+  // cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down
+  // to 18 decimal places, which is this amount exactly unless
+  // base_quantity_scale is above 9.
+  //
+  // For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),
+  // the quote the order used is this amount plus fee_total's amount_e18
+  // when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,
+  // since a rebate is credited; it is this amount alone when fee_asset is
+  // BASE, whose fee is taken from the base received. What it left unspent is
+  // submitted_max_quote_debit_scaled less the quote it used.
+  polyester.type.v1.U128 cum_notional = 37;
+  // Total fee of the fills across the lineage through this generation, net
+  // of rebates, in the order's fee asset. Order history reads and
+  // single-order reads that include execution history (the default) carry
+  // it. It can trail the order's fills: its quantity shows which fills it
+  // covers. Open-order reads, single-order reads without execution history
+  // and private stream order updates leave it unset.
+  OrderFeeTotal fee_total = 38;
   // Limit price in quote units scaled by 1e9. Zero for MARKET orders.
   int64 price_ticks = 15;
   // Creation timestamp in nanoseconds since epoch (UTC).
@@ -234,13 +363,18 @@ message Order {
   // Terminal timestamp in nanoseconds since epoch (UTC). Zero for open orders.
   uint64 terminal_ts_ns = 17;
 
-  // Terminal reason code for canceled/rejected orders. Zero for non-terminal orders.
-  uint32 terminal_reason_code = 18;
-  // Stable string for terminal_reason_code (e.g. "POST_ONLY_CROSS", "USER_REQUEST").
-  // Empty for non-terminal orders.
-  string terminal_reason = 19;
+  // For a REJECTED order, why it was refused: the same error code the Orders
+  // API returns for the same refusal. Not set for every other status; JSON and
+  // REST responses then omit it.
+  ErrorCode reject_reason = 34;
+  // For a CANCELED order, why it ended. Not set for every other status; JSON
+  // and REST responses then omit it.
+  CancelReason cancel_reason = 35;
   // Attached risk controls + runtime state on the parent order.
-  // Empty when no attached risk exists.
+  // Empty when no attached risk exists. Order reads include it only when the
+  // request asks for it (include_attached_risk, include_attached_risk_state):
+  // an omission on request, never a removal. The private WebSocket always
+  // carries it in full, as a read asking for both does.
   AttachedRisk attached_risk = 21;
   // Runtime lineage metadata (why the order exists and what generated it).
   OrderOrigin origin = 22;
@@ -252,10 +386,13 @@ message Order {
   int64 market_max_slippage_ticks = 24;
   // Optional MARKET max slippage in basis points (1 bp = 0.01%).
   int32 market_max_slippage_bps = 25;
-  // Per-order state version. Starts at 1 and increases for every published
-  // state change. Use this field to reconcile API and realtime updates.
+  // Per-order state version: 0 while the order is accepted but not yet on
+  // the book (status PENDING), then 1 from its first book state and higher
+  // for every later published execution-state change. Higher values identify
+  // newer execution state. Fee totals and requested enrichments are not covered
+  // by this version and may differ between responses with the same version.
   uint32 version = 26 [(buf.validate.field).uint32 = {
-    gte: 1
+    gte: 0
     lte: 2147483647
   }];
   // Batch-replace identity that admitted this order. Zero for other origins.
@@ -264,8 +401,6 @@ message Order {
   // quote_quantity_scale from GetSpotConfig. Present only when that sizing
   // method was submitted.
   optional int64 submitted_max_quote_debit_scaled = 28;
-  reserved 29, 30;
-  reserved "lineage_id", "generation";
   // Logical-order identity and requested generation. Always populated by order reads.
   OrderLineage lineage = 31;
   // Exact UTC expiry time for GTD orders, within the supported signed
@@ -302,11 +437,24 @@ message UserTrade {
   uint64 ts_ns = 13;
   // Whether this fill earned a rebate instead of paying a fee.
   bool fee_is_rebate = 14;
-  reserved 15, 16;
-  reserved "lineage_id", "generation";
   // Logical-order identity and the generation that executed this fill.
   // Always populated by execution reads; order_id retains its original identity.
   OrderLineage lineage = 17;
+}
+
+// UserTradeBatch is one realtime publication on an account's trade stream:
+// every fill queued for the stream when it was sent, at most 256 and at most
+// 64 KiB. Fills of one trading symbol arrive in execution order; fills of
+// different symbols have no defined order relative to each other.
+//
+// (match_id, order_id) identifies a fill; order_id tells apart the two fills
+// of a trade between two orders of the same account. Apply fills in array
+// order and in publication order; a fill whose identity was already received
+// replaces the earlier copy. When the subscription reports that missed
+// publications could not be recovered, reload recent fills over REST.
+message UserTradeBatch {
+  // Fills, oldest first per trading symbol. At least one fill.
+  repeated UserTrade events = 1;
 }
 
 // OrderTransfer is the Connect-facing minimal per-leg transfer view.
@@ -333,7 +481,9 @@ message OrderTransfer {
 
 // GetOpenOrdersRequest lists currently non-terminal orders for an account.
 message GetOpenOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id values. Empty means all symbols.
   repeated uint32 symbol_id = 2 [
@@ -380,7 +530,9 @@ message GetOrderHistoryRequest {
     expression: "!has(this.start_ts_ns) || !has(this.end_ts_ns) || (this.start_ts_ns <= this.end_ts_ns)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id values. Empty means all symbols.
   repeated uint32 symbol_id = 2 [
@@ -420,7 +572,9 @@ message GetOrderHistoryRequest {
 message GetOrderHistoryResponse {
   // Historical orders ordered newest-first.
   repeated Order orders = 1;
-  // Opaque cursor for the next page. Empty when no more results exist.
+  // Opaque cursor for the next page. A page may hold fewer orders than
+  // requested, or none; continue while this token is non-empty. Empty when no
+  // more results exist.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
 }
 
@@ -445,7 +599,9 @@ message GetUserTradesRequest {
     expression: "!has(this.through_generation) || has(this.lineage_id)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Optional filter by symbol_id.
   uint32 symbol_id = 2 [
@@ -500,7 +656,9 @@ message GetUserTradesResponse {
 
 // GetOrderRequest retrieves one physical order and a bounded page of its lineage executions.
 message GetOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Order lookup key. Exactly one identifier is required.
   oneof key {
@@ -537,8 +695,10 @@ message GetOrderRequest {
 }
 
 // GetOrderResponse returns order details and a bounded execution page.
-// Order state, trades and transfers are eventually consistent;
-// one page's execution quantities need not equal the order's cumulative quantity.
+// The order shows a fill as soon as it executes; its trades are recorded
+// shortly after. executions_complete says whether the trades already account
+// for every execution the order shows. Transfers are eventually consistent and
+// can trail the trades they settle.
 message GetOrderResponse {
   // Requested order, if found.
   Order order = 1;
@@ -551,11 +711,21 @@ message GetOrderResponse {
   // Cursor for the next execution page. Empty when no further rows are visible;
   // this is not a settlement or order-state reconciliation watermark.
   string next_page_token = 6 [(buf.validate.field).string.max_len = 512];
+  // True when the order's trades through its generation, across every page,
+  // add up exactly to its cum_qty_scaled. False while a recent execution is
+  // still being recorded: trades then lists the executions recorded so far,
+  // and a later read returns the rest. Always false when execution history is
+  // not included.
+  bool executions_complete = 7;
 }
 
 // GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.
+// Batch admission replay lasts 60 seconds from acceptance. If status is
+// unavailable, reconcile the individual orders; absence does not prove rejection.
 message GetBatchReplaceStatusRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Server-issued batch identity from BatchReplaceOrders.
   fixed64 batch_request_id = 2 [(buf.validate.field).fixed64.gt = 0];
@@ -569,16 +739,16 @@ message BatchReplaceStatusItem {
   BatchReplacePhase phase = 2;
   // Original order targeted by the replacement.
   fixed64 old_order_id = 3;
-  // Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.
+  // Assigned successor order ID. Zero for an amended item or rejection before assignment.
   fixed64 replacement_order_id = 4;
-  // Current successor status, or original order status for a cancel-only outcome, when available.
+  // Current successor status, or the amended order's status, when available.
   OrderStatus order_status = 5;
   // Stable rejection or terminal error code. Empty when none.
   string code = 6;
   // Latest status timestamp in nanoseconds since epoch.
   uint64 updated_ts_ns = 7;
-  // REPLACED admits a successor. AMENDED is cancel-only: no successor exists and
-  // order_status describes old_order_id. Unspecified for rejected items.
+  // REPLACED admits a successor. AMENDED keeps the order under old_order_id with
+  // no successor, and order_status describes it. Unspecified for rejected items.
   ModifyActionTaken action_taken = 8;
 }
 
@@ -605,23 +775,43 @@ message GetBatchReplaceStatusResponse {
 // =============================================================================
 
 service OrdersReadService {
+  option (polyester.api.docs_group) = "trading";
+
   // Retrieve non-terminal orders for an account.
   // Supports optional subaccount, trigger, symbol, and side filters with cursor pagination.
-  rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse) {}
+  // While the current state of an order in scope is temporarily unavailable, the call
+  // fails with a retryable UNAVAILABLE rather than omitting the order or returning a
+  // stale state; retry the same request.
+  rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve terminal order history for an account.
   // Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination.
-  rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse) {}
+  // While the current state of an order on the page is temporarily unavailable, the call
+  // fails with a retryable UNAVAILABLE rather than returning a stale state; retry the
+  // same request.
+  rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve per-user trade fills for an account.
   // Supports exact physical-order or logical-lineage scope, an inclusive generation
   // cutoff, and subaccount, symbol, side and time filters with cursor pagination.
-  rpc GetUserTrades(GetUserTradesRequest) returns (GetUserTradesResponse) {}
+  rpc GetUserTrades(GetUserTradesRequest) returns (GetUserTradesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve order state and a bounded page of its lineage executions by order or client order ID.
   // Use GetUserTrades for paginated execution history and optional settlement legs.
   // Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.
-  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {}
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
 
   // Retrieve durable execution status for one admitted batch replacement.
   rpc GetBatchReplaceStatus(GetBatchReplaceStatusRequest) returns (GetBatchReplaceStatusResponse) {}

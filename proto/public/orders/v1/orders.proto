@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
 import "polyester/ratelimit/v1/types.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/orders/v1;ordersv1";
@@ -46,7 +47,8 @@ enum OrderType {
 // TimeInForce controls how long an order may remain active and whether it must
 // fill completely.
 enum TimeInForce {
-  // Time-in-force was not provided; create requests default to GTC.
+  // Time-in-force was not provided. Create requests must select an execution
+  // variant, which determines time-in-force.
   TIME_IN_FORCE_UNSPECIFIED = 0;
   // Good-til-canceled.
   GTC = 1;
@@ -68,8 +70,10 @@ enum FeeAsset {
   BASE = 2;
 }
 
-// SelfTradePreventionMode controls which orders expire when they would trade
-// against another order from the same account.
+// SelfTradePreventionMode controls which orders expire when an order would
+// trade against another order of the same root account, including all its
+// subaccounts: two subaccounts of one root never trade with each other. The
+// incoming order's mode decides which orders expire.
 enum SelfTradePreventionMode {
   // Self-trade prevention mode was not provided; create requests default to EXPIRE_MAKER.
   SELF_TRADE_PREVENTION_MODE_UNSPECIFIED = 0;
@@ -191,6 +195,10 @@ message OrderIntent {
     int64 base_qty_scaled = 3 [(buf.validate.field).int64.gt = 0];
     // Hard all-in quote debit limit scaled by the pair's quote_quantity_scale
     // from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.
+    // The order spends up to this amount at the prices it fills at. Once what
+    // is left buys no further quantity step, it ends FILLED; if the book or
+    // its price limit stops it first, its remainder is canceled. It can carry
+    // attached_risk: the legs protect the quantity it actually buys.
     int64 max_quote_debit_scaled = 4 [(buf.validate.field).int64.gt = 0];
   }
   // Required execution behavior. The selected variant exposes only fields that
@@ -220,7 +228,8 @@ message OrderIntent {
   // Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY
   // orders; SELL orders must use QUOTE.
   FeeAsset fee_asset = 21 [(buf.validate.field).enum.defined_only = true];
-  // Self-trade prevention mode. Defaults to EXPIRE_MAKER if unspecified.
+  // Self-trade prevention mode against orders of the same root account,
+  // including all its subaccounts. Defaults to EXPIRE_MAKER if unspecified.
   SelfTradePreventionMode self_trade_prevention_mode = 22 [(buf.validate.field).enum.defined_only = true];
   // Optional attached risk controls that arm after the parent order fills.
   RiskPolicy attached_risk = 30;
@@ -231,8 +240,13 @@ message OrderIntent {
 // after an ambiguous transport timeout. Supply client_order_id to reconcile
 // through GetOrder; without it, a lost acknowledgement may leave the outcome
 // unknown. An immediate lookup miss does not prove that admission failed.
+// A create sent but not confirmed in time fails with
+// ORDER_CREATE_OUTCOME_UNKNOWN: the order may have been accepted, so read it
+// back before retrying. UNAVAILABLE means the order was not accepted.
 message CreateOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Order to admit.
   OrderIntent order = 2 [
@@ -273,7 +287,9 @@ message CreateOrderResponse {
 // admissible. It uses the same order contract as CreateOrderRequest. Previewing
 // creates no order, hold, reservation, or client-order-ID claim.
 message PreviewOrderRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Order intent to evaluate without submitting it.
   OrderIntent order = 2 [
@@ -284,6 +300,7 @@ message PreviewOrderRequest {
 
 // PreviewOrderResponse reports whether an order is currently admissible and
 // returns any sizing and price-protection values resolved during evaluation.
+// Quote debit and fees are not returned.
 // The result is advisory: account, market, and policy inputs may change, and
 // CreateOrder always evaluates the intent again.
 message PreviewOrderResponse {
@@ -293,11 +310,14 @@ message PreviewOrderResponse {
   // Typed reason the order is not currently admissible. Omitted when
   // admissible is true.
   ErrorDetail rejection = 2;
-  // Gross base quantity resolved for execution, scaled by the pair's
-  // base_quantity_scale from GetSpotConfig. Present when sizing was resolved.
+  // Gross base quantity resolved for execution. REST returns resolvedBaseQty as
+  // a decimal string in base asset units, for example "0.005". Protobuf uses the
+  // pair's base_quantity_scale from GetSpotConfig. Present when sizing was resolved.
   optional int64 resolved_base_qty_scaled = 3;
-  // Protective execution boundary in quote units scaled by 1e9. This is not an
-  // expected fill price. Present when price protection was resolved.
+  // Protective execution boundary. REST returns protectedPriceBound as a decimal
+  // string in quote asset units per base asset unit, for example "2751.6".
+  // Protobuf uses quote units scaled by 1e9. This is not an expected fill price.
+  // Present when price protection was resolved.
   optional int64 protected_price_bound_ticks = 4;
   // Time at which this admission evaluation completed.
   google.protobuf.Timestamp evaluated_at = 5;
@@ -322,9 +342,15 @@ message CancelOrderRequest {
       (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
     ];
   }
-  // Optional symbol_id for routing; when omitted, resolved from order directory.
+  // Optional trading symbol numeric identifier. When set, it must match the
+  // order's symbol, or the order is reported unknown (ERROR_CODE_ORDER_UNKNOWN)
+  // and nothing is canceled. An order that ended a while ago may instead be
+  // reported ended (ERROR_CODE_ORDER_ALREADY_TERMINAL). When omitted, the
+  // order's own symbol is used.
   uint32 symbol_id = 3;
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 4;
 }
 
@@ -370,7 +396,11 @@ enum ErrorCode {
   ERROR_CODE_MIN_NOTIONAL = 7;
   // Quantity does not align with the pair step size.
   ERROR_CODE_QTY_STEP_SIZE = 8;
-  // Client order ID is already in use for a different active order.
+  // Client order ID is already in use on this account, by an open order or by
+  // an order that ended recently; an ended order keeps its client order ID
+  // reserved for at least 60 seconds. Reuse returns this code even with the
+  // same payload. Use GetOrder to reconcile, then retry with a new client
+  // order ID.
   ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_ORDER_ID = 9;
   // Service is temporarily unavailable.
   ERROR_CODE_UNAVAILABLE = 10;
@@ -417,7 +447,7 @@ enum ErrorCode {
   // API key policy does not allow trading this market, even though the
   // sub-account policy does.
   ERROR_CODE_API_KEY_MARKET_DENY = 29;
-  // Price must align with the pair tick size (LIMIT orders).
+  // Price must align with the pair tick size, including trigger and activation prices.
   ERROR_CODE_PRICE_TICK_SIZE = 30;
   // Quantity is below the pair minimum quantity (base units).
   ERROR_CODE_MIN_QTY = 31;
@@ -462,7 +492,7 @@ enum ErrorCode {
   ERROR_CODE_EMPTY_BOOK = 62;
   // FOK order rejected due to insufficient immediate liquidity.
   ERROR_CODE_FOK_INSUFFICIENT_LIQUIDITY = 63;
-  // Client order ID points to an order that already reached terminal state.
+  // The order has already ended (filled, canceled or expired).
   ERROR_CODE_ORDER_ALREADY_TERMINAL = 64;
 
   // Trigger-specific error codes (40-49 range).
@@ -475,21 +505,28 @@ enum ErrorCode {
   ERROR_CODE_TRAILING_DISTANCE_INVALID = 42;
   // Trigger not found (for cancel/get operations).
   ERROR_CODE_TRIGGER_NOT_FOUND = 43;
-  // Trigger cannot be canceled in current state.
-  ERROR_CODE_TRIGGER_CANCEL_REJECTED = 44;
   // Trigger status does not allow requested lifecycle operation.
   ERROR_CODE_TRIGGER_STATUS_INVALID = 45;
   // Trigger type/state does not support requested lifecycle operation.
   ERROR_CODE_TRIGGER_NOT_MODIFIABLE = 46;
-  // Duplicate client trigger ID was reused with a different trigger payload.
+  // Client trigger ID is already used, either by a trigger with a different
+  // payload or by an earlier create that failed or was rolled back. List
+  // triggers to reconcile by client trigger ID, then retry with a new client
+  // trigger ID.
   ERROR_CODE_CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID = 47;
-  // Trailing-stop max slippage (ticks or bps) is invalid.
+  // Max slippage (ticks or bps) is out of range or leaves no valid execution
+  // price bound. Applies to market orders and to standalone and attached
+  // trailing stops, on create and on modify; for example, a 10000 bps cap on a
+  // market order or trailing stop that sells.
   ERROR_CODE_MAX_SLIPPAGE_INVALID = 48;
   // Client reference price is stale compared to server-side BBO/drift policy.
   ERROR_CODE_STALE_QUOTE = 65;
   // Request failed structural or cross-field validation.
   ERROR_CODE_VALIDATION_ERROR = 66;
-  // This edge is at its bounded concurrent BatchReplace admission capacity.
+  // The account already has its maximum order requests in flight; nothing was
+  // admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns
+  // HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after
+  // one of the outstanding requests completes.
   ERROR_CODE_OVERLOADED = 67;
   // The all-in quote budget cannot resolve one valid step-aligned base quantity.
   ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL = 68;
@@ -503,6 +540,381 @@ enum ErrorCode {
   ERROR_CODE_API_KEY_SPOT_READ_DENY = 72;
   // The cancel request exceeded its bounded internal replay window.
   ERROR_CODE_CANCEL_REQUEST_EXPIRED = 73;
+  // Quantity is above the pair maximum: the market-order maximum for MARKET
+  // orders, the limit-order maximum otherwise (base units).
+  ERROR_CODE_MAX_QTY = 74;
+  // Order notional is above the pair maximum (quote units). A stricter
+  // sub-account policy cap returns POLICY_MAX_NOTIONAL instead.
+  ERROR_CODE_MAX_NOTIONAL = 75;
+  // The replacement total quantity is at or below the order's filled
+  // quantity: the order ended at its filled quantity and no replacement order
+  // was created.
+  ERROR_CODE_QTY_AT_OR_BELOW_FILLED = 76;
+  // The trading gateway that took the request is misconfigured for the order
+  // service behind it. An operator must correct it; retrying does not help.
+  ERROR_CODE_GATEWAY_MISCONFIGURED = 77;
+  // The order identifier or the replacement order identifier is not valid.
+  ERROR_CODE_INVALID_ORDER_ID = 80;
+  // The quantity of a trigger's child order or a ladder order can't be raised
+  // above its planned quantity. Nothing changed.
+  ERROR_CODE_CHILD_QTY_RAISE_NOT_ALLOWED = 81;
+  // Attached take-profit, stop-loss or trailing legs can't be applied here:
+  // this market takes none, an attached trailing stop isn't offered yet, or
+  // the modify changes them together with the order's price, quantity, client
+  // order ID or a replace. Nothing changed.
+  ERROR_CODE_ATTACHED_RISK_NOT_SUPPORTED = 82;
+  // The account has too many filled or ended orders whose settlement has not
+  // completed yet. Nothing changed; the request is accepted again once settlement
+  // catches up.
+  ERROR_CODE_SETTLEMENT_BACKLOGGED = 84;
+  // The order would take the total quantity resting at its price past the
+  // most a price level can hold, even if some quantity still fits. Nothing
+  // changed: a new order was not placed, a modified order keeps resting as it
+  // was, and the other orders at that price are unchanged. Another price or a
+  // smaller quantity, or the same order once less quantity rests at that
+  // price, is accepted.
+  ERROR_CODE_PRICE_LEVEL_QUANTITY_LIMIT = 127;
+  // The market order carried no client reference price, and the pair's reference
+  // quote (top of book) was older than its freshness bound when the order was
+  // admitted.
+  ERROR_CODE_MARKET_QUOTE_STALE = 200;
+  // The market order carried no client reference price, and the pair's reference
+  // quote could not be used to price it, for example because it postdated the
+  // order or carried an invalid price.
+  ERROR_CODE_MARKET_QUOTE_UNHEALTHY = 201;
+  // The time in force, or its expiry time, is not accepted for this order or for
+  // a trigger's child order type.
+  ERROR_CODE_INVALID_TIME_IN_FORCE = 202;
+  // The request carried QuickSwap terms that the account or market does not
+  // accept.
+  ERROR_CODE_QUICKSWAP_NOT_PERMITTED = 203;
+  // The order identifier assigned to the request is already in use by another
+  // order of the market. Nothing changed.
+  ERROR_CODE_DUPLICATE_ORDER_ID = 204;
+  // The account has reached its maximum number of open orders across all markets.
+  // A stricter sub-account policy cap returns POLICY_MAX_OPEN_ORDERS instead.
+  ERROR_CODE_MAX_OPEN_ORDERS_TOTAL = 205;
+  // The self-trade prevention mode is not one the venue accepts for this order.
+  ERROR_CODE_STP_MODE_NOT_ALLOWED = 206;
+  // The trading pair is busy with the account's earlier requests, so this one was
+  // not admitted and nothing was reserved. Retry shortly.
+  ERROR_CODE_PAIR_BACKLOGGED = 207;
+  // The order book of the market holds its maximum number of distinct price
+  // levels, so an order at a new price cannot rest. Nothing changed.
+  ERROR_CODE_PRICE_LEVELS_EXHAUSTED = 208;
+  // The account reserves its maximum number of client order IDs, including those
+  // of recently ended orders. Retry once they expire, or send the request without
+  // a client order ID.
+  ERROR_CODE_CLIENT_ORDER_IDS_EXHAUSTED = 209;
+  // The order identifier is held by a different, earlier order, so the request
+  // was not applied. Nothing changed.
+  ERROR_CODE_ORDER_ID_CONFLICT = 210;
+  // The order side, or a trigger's child order side, is not a known side.
+  ERROR_CODE_INVALID_SIDE = 211;
+  // The order type, or a trigger's child order type, is not a known order type.
+  ERROR_CODE_INVALID_ORDER_TYPE = 212;
+  // The self-trade prevention mode is not a known mode.
+  ERROR_CODE_INVALID_STP_MODE = 213;
+  // An order flag is unknown, or not accepted with this order type or time in
+  // force, or on a trigger's child order.
+  ERROR_CODE_INVALID_ORDER_FLAGS = 214;
+  // Another item of the same batch was invalid, so this item was not applied
+  // either. Nothing in the batch changed.
+  ERROR_CODE_BATCH_OTHER_ITEM_INVALID = 215;
+  // The replacement order identifier equals the identifier of the order it
+  // replaces.
+  ERROR_CODE_REPLACE_ONTO_OWN_ID = 216;
+  // The client order ID is longer than 36 bytes or otherwise not valid.
+  ERROR_CODE_INVALID_CLIENT_ORDER_ID = 217;
+  // The account used every order identifier available to it in this market.
+  // Retrying does not help; contact support.
+  ERROR_CODE_ORDER_SEQUENCE_EXHAUSTED = 218;
+  // The order handling mode is not a known or accepted mode.
+  ERROR_CODE_INVALID_HANDLING_MODE = 219;
+  // The fees that apply to the order cannot be determined right now, so it was
+  // not admitted. Retry later.
+  ERROR_CODE_FEE_SCHEDULE_UNAVAILABLE = 220;
+  // The account's trading policy cannot be evaluated right now, so the order was
+  // not admitted. Retry later.
+  ERROR_CODE_POLICY_UNAVAILABLE = 221;
+  // The cancel-all-after timeout is neither 0, which disarms it, nor between 10
+  // and 120 seconds.
+  ERROR_CODE_CANCEL_ALL_AFTER_TIMEOUT_INVALID = 222;
+  // The cancel-all request named more than 100 symbols.
+  ERROR_CODE_CANCEL_SCOPE_TOO_LARGE = 223;
+  // No usable rate-limit policy applies to the account right now, so the request
+  // was refused rather than admitted unlimited. Retry later.
+  ERROR_CODE_RATE_LIMIT_POLICY_UNAVAILABLE = 224;
+  // The venue-wide admission rate that the account shares with other accounts is
+  // exhausted. The account's own limit was not reached; retry shortly.
+  ERROR_CODE_SYSTEM_RATE_LIMITED = 225;
+  // An earlier amend or replace of the order has not completed yet. Retry once it
+  // completes.
+  ERROR_CODE_ORDER_MODIFY_IN_PROGRESS = 226;
+  // The order, or the replace that created it, has not been placed on the book
+  // yet, so it cannot be modified. Retry shortly.
+  ERROR_CODE_ORDER_PLACEMENT_PENDING = 227;
+  // The modify behavior is not a known behavior.
+  ERROR_CODE_INVALID_MODIFY_BEHAVIOR = 228;
+  // No longer returned: each BatchReplaceOrders item follows ModifyOrder's
+  // default amend-or-replace rule. The value stays reserved.
+  ERROR_CODE_BATCH_REPLACE_ONLY_REQUIRED = 229;
+  // An item of the batch modify named no symbol, or another symbol than the
+  // batch's first item, so the batch was refused.
+  ERROR_CODE_BATCH_SINGLE_SYMBOL_REQUIRED = 230;
+  // The account keeps its maximum number of recent modify or batch requests for
+  // duplicate detection. Retry once earlier ones expire.
+  ERROR_CODE_REQUEST_RECEIPTS_EXHAUSTED = 231;
+  // The cancel-all or cancel-all-after request carried an intent identifier of
+  // zero.
+  ERROR_CODE_INTENT_ID_INVALID = 232;
+  // The cancel-all request's dry-run flag was neither 0 nor 1.
+  ERROR_CODE_DRY_RUN_INVALID = 233;
+  // A cancel-all-after is already due to fire, and the re-arm's scope does not
+  // cover every symbol of the pending one.
+  ERROR_CODE_CANCEL_ALL_AFTER_SCOPE_CONFLICT = 234;
+  // The venue holds its maximum number of account access records, so an account
+  // trading this market for the first time cannot be admitted. Retry later.
+  ERROR_CODE_NEW_ACCOUNT_CAPACITY_REACHED = 235;
+  // The modify patched the trigger's child limit price or price mode, which the
+  // trigger does not accept.
+  ERROR_CODE_TRIGGER_CHILD_PRICE_NOT_MODIFIABLE = 236;
+  // The trigger reached its last modification. Nothing changed; cancel it and
+  // create a new trigger instead.
+  ERROR_CODE_TRIGGER_GENERATIONS_EXHAUSTED = 237;
+  // The account has its maximum number of trigger changes whose outcome is still
+  // pending. Retry shortly.
+  ERROR_CODE_TRIGGER_CONTROL_SHARE_EXHAUSTED = 238;
+  // The venue's capacity for pending trigger changes is exhausted across
+  // accounts. Retry shortly.
+  ERROR_CODE_TRIGGER_CONTROLS_BUSY = 239;
+  // The trigger type is valid but not supported on this venue yet.
+  ERROR_CODE_TRIGGER_TYPE_NOT_SUPPORTED = 240;
+  // The trigger type is not a known type.
+  ERROR_CODE_INVALID_TRIGGER_TYPE = 241;
+  // The trigger direction is neither ABOVE nor BELOW.
+  ERROR_CODE_TRIGGER_DIRECTION_INVALID = 242;
+  // The trigger's child order quantity is not positive.
+  ERROR_CODE_TRIGGER_QTY_INVALID = 243;
+  // A buy trailing stop's child order is not a LIMIT order with a maximum
+  // price; its funds are reserved at that price.
+  ERROR_CODE_TRIGGER_BUY_REQUIRES_LIMIT = 244;
+  // The account's trading route is not configured for triggers, so the trigger
+  // was not admitted. Contact support if it persists.
+  ERROR_CODE_ACCOUNT_ROUTING_INVALID = 245;
+  // The account has its maximum number of live and recently ended triggers.
+  ERROR_CODE_TRIGGER_LIMIT_EXCEEDED = 246;
+  // An earlier change of the trigger has not completed yet. Retry once it
+  // completes.
+  ERROR_CODE_TRIGGER_CONTROL_IN_PROGRESS = 247;
+  // The trigger modify named no field to change.
+  ERROR_CODE_TRIGGER_PATCH_EMPTY = 248;
+  // The client trigger ID is empty, longer than 36 bytes or otherwise not valid.
+  ERROR_CODE_CLIENT_TRIGGER_ID_INVALID = 249;
+  // The trailing trigger's activation price is not positive or not on the pair's
+  // tick.
+  ERROR_CODE_TRIGGER_ACTIVATION_PRICE_INVALID = 250;
+  // The trigger's slippage bound in ticks is not valid for its child order.
+  ERROR_CODE_SLIPPAGE_TICKS_INVALID = 251;
+  // The trigger's slippage bound in basis points is not valid for its child
+  // order.
+  ERROR_CODE_SLIPPAGE_BPS_INVALID = 252;
+  // The trigger change was not confirmed within its time bound. Its outcome is
+  // unknown and it may still apply; read the trigger before retrying.
+  ERROR_CODE_TRIGGER_CONTROL_OUTCOME_UNKNOWN = 253;
+  // The venue holds its maximum number of triggers across accounts right now.
+  // Retry later.
+  ERROR_CODE_TRIGGER_CAPACITY_REACHED = 254;
+  // The venue's capacity for fund reservations is exhausted right now, so the
+  // trigger's child order could not be reserved. Retry later.
+  ERROR_CODE_RESERVATION_CAPACITY_REACHED = 255;
+  // The venue's capacity for reserved client order IDs is exhausted right now, so
+  // the trigger's child order could not reserve one. Retry later.
+  ERROR_CODE_CLIENT_ORDER_ID_CAPACITY_REACHED = 256;
+  // The account's open orders and triggers hold its maximum number of fund
+  // reservations.
+  ERROR_CODE_ACCOUNT_RESERVATION_LIMIT_REACHED = 257;
+  // The requested trigger operation is not a known operation.
+  ERROR_CODE_INVALID_TRIGGER_CONTROL = 258;
+  // A trigger operation other than modify carried field changes.
+  ERROR_CODE_TRIGGER_PATCH_NOT_ALLOWED = 259;
+  // The trigger modify named a field that is not known.
+  ERROR_CODE_TRIGGER_PATCH_FIELD_UNKNOWN = 260;
+  // The trigger modify carried a value for a field its change mask does not name.
+  ERROR_CODE_TRIGGER_PATCH_VALUE_UNMASKED = 261;
+  // The trigger modify's price mode is not a known mode.
+  ERROR_CODE_TRIGGER_PATCH_PRICE_MODE_INVALID = 262;
+  // New orders, changes and trigger orders on this account are suspended until
+  // a balance issue is resolved; cancels still work. Nothing changed.
+  ERROR_CODE_ACCOUNT_ORDERS_SUSPENDED = 263;
+  // A trailing stop's side is not supported. Trailing stops accept either
+  // side, so this code is not currently returned.
+  ERROR_CODE_TRAILING_SIDE_NOT_SUPPORTED = 264;
+  // A trailing stop that sells must have a MARKET child order.
+  ERROR_CODE_TRAILING_CHILD_NOT_MARKET = 265;
+  // The TWAP duration is shorter than 1 second or longer than about 292 years,
+  // the longest the venue's clock represents.
+  ERROR_CODE_TWAP_DURATION_INVALID = 266;
+  // The TWAP sets a slippage bound, but its slices are LIMIT orders, which take
+  // none.
+  ERROR_CODE_LIMIT_CHILD_SLIPPAGE_SET = 267;
+  // The slippage bound is given both in ticks and in basis points; give only one.
+  ERROR_CODE_SLIPPAGE_BOUNDS_CONFLICT = 268;
+  // The TWAP slice interval is shorter than 100 milliseconds or longer than its
+  // duration.
+  ERROR_CODE_TWAP_INTERVAL_INVALID = 269;
+  // One of the ladder's orders can't be placed, so the ladder was not created.
+  // Nothing changed.
+  ERROR_CODE_LADDER_LEVEL_REJECTED = 270;
+  // The ladder's price range is too narrow to place its orders at least one
+  // price tick apart.
+  ERROR_CODE_LADDER_RANGE_TOO_NARROW = 271;
+  // A ladder places from 2 to 100 orders.
+  ERROR_CODE_LADDER_LEVELS_INVALID = 272;
+  // This market's order limits aren't set yet, so it can't take new orders.
+  ERROR_CODE_ORDER_LIMITS_UNAVAILABLE = 273;
+  // This market is in an auction call and takes only limit orders that rest
+  // without crossing the book; market, immediate-or-cancel and fill-or-kill
+  // orders are refused. Nothing changed.
+  ERROR_CODE_ORDER_TYPE_NOT_ALLOWED_IN_AUCTION = 274;
+  // This market is in an auction call; new post-only orders are refused.
+  // Nothing changed.
+  ERROR_CODE_POST_ONLY_NOT_ALLOWED_IN_AUCTION = 275;
+  // The request's QuickSwap fee details are incomplete: a fee schedule needs a
+  // broker, and a broker or broker fee terms need a fee schedule.
+  ERROR_CODE_QUICKSWAP_FEE_DETAILS_INCOMPLETE = 276;
+  // The requested QuickSwap fee schedule doesn't price this market.
+  ERROR_CODE_QUICKSWAP_MARKET_NOT_PRICED = 277;
+  // The broker fee terms belong to another broker.
+  ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_MISMATCH = 278;
+  // A QuickSwap fee would be paid into the account placing the order.
+  ERROR_CODE_QUICKSWAP_FEE_RECIPIENT_IS_PAYER = 279;
+  // The broker fee terms aren't available yet; retry shortly.
+  ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_UNAVAILABLE = 280;
+  // The broker's fee account isn't available yet; retry shortly.
+  ERROR_CODE_QUICKSWAP_BROKER_ACCOUNT_UNAVAILABLE = 281;
+  // The QuickSwap account is not ready yet; no order was placed. Retry shortly.
+  ERROR_CODE_QUICKSWAP_ACCOUNT_OWNER_UNKNOWN = 301;
+  // QuickSwap isn't enabled for this account's trading.
+  ERROR_CODE_QUICKSWAP_DISABLED = 282;
+  // QuickSwap orders can't carry take-profit or stop-loss legs.
+  ERROR_CODE_QUICKSWAP_ATTACHED_RISK_NOT_ALLOWED = 283;
+  // QuickSwap orders can't be amended or replaced.
+  ERROR_CODE_QUICKSWAP_ORDER_NOT_MODIFIABLE = 284;
+  // The QuickSwap fees together would exceed the order's value.
+  ERROR_CODE_QUICKSWAP_FEE_TOTAL_TOO_HIGH = 285;
+  // The broker fee terms are invalid and can't be used.
+  ERROR_CODE_QUICKSWAP_BROKER_FEE_TERMS_INVALID = 286;
+  // The broker's QuickSwap setup is invalid and can't be used.
+  ERROR_CODE_QUICKSWAP_BROKER_INVALID = 287;
+  // The QuickSwap fee schedule is invalid and can't be used.
+  ERROR_CODE_QUICKSWAP_FEE_SCHEDULE_INVALID = 288;
+  // The QuickSwap fee for this market is invalid and can't be used.
+  ERROR_CODE_QUICKSWAP_MARKET_FEE_INVALID = 289;
+  // QuickSwap's setup is invalid, so QuickSwap orders can't be placed.
+  ERROR_CODE_QUICKSWAP_SETUP_INVALID = 290;
+  // QuickSwap's capacity for fee settings is reached; this order can't be
+  // placed.
+  ERROR_CODE_QUICKSWAP_CAPACITY_REACHED = 291;
+  // An exit order placed by one of the order's attached take-profit or stop
+  // legs is still working, so the order's attached legs can't be added,
+  // edited, paused or resumed now; removing a leg is still accepted. Nothing
+  // changed; retry once the exit completes.
+  ERROR_CODE_ATTACHED_EXIT_WORKING = 292;
+  // The account already has the most triggers one account may have on this
+  // market, attached take-profit, stop-loss and trailing legs included.
+  // Nothing changed; retry once one of them ends.
+  ERROR_CODE_MARKET_TRIGGER_LIMIT_EXCEEDED = 293;
+  // The account already has the most TWAP orders one account may have on
+  // this market. Nothing changed; retry once one of them ends.
+  ERROR_CODE_MARKET_TWAP_LIMIT_EXCEEDED = 294;
+  // The account already has the most ladder orders one account may have on
+  // this market. Nothing changed; retry once one of them ends.
+  ERROR_CODE_MARKET_LADDER_LIMIT_EXCEEDED = 295;
+  // The new quantity of a TWAP order's slice would leave more than the TWAP's
+  // remaining quantity. Nothing changed; a slice can be raised up to what the
+  // TWAP still has to execute.
+  ERROR_CODE_CHILD_QTY_EXCEEDS_REMAINING = 296;
+  // The order cancellation was sent but not confirmed in time. Its outcome is
+  // unknown and it may still apply; read the order before retrying. For a batch
+  // cancellation, every item's outcome is unknown; read them back. For a cancel
+  // all, some or all of the matching orders may be canceled; read open orders.
+  // For a cancel all after heartbeat, the switch may or may not have been armed,
+  // refreshed or disabled; send the heartbeat again.
+  ERROR_CODE_ORDER_CANCEL_OUTCOME_UNKNOWN = 297;
+  // The order modification was sent but not confirmed in time. Its outcome is
+  // unknown and it may still apply; read the order before retrying. For a batch
+  // replacement, every item's outcome is unknown; read them back.
+  ERROR_CODE_ORDER_MODIFY_OUTCOME_UNKNOWN = 298;
+  // This order is being canceled while the account's balances are brought back
+  // in line, so it can't be changed. Nothing changed; cancels still work, and
+  // the account's other orders can still be changed.
+  ERROR_CODE_ORDER_REPAIRING = 299;
+  // This account's orders are being canceled while its balances are brought
+  // back in line, so new orders, changes and trigger orders are paused for a
+  // short time. Nothing changed; cancels still work. Try again shortly.
+  ERROR_CODE_ACCOUNT_REPAIRING = 300;
+  // The change would act on the trigger at once. The new trigger price of a
+  // stop-loss or take-profit, or the trigger price a new trailing distance
+  // gives an activated trailing stop, is already reached by the price the
+  // trigger watches (at or past it), so the trigger would fire at once and send
+  // its order; or the new activation price of a trailing stop not yet
+  // activated is already reached by that price, so it would activate at once.
+  // Nothing changed; the trigger keeps its previous settings. Returned by
+  // ModifyTrigger, and by an order modify that moves an attached take-profit,
+  // stop-loss or trailing stop of an order with a fill. Choose a price the
+  // market has not reached.
+  ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 302;
+  // The order was sent but not confirmed in time. Its outcome is unknown and
+  // it may have been accepted; read the order by its client order ID, or read
+  // open orders, before retrying. For a batch create, every item's outcome is
+  // unknown; read them back, or repeat the batch with the same request ID and
+  // payload within 15 minutes, which returns decided items' original results
+  // and retries the rest without admitting any item twice.
+  ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN = 303;
+  // The trigger was sent but not confirmed in time. Its outcome is unknown and
+  // it may have been created; read the triggers for its client trigger ID
+  // before retrying.
+  ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN = 304;
+  // The request names a listed trading pair other than the trigger's own, so
+  // it was refused. Nothing changed; name the trigger's own pair, or omit the
+  // symbol. A pair that is not listed is ERROR_CODE_UNKNOWN_SYMBOL.
+  ERROR_CODE_TRIGGER_SYMBOL_MISMATCH = 305;
+  // The account has reached its maximum number of resting orders in this
+  // market. Good-till-cancelled and good-till-date orders count until they
+  // end; immediate-or-cancel, fill-or-kill and market orders never count, and
+  // a replace keeps its order's place. Nothing changed; cancel a resting order
+  // in this market first.
+  ERROR_CODE_MAX_OPEN_ORDERS_PER_PAIR = 306;
+  // Self-trade prevention expired the order of an attached take-profit,
+  // stop-loss or trailing stop because it would have traded with another of
+  // the account's resting orders. It is reported as the trigger's fire refusal
+  // reason, never as the answer to a request: the attached order stays active.
+  // New trades and price updates do not fire it while the other order is first
+  // in line at the best price; once that order is gone or no longer first
+  // there, it fires again if its trigger condition still holds.
+  ERROR_CODE_SELF_TRADE_PREVENTED = 307;
+  // The order already carries every attached leg it may hold, so another
+  // attached leg was refused. Legs being cancelled count until they end:
+  // retry once they have ended.
+  ERROR_CODE_ATTACHED_LEGS_EXCEEDED = 86;
+  // The trigger's fee asset was not valid.
+  ERROR_CODE_FEE_ASSET_INVALID = 87;
+  // The trigger's maximum fee rate was not valid.
+  ERROR_CODE_FEE_CEILING_INVALID = 88;
+  // The trigger set a field that must be left unset.
+  ERROR_CODE_UNSUPPORTED_FIELD_SET = 89;
+  // The trigger could not fire again.
+  ERROR_CODE_TRIGGER_FIRE_LIMIT_REACHED = 90;
+  // The trigger's condition flags were not valid.
+  ERROR_CODE_CONDITION_FLAGS_INVALID = 91;
+  // The trigger set a condition parameter its condition does not take.
+  ERROR_CODE_CONDITION_PARAMETER_SET = 92;
+  // The market had no room for another TWAP order.
+  ERROR_CODE_TWAP_CAPACITY_REACHED = 93;
+  // The trigger's child order did not match the order the trigger requested,
+  // so the trigger failed and the child order was canceled.
+  ERROR_CODE_CHILD_ORDER_INCONSISTENT = 94;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -524,23 +936,31 @@ message ErrorDetail {
   repeated FieldViolation violations = 2;
   // Structured quota state. Present only for rate-limit rejections.
   polyester.ratelimit.v1.RateLimitDetail rate_limit = 3;
+  // Public order ID holding this account's client order ID when a create is
+  // rejected with CONFLICT_DUPLICATE_CLIENT_ORDER_ID. Present only when an
+  // existing holder is known; omitted for duplicates rejected within the same
+  // batch before an order is assigned. Use GetOrder to obtain its current state.
+  optional fixed64 existing_order_id = 4;
 }
 
 // =============================================================================
 // Trigger System: Risk Controls + Conditional Orders
 // =============================================================================
 
-// TriggerPriceSource defines which price feed to use for trigger evaluation.
-// v1 supports LAST_PRICE only; INDEX_PRICE and MARK_PRICE are reserved for
-// future.
+// TriggerPriceSource defines which price a trigger watches. Standalone
+// stop-loss, take-profit and trailing-stop triggers watch LAST_PRICE unless
+// INDEX_PRICE is requested; MARK_PRICE is not supported on spot markets.
 enum TriggerPriceSource {
   // Trigger price source was not provided; spot triggers default to LAST_PRICE.
   TRIGGER_PRICE_SOURCE_UNSPECIFIED = 0;
-  // Last traded price (default for spot).
+  // Last traded price on the market (default for spot).
   LAST_PRICE = 1;
-  // Index price aggregated from external exchanges (future).
+  // The market's index price, aggregated from external exchanges. A trigger
+  // that watches it acts only on a current index value: while the index is
+  // stale or unavailable the trigger stays armed and waits, and never fires on
+  // an outdated value.
   INDEX_PRICE = 2;
-  // Mark price for perpetuals (future).
+  // Mark price for perpetuals; not supported on spot markets.
   MARK_PRICE = 3;
 }
 
@@ -580,22 +1000,40 @@ message RiskExecution {
   }
 }
 
-// TakeProfitPolicy defines a take-profit attached to an order. It evaluates
-// last trade price, arms after the parent fills, and submits the selected child.
+// TakeProfitPolicy defines a take-profit attached to an order. It watches the
+// last traded price or the index price (trigger_price_source), arms after the
+// parent fills, and submits the selected child.
 message TakeProfitPolicy {
   // Trigger price in quote units scaled by 1e9.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Child execution when the threshold is crossed.
   RiskExecution child = 2 [(buf.validate.field).required = true];
+  // Price the take-profit watches. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
-// StopLossPolicy defines a stop-loss attached to an order. It evaluates last
-// trade price, arms after the parent fills, and submits the selected child.
+// StopLossPolicy defines a stop-loss attached to an order. It watches the last
+// traded price or the index price (trigger_price_source), arms after the
+// parent fills, and submits the selected child.
 message StopLossPolicy {
   // Trigger price in quote units scaled by 1e9.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Child execution when the threshold is crossed.
   RiskExecution child = 2 [(buf.validate.field).required = true];
+  // Price the stop-loss watches. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
 // TrailingStopPolicy defines a trailing stop attached to an order.
@@ -612,15 +1050,19 @@ message TrailingStopPolicy {
       lte: 10000
     }];
   }
-  // Optional price protection. If set, when the trailing stop triggers we place
-  // an IOC LIMIT order at stop_price ± max_slippage (instead of an unprotected
-  // MARKET order).
-  //
-  // Exactly one of these should be set (or neither for unprotected behavior).
+  // Optional slippage override for the trailing-stop child. When set, the
+  // child uses an IOC limit bounded by this delta from the trigger price and,
+  // for a buy, by limit_price_ticks. When omitted, a market child uses the
+  // pair's default market slippage for its side, or 200 basis points if no
+  // positive default is configured. A buy child remains bounded by
+  // limit_price_ticks. Set at most one of these fields.
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 6 [(buf.validate.field).int64.gt = 0];
-    // Maximum allowed slippage in basis points (1 bp = 0.01%).
+    // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999
+    // whichever side the exit trades. An order whose trailing stop sets 10000
+    // is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID, because a 100% cap
+    // would leave an exit that sells no positive price to sell at.
     int32 max_slippage_bps = 7 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -630,12 +1072,65 @@ message TrailingStopPolicy {
   // reached. If omitted, trailing starts immediately after the parent order
   // fills. Expressed in quote units scaled by 1e9.
   int64 activation_price_ticks = 3;
+  // Price the trailing stop watches and trails: its peak or trough, activation
+  // and fire all follow this price. Unspecified or LAST_PRICE watches the last
+  // traded price. INDEX_PRICE watches the market's index price; on a market
+  // without an index price the order is rejected with terminal reason
+  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
+  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
+  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // another source replaces the leg.
+  TriggerPriceSource trigger_price_source = 8 [(buf.validate.field).enum.defined_only = true];
+  // Maximum price of a trailing stop that buys back, in quote units scaled by
+  // 1e9: the most its exit pays per unit, at which the quote it may spend is
+  // reserved with the exit's fee. Required when the parent order sells, so
+  // the trailing stop buys; must be unset when the parent order buys. A rise
+  // that fires above it still fires, and the exit fills only at or below it.
+  // Changing it with ModifyOrder replaces the leg.
+  int64 limit_price_ticks = 4 [
+    (buf.validate.field).int64.gt = 0,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
 }
 
-// RiskPolicy defines optional risk controls (TP/SL/TrailingStop) attached to an
-// order. These arm after the parent order fills and fire when conditions are
-// met. If the parent order is canceled before any fill, attached risk controls
-// are discarded.
+// RiskPolicy defines optional risk controls (take-profit, stop-loss or
+// trailing stop) attached to an order. The legs protect the parent order's
+// filled position: they arm as the parent fills and follow its later fills.
+// A buy sized by max_quote_debit_scaled has no fixed quantity: its legs
+// protect what its fills buy. When the order is created, each leg's exit is
+// checked against the pair's minimums at the quantity the whole amount buys
+// at the order's limit price, or a market order's maximum slippage price:
+// the least it buys if it spends the amount.
+//
+// The legs of one parent share that position, whether or not oco is set, and
+// only one exit works at a time. The first leg whose condition is met submits
+// an exit for the whole remaining position, rounded down to the pair's step
+// size; a remainder below one step stays in the balance. If another leg's
+// condition is met while that exit works, the working exit is canceled; once
+// it ends, that leg is checked again against the latest price it watches and,
+// if its condition still holds, exits what remains. After an exit ends, the legs keep
+// protecting whatever position remains, unless you canceled the exit: canceling
+// a leg's exit order, alone or with a cancel-all, ends that leg, and with oco
+// set the other leg too.
+//
+// The legs end once the parent order is terminal and no position they can
+// exit remains: the leg whose exit ended last completes, and the others are
+// canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a
+// fill, the legs are canceled with
+// TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the
+// parent's whole fill is below one step, the legs fail.
+//
+// The legs reserve what their exits would sell or spend, once for both legs:
+// the base a sell exit sells, as each parent fill settles, and the quote a
+// buy-back may spend at its legs' highest maximum price. A buy-back is
+// reserved from the order's creation for the part of that cost the sale
+// itself may not return, so an order whose balance cannot cover it is
+// rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the
+// balance's reserved amount, and an exit uses it when it is submitted. While
+// the legs protect a position, orders and withdrawals that would use the
+// reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or
+// cancel the legs first. What the legs no longer need is released as they
+// change and in full when they end.
 message RiskPolicy {
   option (buf.validate.message).cel = {
     id: "risk_policy.oco_requires_tp_and_one_stop"
@@ -654,9 +1149,17 @@ message RiskPolicy {
     TrailingStopPolicy trailing_stop = 3;
   }
 
-  // If true, take-profit and the configured stop leg (stop-loss or trailing-stop)
-  // form an OCO pair: when one fires, the other is canceled.
-  // Default is false (no mutual cancellation).
+  // If true, the take-profit and the configured stop leg (stop-loss or
+  // trailing stop) are linked and shown as one-cancels-the-other. Requires a
+  // take-profit and exactly one stop leg. The legs of every parent share one
+  // position and end together as described on RiskPolicy, so this setting
+  // does not change when exits are submitted. It decides what canceling an
+  // exit order ends: with oco set, canceling one leg's exit ends both legs;
+  // without it, only that leg ends and the other keeps protecting the
+  // remaining position. Changing only this setting with ModifyOrder keeps
+  // the existing legs, with their IDs, arming and a trailing stop's tracked
+  // peak; changing a leg's terms, such as its trigger price, limit price or
+  // trailing distance, still replaces that leg. Default is false.
   bool oco = 4;
 }
 
@@ -687,7 +1190,7 @@ enum ModifyActionTaken {
 enum BatchReplaceAdmissionStatus {
   // Admission status is unavailable.
   BATCH_REPLACE_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // Every requested operation was admitted, including cancel-only outcomes.
+  // Every requested operation was admitted, amended items included.
   BATCH_REPLACE_ADMISSION_STATUS_ADMITTED = 1;
   // Some requested replacements were admitted and others were rejected.
   BATCH_REPLACE_ADMISSION_STATUS_PARTIALLY_ADMITTED = 2;
@@ -699,7 +1202,8 @@ enum BatchReplaceAdmissionStatus {
 enum BatchReplaceItemAdmissionStatus {
   // Item admission status is unavailable.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_UNSPECIFIED = 0;
-  // The operation was admitted and handed to execution. Check action_taken for cancel-only outcomes.
+  // The operation was admitted and handed to execution. action_taken tells whether
+  // the order was amended under its own order ID or replaced by a successor.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_ADMITTED = 1;
   // The replacement was rejected before execution handoff.
   BATCH_REPLACE_ITEM_ADMISSION_STATUS_REJECTED = 2;
@@ -710,8 +1214,13 @@ enum BatchReplaceItemAdmissionStatus {
 // =============================================================================
 
 // CancelAllOrdersRequest cancels all matching open orders for an account.
+// It cancels orders only, never triggers: see CancelAllOrders for what
+// happens to stop-loss, take-profit and trailing stops, TWAPs, ladders and
+// attached legs, and how to stop them too.
 message CancelAllOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Optional trading-pair IDs from GetSpotConfig. Empty matches all symbols.
   // At most 100 positive IDs; duplicates are ignored and ordering is immaterial.
@@ -733,7 +1242,19 @@ message CancelAllOrdersRequest {
   ];
 }
 
+// CancelledOrder identifies one order whose cancellation a cancel-all
+// requested.
+message CancelledOrder {
+  // Order ID.
+  fixed64 order_id = 1;
+  // The order's client order ID; empty when the order has none.
+  string client_order_id = 2;
+}
+
 // CancelAllOrdersResponse returns the result of a cancel-all operation.
+// The response confirms that cancellation was requested for every matching
+// order; each order's final state is reported on the order update stream and
+// read paths.
 message CancelAllOrdersResponse {
   // Cancel-all submission outcome.
   enum Status {
@@ -745,18 +1266,59 @@ message CancelAllOrdersResponse {
     DRY_RUN = 2;
   }
 
+  // Availability of the order listing, separate from the submission outcome.
+  enum ListingStatus {
+    // Listing availability was not provided.
+    LISTING_UNSPECIFIED = 0;
+    // The initial response includes its listing, possibly empty, up to 200 orders.
+    INCLUDED = 1;
+    // A retry returns its original outcome and counts without the historical
+    // listing. Read open orders for current state and use order updates for
+    // final outcomes. No new cancellations are requested by the retry.
+    NOT_RETAINED_READ_OPEN_ORDERS = 2;
+  }
+
   // Cancel-all submission outcome.
   Status status = 1 [(buf.validate.field).enum.defined_only = true];
-  // Number of orders that matched the filter.
+  // Number of open orders that matched the filter when the request was
+  // accepted, including orders whose cancellation was already in progress
+  // and open orders that triggers placed. Triggers themselves are never
+  // counted. Orders placed after acceptance are not counted. Unless
+  // `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.
   uint32 matched_orders = 2;
-  // Number of cancel requests submitted for processing.
+  // Number of matched orders for which cancellation was requested, including
+  // orders whose cancellation was already in progress. Observe order updates or
+  // reads for final outcomes; orders may execute before cancellation takes
+  // effect. Zero when `dry_run` is set.
   uint32 submitted_cancels = 3;
-  // Number of cancels that could not be submitted (already canceled, etc.).
+  // Number of matched orders that could not be submitted for cancellation
+  // because the cancel-all could not be recorded for their symbol. This
+  // request does not cancel them; send a new cancel-all with a new
+  // `request_id` if they are still open. Zero when `dry_run` is set.
   uint32 failed_cancels = 4;
   // Server timestamp.
   google.protobuf.Timestamp ts = 5;
   // Server timestamp as epoch nanoseconds (for bots).
   uint64 ts_ns = 6;
+  // Orders whose cancellation was requested, oldest first (the order in
+  // which they were created), at most 200. When more orders were canceled,
+  // these are the 200 oldest and `truncated` is true; the order update stream
+  // and read paths report every one. Empty when `dry_run` is set. Retrying
+  // with the same `request_id` and criteria within 120 seconds returns the
+  // original status, counts and timestamp, an empty list, and
+  // `listing_status = NOT_RETAINED_READ_OPEN_ORDERS`. It requests no new
+  // cancellations. Read open orders for current state and use order updates
+  // for final outcomes.
+  repeated CancelledOrder cancelled_orders = 7 [(buf.validate.field).repeated.max_items = 200];
+  // Number of orders whose cancellation was requested, including those not
+  // listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when
+  // `dry_run` is set.
+  uint32 total_cancelled = 8;
+  // True when more orders were canceled than `cancelled_orders` lists.
+  bool truncated = 9;
+  // Availability of the historical listing. An empty retry listing does not
+  // change the original counts or mean that no cancellations were requested.
+  ListingStatus listing_status = 10 [(buf.validate.field).enum.defined_only = true];
 }
 
 // =============================================================================
@@ -764,6 +1326,8 @@ message CancelAllOrdersResponse {
 // =============================================================================
 
 // CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.
+// When the switch fires, it cancels what a CancelAllOrders with the same
+// scope cancels: open orders, never triggers. See CancelAllAfter.
 message CancelAllAfterRequest {
   option (buf.validate.message).cel = {
     id: "cancel_all_after.timeout_range"
@@ -771,7 +1335,9 @@ message CancelAllAfterRequest {
     expression: "this.timeout_sec == 0u || (this.timeout_sec >= 10u && this.timeout_sec <= 120u)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Heartbeat timeout in seconds.
   // - 0 disables the dead-man switch for this account.
@@ -791,6 +1357,21 @@ message CancelAllAfterRequest {
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
+}
+
+// DeadManSwitchScope describes the recorded scope of an armed dead-man switch.
+// Expiry cancels working orders in this scope, including orders that
+// triggers placed. It cancels no trigger: armed stop-loss, take-profit and
+// trailing stops and running TWAPs remain active and may create further
+// orders after expiry. Cancel them with TriggersService.CancelTrigger.
+message DeadManSwitchScope {
+  // Public ID of the account or sub-account whose orders are canceled.
+  fixed64 account_id = 1;
+  // Symbol ID whose orders are canceled. Zero or omitted means all symbols.
+  uint32 symbol_id = 2;
+  // Order side that is canceled. Not set means both sides; JSON and REST
+  // responses then omit it.
+  Side side = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
 // CancelAllAfterResponse returns dead-man switch arming/disable status.
@@ -815,6 +1396,10 @@ message CancelAllAfterResponse {
   google.protobuf.Timestamp ts = 4;
   // Server timestamp as epoch nanoseconds (for bots).
   uint64 ts_ns = 5;
+  // Recorded scope after arming or refreshing. Absent when disabled.
+  // Describes the current armed switch only. Cancellations already in progress
+  // are unaffected by a later refresh or disable.
+  DeadManSwitchScope effective_scope = 6;
 }
 
 // =============================================================================
@@ -861,12 +1446,18 @@ message BatchCreateResultItem {
 
 // BatchCreateOrdersRequest places multiple orders in one request.
 message BatchCreateOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Required account-scoped idempotency key for the entire ordered batch.
-  // Reusing it with the same payload within 15 minutes replays the original
-  // per-item results and timestamp. Reusing it with a different payload during
-  // that window returns CONFLICT_IDEMPOTENCY_KEY_REUSE.
+  // Reusing it with the same payload within 15 minutes returns each decided
+  // item's original result and result time, and retries the items still
+  // unresolved, never admitting an already admitted item again. Reusing it
+  // with a different payload during that window returns
+  // CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat
+  // is a new request and can place its orders again, so read the items back
+  // instead of repeating an older batch.
   string request_id = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).string.min_len = 1,
@@ -909,7 +1500,9 @@ message ModifyOrderRequest {
     expression: "has(this.new_price_ticks) || has(this.new_qty_scaled) || has(this.new_attached_risk)"
   };
 
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Target key.
   oneof key {
@@ -923,7 +1516,8 @@ message ModifyOrderRequest {
       (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
     ];
   }
-  // Idempotency key (required).
+  // Idempotency key (required). Outstanding modifications retain this key;
+  // identical retries replay the final result for 60 seconds after the answer.
   string request_id = 4 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,
@@ -936,7 +1530,10 @@ message ModifyOrderRequest {
   // Target total quantity after modify/replace, scaled by the pair's
   // base_quantity_scale from GetSpotConfig.
   optional int64 new_qty_scaled = 6 [(buf.validate.field).int64.gt = 0];
-  // Replacement attached-risk policy for the order.
+  // Replacement attached-risk policy for the order. The order's change and its
+  // take-profit, stop-loss and trailing legs apply together: either all of
+  // them change, or the whole modify is refused and the order and its legs
+  // stay as they were.
   RiskPolicy new_attached_risk = 7;
 
   // Modify behavior policy.
@@ -978,7 +1575,14 @@ message ModifyOrderResponse {
   uint64 ts_ns = 9;
 }
 
-// BatchReplaceOrderItem identifies one replacement inside a quote-refresh batch.
+// BatchReplaceOrderItem identifies one order to modify inside a quote-refresh
+// batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item
+// that keeps the order's price (new_price_ticks unset or equal to it), does not
+// raise its total quantity and keeps its client order ID amends the order in
+// place, under the same order ID and with its queue priority kept. A new
+// price, a larger total quantity or a new client order ID replaces it with a
+// successor order under a new order ID, with its queue priority reset. To
+// force a replacement, use ModifyOrder with REPLACE_ONLY.
 message BatchReplaceOrderItem {
   // At least one patch field must be provided.
   option (buf.validate.message).cel = {
@@ -1007,7 +1611,8 @@ message BatchReplaceOrderItem {
   // Replacement attached-risk policy for the order.
   RiskPolicy new_attached_risk = 5;
 
-  // Optional new client order id when replace path is taken.
+  // Optional client order ID for the successor. A value other than the order's
+  // client order ID makes the item a replacement.
   string new_client_order_id = 6 [
     (buf.validate.field).string.max_len = 36,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$",
@@ -1021,23 +1626,32 @@ message BatchReplaceAdmissionItem {
   uint32 item_index = 1;
   // Admission result for this item.
   BatchReplaceItemAdmissionStatus status = 2;
-  // Original order targeted by the replacement.
+  // Original order targeted by the replacement: the requested order ID, or the
+  // order the requested client order ID names. Rejected items keep it too. Unset
+  // only when the requested client order ID names no order.
   fixed64 old_order_id = 3;
-  // Assigned successor order ID. Zero for cancel-only outcomes or rejection before assignment.
+  // Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED
+  // item, whose order keeps old_order_id, and for rejected items.
   fixed64 replacement_order_id = 4;
-  // Client order ID assigned to the successor when available.
+  // Client order ID assigned to the successor, for a REPLACED item only.
   string client_order_id = 5;
   // Stable rejection code. Empty for admitted items.
   string code = 6;
   // Structured rejection details. Present for rate-limit guidance and other typed failures.
   ErrorDetail error = 7;
-  // REPLACED admits a successor. AMENDED cancels the original order's remaining quantity
-  // without a successor; keep tracking old_order_id until its terminal state is confirmed.
-  // Unspecified for rejected items.
+  // REPLACED admits a successor under replacement_order_id, with queue priority
+  // reset. AMENDED keeps the order under old_order_id with no successor: the
+  // order is amended in place and keeps its queue priority, or, when the new
+  // total quantity is at or below its filled quantity, ends at its filled
+  // quantity. Keep tracking old_order_id for an AMENDED item. Not set for
+  // rejected items; JSON and REST responses then omit it.
   ModifyActionTaken action_taken = 8;
 }
 
-// BatchReplaceOrdersRequest replaces same-symbol orders as one quote refresh.
+// BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:
+// each item is amended in place or replaced as ModifyOrder decides by default.
+// Identical retries replay the admission result for 60 seconds from acceptance;
+// a different payload under the same key conflicts. Use a fresh key for a new batch.
 message BatchReplaceOrdersRequest {
   // Prevent duplicate order targets in the same batch.
   option (buf.validate.message).cel = {
@@ -1045,9 +1659,12 @@ message BatchReplaceOrdersRequest {
     message: "each item target must be unique within a batch"
     expression: "this.items.map(i, i.order_id > 0u ? \"o:\" + string(i.order_id) : \"c:\" + i.client_order_id).unique()"
   };
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
-  // Trading symbol shared by every replacement.
+  // Trading symbol shared by every replacement. An item whose order is on
+  // another symbol is refused alone as an unknown order.
   uint32 symbol_id = 2 [(buf.validate.field).uint32.gt = 0];
   // Client idempotency key (required).
   string request_id = 3 [
@@ -1097,7 +1714,9 @@ message BatchCancelItem {
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$",
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
-  // Optional symbol routing hint.
+  // Optional trading symbol numeric identifier. When set, it must match the
+  // order's symbol, or the item is refused as an unknown order. When omitted,
+  // the order's own symbol is used.
   uint32 symbol_id = 3;
 }
 
@@ -1127,7 +1746,9 @@ message BatchCancelResultItem {
 
 // BatchCancelOrdersRequest cancels multiple orders by explicit ID.
 message BatchCancelOrdersRequest {
-  // Target sub-account numeric ID. When omitted, uses caller's root account.
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
   optional fixed64 subaccount_id = 1;
   // Idempotency key (required).
   string request_id = 2 [
@@ -1157,9 +1778,13 @@ message BatchCancelOrdersResponse {
 }
 
 service OrdersService {
+  option (polyester.api.docs_group) = "trading";
+
   // Check whether an order is currently admissible without creating an order,
   // claiming its client order ID, or reserving funds.
   rpc PreviewOrder(PreviewOrderRequest) returns (PreviewOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Preview Order"
       description:
@@ -1173,6 +1798,8 @@ service OrdersService {
   // REST clients submit decimal quantity and price strings. ConnectRPC clients
   // submit scaled integer values.
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Create Order"
       description:
@@ -1185,7 +1812,17 @@ service OrdersService {
   // Cancels an existing order by id or client order id.
   // REST clients submit base58 order IDs. ConnectRPC clients submit fixed64
   // order IDs.
+  // A cancel of an order that has already ended returns
+  // ERROR_CODE_ORDER_ALREADY_TERMINAL, including a cancel retried after a
+  // timeout once the order has ended: treat it as already done. A repeat
+  // while an earlier cancel of the order is still in progress is accepted
+  // again and changes nothing. A client order ID keeps naming its order for
+  // at least a minute after the order ends; a cancel by client order ID sent
+  // later may return ERROR_CODE_ORDER_UNKNOWN instead. Retry by order ID, or
+  // read the order, to tell an ended order from an unknown one.
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel Order"
       description:
@@ -1196,32 +1833,78 @@ service OrdersService {
   }
 
   // Cancels all matching open orders for an account (kill switch).
-  // Evaluates matching orders from a consistent snapshot at request start.
+  // Evaluates matching orders from a consistent snapshot at request start and
+  // requests cancellation of every one, however many match. The response
+  // lists up to 200 of them, oldest first, with the total count.
   // Final state is confirmed via the order update stream or read path.
+  //
+  // It cancels orders, not triggers. Open orders that triggers placed match
+  // like any other order and are canceled: a TWAP's working slice, a
+  // ladder's levels, the order a fired stop placed, and the working exit of
+  // an attached take-profit, stop-loss or trailing stop. The triggers
+  // themselves are not canceled, and their reserved funds stay reserved:
+  // - A stop-loss, take-profit or trailing stop that has not fired stays
+  //   armed and places its order when its condition is met.
+  // - A TWAP keeps running and places its next slice when it is due.
+  // - A ladder ends once none of its levels remains open: canceled when
+  //   none of them filled, completed when any did.
+  // - An attached leg whose working exit is canceled ends canceled, and so
+  //   do the parent's other legs when oco is set. Attached legs without a
+  //   working exit keep protecting the parent's filled position, even when
+  //   the parent order itself is canceled; they end only if the parent is
+  //   canceled before any fill.
+  // - A paused trigger stays paused and can be resumed.
+  //
+  // To stop all automated trading, cancel each live trigger with
+  // TriggersService.CancelTrigger, then cancel the orders: a trigger that
+  // fires before its cancel places an order that the cancel-all then
+  // cancels. TriggersService.ListTriggers with the statuses STATUS_CREATED,
+  // STATUS_ARMED, STATUS_RUNNING and STATUS_PAUSED lists the live triggers,
+  // attached legs included.
   rpc CancelAllOrders(CancelAllOrdersRequest) returns (CancelAllOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel All Orders"
       description:
         "Cancel all matching open orders for an account. "
-        "Supports optional symbol and side filters plus dry-run preview."
+        "Supports optional symbol and side filters plus dry-run preview. "
+        "Returns up to 200 canceled order IDs, oldest first, with the total count. "
+        "Cancels orders only, including open orders placed by triggers, never the triggers: "
+        "armed stop-loss, take-profit and trailing stops and running TWAPs stay active and "
+        "can place new orders afterwards. Cancel them with Cancel Trigger."
       tags: "Orders Service"
     };
   }
 
   // Set cancel-all-after (dead-man switch).
   // Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.
+  // When the switch fires, it cancels what CancelAllOrders with the same
+  // symbol and side scope cancels: open orders, including those that
+  // triggers placed, and no trigger. Armed stop-loss, take-profit and
+  // trailing stops, running TWAPs and attached legs without a working exit
+  // stay active and can place new orders after it fires, exactly as after
+  // CancelAllOrders. The switch does not stop them: only
+  // TriggersService.CancelTrigger cancels a trigger.
   rpc CancelAllAfter(CancelAllAfterRequest) returns (CancelAllAfterResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Cancel All After (Dead-Man Switch)"
       description:
         "Set or disable a dead-man switch timeout for automatic cancel-all. "
-        "Supports optional symbol and side scope with idempotent heartbeat refresh."
+        "Supports optional symbol and side scope with idempotent heartbeat refresh. "
+        "On expiry it cancels open orders in scope, including orders placed by triggers, "
+        "but never the triggers: armed stop-loss, take-profit and trailing stops and "
+        "running TWAPs stay active and can place new orders. Cancel them with Cancel Trigger."
       tags: "Orders Service"
     };
   }
 
   // Places multiple orders in a single request (best-effort per item).
   rpc BatchCreateOrders(BatchCreateOrdersRequest) returns (BatchCreateOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Create Orders"
       description:
@@ -1233,6 +1916,8 @@ service OrdersService {
 
   // Modifies an existing order using explicit behavior policy.
   rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Modify Order"
       description:
@@ -1242,12 +1927,18 @@ service OrdersService {
     };
   }
 
-  // Replaces same-symbol orders and returns after authoritative admission.
+  // Amends or replaces same-symbol orders and returns after authoritative
+  // admission.
   rpc BatchReplaceOrders(BatchReplaceOrdersRequest) returns (BatchReplaceOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Replace Orders"
       description:
-        "Replace up to 50 orders for one symbol as a quote refresh. "
+        "Modify up to 50 orders for one symbol as a quote refresh. "
+        "Each item amends its order in place, keeping its order ID and queue priority, "
+        "when it keeps the price, does not raise the total quantity and keeps the client order ID; "
+        "otherwise it replaces the order with a successor under a new order ID. "
         "Returns an admission receipt for status and private realtime reconciliation."
       tags: "Orders Service"
     };
@@ -1257,6 +1948,8 @@ service OrdersService {
   // Per-item results are returned; partial success is the default.
   // Final state is confirmed via the order update stream or read path.
   rpc BatchCancelOrders(BatchCancelOrdersRequest) returns (BatchCancelOrdersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Batch Cancel Orders"
       description:

@@ -196,8 +196,6 @@ message ListFlowsResponse {
 
 // FlowTxMatchView is one lifecycle flow matched by a transaction-hash search.
 message FlowTxMatchView {
-  reserved "reason_code", "reason_details";
-
   // Public, URL-safe lifecycle identifier for display, URLs, and user search.
   string flow_id = 1;
 
@@ -282,7 +280,7 @@ enum FlowStep {
   // Step is not specified.
   FLOW_STEP_UNSPECIFIED = 0;
 
-  // External-chain / relayer source tracking before Polyester can continue.
+  // External-chain source tracking before Polyester can continue.
   FLOW_STEP_SOURCE = 1;
 
   // Deposit-side mint and downstream crediting / transfer stage.
@@ -320,8 +318,6 @@ enum FlowStep {
 // FlowSummaryView is the compact lifecycle representation used by lists,
 // realtime updates, and the header of a detail view.
 message FlowSummaryView {
-  reserved "reason_code", "reason_details";
-
   // Public account identifier for the root account or subaccount the flow belongs to.
   fixed64 owner_account_id = 1;
 
@@ -424,8 +420,15 @@ message FlowSummaryView {
   // current derived step that is ahead of the latest factual observed step.
   repeated FlowTimelineItemView progress_timeline = 26;
 
-  // Estimated Unix completion timestamp in milliseconds.
+  // Estimated Unix completion timestamp in milliseconds. Zero while
+  // `is_delayed` is true, because no reliable estimate exists then.
   uint64 estimated_completion_unix_ms = 27;
+
+  // True when an open flow has made no progress for well beyond the expected
+  // time of its current step. Show the flow as delayed instead of an ETA; it
+  // still completes normally once progress resumes. Always false for terminal
+  // flows.
+  bool is_delayed = 36;
 }
 
 // FlowSummaryProgressView describes progress within the current visible step.
@@ -463,8 +466,6 @@ message FlowSummaryProgressView {
 // view. Use `FlowSummaryView.progress_timeline` for the current projected
 // progress state.
 message FlowStepView {
-  reserved "reason_code", "reason_details";
-
   // One-based observed step sequence for display and audit.
   uint32 sequence = 1;
 
@@ -486,6 +487,15 @@ message FlowStepView {
 
   // Transaction reference most relevant to this step.
   string milestone_tx_ref = 11;
+
+  // Chain that holds `milestone_tx_ref`, as the `chain_id` of a chain returned
+  // by `GetDepositWithdrawConfig`, the same id space as `polyester_chain_id`.
+  // Link the transaction with that chain's `explorer_url`. Polyester Chain
+  // transactions name Polyester Chain, a deposit's source-chain transaction
+  // names its source chain, and a withdrawal's delivery transaction names its
+  // destination chain. Zero when `milestone_tx_ref` is empty or is not a chain
+  // transaction, such as a ledger settlement identifier.
+  uint32 milestone_tx_chain_id = 26;
 
   // Source that produced this visible step.
   LifecycleSource lifecycle_source = 12;
@@ -545,13 +555,16 @@ enum FlowStepActivityKind {
 
 // FlowStepActivityView is an expandable detail row underneath a visible step.
 message FlowStepActivityView {
-  reserved "reason_code", "reason_details";
-
   // Sequence of the underlying activity within the flow.
   uint32 sequence = 1;
 
   // Transaction reference associated with this activity.
   string tx_ref = 2;
+
+  // Chain that holds `tx_ref`, with the meaning of
+  // `FlowStepView.milestone_tx_chain_id`. Zero when `tx_ref` is empty or is not
+  // a chain transaction.
+  uint32 tx_chain_id = 17;
 
   // Activity occurrence timestamp in milliseconds since epoch (UTC).
   uint64 occurred_at_unix_ms = 3;
@@ -648,6 +661,8 @@ message FlowDetailView {
 
 // LifecycleReadService exposes lifecycle flow lookup and listing APIs.
 service LifecycleReadService {
+  option (polyester.api.docs_group) = "chain";
+
   // GetFlowById retrieves one lifecycle flow by public flow id.
   rpc GetFlowById(GetFlowByIdRequest) returns (GetFlowResponse) {
     option (polyester.api.public) = true;

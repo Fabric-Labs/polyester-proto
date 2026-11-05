@@ -22,20 +22,29 @@ enum SideFilter {
 
 // Timeframe represents an OHLCV candle bucket.
 //
-// Most values are fixed-duration buckets. `MONTH_1` is calendar-based (UTC
-// month boundaries).
+// All buckets are in UTC; daylight saving time never shifts a boundary.
+// Fixed-duration buckets start at whole multiples of their duration since
+// 1970-01-01T00:00:00Z, so every bucket up to 1 day starts on a UTC midnight
+// boundary and `DAY_3` buckets start every third day counted from
+// 1970-01-01. `WEEK_1` buckets start on Monday 00:00 UTC. `MONTH_1` is
+// calendar-based (UTC month boundaries). Values are listed shortest first.
 enum Timeframe {
   TIMEFRAME_UNSPECIFIED = 0;
   SEC_1 = 1; // 1 second
   MIN_1 = 2; // 1 minute
+  MIN_3 = 12; // 3 minutes
   MIN_5 = 3; // 5 minutes
   MIN_15 = 4; // 15 minutes
   MIN_30 = 5; // 30 minutes
   HOUR_1 = 6; // 1 hour
+  HOUR_2 = 13; // 2 hours
   HOUR_4 = 7; // 4 hours
-  DAY_1 = 8; // 1 day
+  HOUR_6 = 14; // 6 hours
+  HOUR_8 = 15; // 8 hours
   HOUR_12 = 9; // 12 hours
-  WEEK_1 = 10; // 1 week
+  DAY_1 = 8; // 1 day
+  DAY_3 = 16; // 3 days, counted from 1970-01-01 UTC
+  WEEK_1 = 10; // 1 week, starting Monday 00:00 UTC
   MONTH_1 = 11; // 1 month (calendar month, UTC)
 }
 
@@ -49,6 +58,10 @@ enum Timeframe {
 // Results are ordered newest-first by execution timestamp, with match_id as a
 // tie-breaker. When both start_time and end_time are set, both bounds are
 // inclusive.
+//
+// With after_trade_id set, the request instead walks the symbol's trades by
+// trade identifier (match_id), oldest first and gap-free, to backfill trades
+// missed on a live stream: see after_trade_id.
 message GetTradesRequest {
   option (buf.validate.message).cel = {
     id: "get_trades.time_range_valid"
@@ -59,6 +72,11 @@ message GetTradesRequest {
     id: "get_trades.time_not_future"
     message: "start_time and end_time must not be more than 5 minutes in the future"
     expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_trades.after_trade_id_exclusive"
+    message: "after_trade_id cannot be combined with start_time, end_time, side or page_token"
+    expression: "!has(this.after_trade_id) || (!has(this.start_time) && !has(this.end_time) && this.side == 0 && this.page_token == '')"
   };
 
   // Stable numeric pair id from GetSpotConfig.
@@ -82,6 +100,16 @@ message GetTradesRequest {
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
   // bound to symbol, time bounds, side filter, and newest-first sort order.
   string page_token = 6 [(buf.validate.field).string.max_len = 512];
+
+  // Exclusive trade-identifier cursor for gap-free backfill. When set, the
+  // results are the symbol's trades with match_id greater than
+  // after_trade_id, ascending by match_id, up to limit, and only trades at or
+  // below the response's complete_through_trade_id: every page is gap-free.
+  // Trade identifiers order trades across epochs too, so a walk crosses
+  // epoch ends without a gap. Pass 0 to start from the symbol's first trade,
+  // then the response's next_after_trade_id. Cannot be combined with
+  // start_time, end_time, side or page_token.
+  optional uint64 after_trade_id = 7;
 }
 
 // MarketTrade is one public trade print represented with scaled integers.
@@ -109,14 +137,65 @@ message MarketTrade {
   uint64 ts_ns = 6;
 }
 
+// MarketTradeBatch is one realtime publication on a symbol's public trade
+// stream: every trade queued for the stream when it was sent, at most 256 and
+// at most 64 KiB, in execution order.
+//
+// match_id identifies a trade. Apply trades in array order and in publication
+// order; a trade whose match_id was already received replaces the earlier copy.
+// When the subscription reports that missed publications could not be
+// recovered, reload recent trades over REST.
+message MarketTradeBatch {
+  // Trades in execution order, oldest first. At least one trade.
+  repeated MarketTrade events = 1;
+}
+
+// TradeEpochEnd reports where one epoch of a symbol's trade identifiers
+// ended. Trade identifiers of epoch e are greater than (e-1) * 2^40 and less
+// than e * 2^40; a later epoch's identifiers are greater than every earlier
+// epoch's.
+message TradeEpochEnd {
+  // The epoch.
+  uint64 epoch = 1;
+
+  // match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch
+  // ended without trades.
+  uint64 last_trade_id = 2;
+}
+
 // GetTradesResponse contains public trades for one spot market.
 message GetTradesResponse {
   // Trades ordered newest-first by execution timestamp, with match_id as a
-  // tie-breaker.
+  // tie-breaker; with after_trade_id, ascending by match_id.
   repeated MarketTrade trades = 1;
 
-  // Opaque cursor for the next page. Empty when no more results exist.
+  // Opaque cursor for the next page. Empty when no more results exist, and
+  // always empty with after_trade_id.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+
+  // Set only with after_trade_id; 0 otherwise. Every trade of the symbol
+  // with match_id at or below this value exists and is returned by this
+  // method. Identifiers in that range that no trade has, the rest of an
+  // ended epoch and every identifier below a later epoch's first, are
+  // covered too. Newer trades may exist that are not available here yet; it
+  // only grows.
+  uint64 complete_through_trade_id = 3;
+
+  // Set only with after_trade_id; 0 otherwise. The after_trade_id of the
+  // next call; it never moves backwards. On a full page (limit trades) it is
+  // the last trade's match_id. Otherwise it is the greater of after_trade_id
+  // and complete_through_trade_id, so a walk progresses across epoch ends
+  // and empty epochs without trades to carry it. When it equals the
+  // request's after_trade_id, nothing newer is available yet: retry later
+  // with backoff.
+  uint64 next_after_trade_id = 4;
+
+  // Set only with after_trade_id. Every epoch whose last trade (or, for an
+  // epoch without trades, its start) lies between after_trade_id and
+  // next_after_trade_id, both inclusive, ascending by epoch. A page that
+  // ends exactly on an epoch's last trade is followed by a page that still
+  // reports that epoch's end.
+  repeated TradeEpochEnd epoch_ends = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +254,8 @@ message GetCandlesRequest {
 
 // GetCandlesColumnsRequest selects a spot market candle series for columnar output.
 //
-// The response is ordered oldest-first for efficient chart ingestion. When both
+// Each response page is ordered oldest-first. Pagination selects the newest
+// eligible closed candles first and continues toward older candles. When both
 // start_time and end_time are set, both bounds are inclusive.
 message GetCandlesColumnsRequest {
   option (buf.validate.message).cel = {
@@ -206,9 +286,8 @@ message GetCandlesColumnsRequest {
   // Must be greater than or equal to start_time when both are set, and must not
   // be more than 5 minutes in the future.
   google.protobuf.Timestamp end_time = 5;
-  // Include the current open candle when it is available and inside the
-  // requested range.
-  // The open candle is prepended to the newest-first candle list and does not
+  // Include the current open candle when available and inside the requested
+  // range. It appears last in the oldest-first response columns and does not
   // count toward the closed-candle limit.
   bool include_incomplete = 6;
   // Include the composite reference market candle series for the same market,
@@ -216,33 +295,42 @@ message GetCandlesColumnsRequest {
   // The reference series can be empty when no reference series is available for
   // the requested timeframe.
   bool include_reference = 7;
-  // Opaque keyset cursor from a previous response. The cursor is exclusive and
-  // bound to symbol, timeframe, time bounds, and oldest-first candle ordering.
-  // Inclusion flags and columnar response shape may change between pages.
+  // Opaque exclusive keyset cursor for older closed candles, bound to symbol,
+  // timeframe, and time bounds. Columns within each page are ordered oldest-first.
+  // Inclusion flags and response shape may change between pages.
   string page_token = 8 [(buf.validate.field).string.max_len = 512];
 }
 
 // CandlePoint is one OHLCV bucket represented with scaled integers.
+//
+// A primary candle opens at the previous candle's close, so consecutive
+// candles join at every timeframe; a market's first candle opens at its first
+// trade. High and low include the open. A bucket without trades is flat at
+// the previous close with zero volume.
 //
 // REST responses render these values as decimal strings in tuple order:
 // [ts_sec, open, high, low, close, volume, quote_volume].
 message CandlePoint {
   // Candle bucket start timestamp, in seconds since epoch (UTC).
   uint64 ts_sec = 1;
-  // Opening price in quote units. Primary candles use scale 9; composite
-  // reference candles use the pair's reference_price_scale from GetSpotConfig.
+  // Opening price in quote units: for a primary candle, the previous
+  // candle's close, or the first trade for a market's first candle. Primary
+  // candles use scale 9; composite reference candles use the pair's
+  // reference_price_scale from GetSpotConfig.
   int64 open = 2;
-  // Highest traded price, using the same scale as open.
+  // Highest price in the bucket, including the open, using the same scale as
+  // open.
   int64 high = 3;
-  // Lowest traded price, using the same scale as open.
+  // Lowest price in the bucket, including the open, using the same scale as
+  // open.
   int64 low = 4;
   // Closing price, using the same scale as open.
   int64 close = 5;
   // Traded base-asset quantity scaled by the base asset's
   // market_data_volume_scale from GetSpotConfig.
   int64 volume = 6;
-  // True only for WebSocket terminal updates of a closed bucket.
-  // Historical API rows and current open-candle rows set this to false.
+  // True for a closed candle bucket, including historical API rows and
+  // WebSocket terminal updates. False only while the bucket is still open.
   bool is_closed = 7;
   // Exact traded quote-asset volume as a human-readable decimal string.
   // This is sum(execution price × execution quantity), not close × base volume.
@@ -271,7 +359,8 @@ message GetCandlesResponse {
 // GetCandlesColumnsResponse returns the same candle series as GetCandles but in columnar form.
 // This is optimized for charting clients that ingest arrays of each field (binary only).
 //
-// Ordering: values are returned oldest-first (ascending ts_sec).
+// Ordering: values within each page are oldest-first (ascending ts_sec).
+// Continuation pages contain older candles.
 message GetCandlesColumnsResponse {
   // Numeric spot market identifier.
   uint32 symbol_id = 1;
@@ -282,14 +371,15 @@ message GetCandlesColumnsResponse {
   // Candle bucket start timestamps (seconds since epoch, UTC).
   repeated uint64 ts_sec = 3;
 
-  // Opening primary-market prices use scale 9. Reference prices use the pair's
-  // reference_price_scale from GetSpotConfig.
+  // Opening primary-market prices use scale 9: each is the previous candle's
+  // close, or the first trade for a market's first candle. Reference prices
+  // use the pair's reference_price_scale from GetSpotConfig.
   repeated int64 open = 4;
-  // Highest primary-market prices use scale 9. Reference prices use the pair's
-  // reference_price_scale from GetSpotConfig.
+  // Highest primary-market prices, including the open, use scale 9. Reference
+  // prices use the pair's reference_price_scale from GetSpotConfig.
   repeated int64 high = 5;
-  // Lowest primary-market prices use scale 9. Reference prices use the pair's
-  // reference_price_scale from GetSpotConfig.
+  // Lowest primary-market prices, including the open, use scale 9. Reference
+  // prices use the pair's reference_price_scale from GetSpotConfig.
   repeated int64 low = 6;
   // Closing primary-market prices use scale 9. Reference prices use the pair's
   // reference_price_scale from GetSpotConfig.
@@ -327,9 +417,11 @@ message Candle {
   uint32 symbol_id = 1; // numeric spot market identifier
   Timeframe timeframe = 2; // timeframe of this candle
   uint64 ts_sec = 3; // bucket start timestamp (seconds since epoch, UTC)
-  int64 open = 4; // opening primary-market price in scale 9
-  int64 high = 5; // highest primary-market price in scale 9
-  int64 low = 6; // lowest primary-market price in scale 9
+  // Opening primary-market price in scale 9: the previous candle's close, or
+  // the first trade for a market's first candle.
+  int64 open = 4;
+  int64 high = 5; // highest primary-market price in scale 9, including the open
+  int64 low = 6; // lowest primary-market price in scale 9, including the open
   int64 close = 7; // closing primary-market price in scale 9
   // Traded base-asset quantity scaled by the base asset's
   // market_data_volume_scale from GetSpotConfig.
@@ -356,9 +448,10 @@ message AssetConfig {
   // Suggested decimal precision for displaying user-facing asset amounts.
   uint32 quantity_display_decimals = 4;
 
-  // Integer scale for quantities and balances in this asset (0..18).
-  // A scale of 8 means one whole asset is represented as 100000000 in scaled
-  // integer fields such as qty_scaled.
+  // Decimal scale (0..18) for this asset's order quantities and other fields
+  // that explicitly reference quantity_scale. A scale of 8 represents one whole
+  // asset as 100000000 in those fields. Account balance amounts use fixed
+  // 18-decimal units independently of this value.
   uint32 quantity_scale = 5;
 
   // Integer scale for public candle and market-overview base volume (0..18).
@@ -386,6 +479,9 @@ enum PairStatus {
   PAIR_STATUS_POST_ONLY = 4;
   // New spot orders are blocked by reduce-only policy.
   PAIR_STATUS_REDUCE_ONLY = 5;
+  // Trading is halted: only cancellations are accepted, and new orders are
+  // rejected with MARKET_HALTED.
+  PAIR_STATUS_HALTED = 6;
 }
 
 // PairConfig describes one spot trading pair and its trading constraints.
@@ -456,6 +552,42 @@ message PairConfig {
   // Integer scale for composite reference prices in candle responses (0..18).
   // Primary market and execution prices use the fixed scale 9.
   uint32 reference_price_scale = 19;
+
+  // Largest quantity of one limit order, as a decimal string in base-asset
+  // units. A replace is checked on its new total less the quantity already
+  // filled. An order above it is rejected with MAX_QTY. Absent when the pair
+  // has no maximum.
+  optional string max_limit_qty_base = 20;
+
+  // Largest quantity of one market order, as a decimal string in base-asset
+  // units. A market order sized by quote amount is checked once converted to
+  // base. An order above it is rejected with MAX_QTY. Absent when the pair
+  // has no maximum.
+  optional string max_market_qty_base = 21;
+
+  // Maximum per-order notional as a decimal string in quote-asset units.
+  // Base-sized orders are checked using quantity times limit price, or market
+  // protection price, without rounding. For quote-sized buys, the entire all-in
+  // maximum quote debit must also fit this maximum. Exceeding it returns
+  // MAX_NOTIONAL. Absent when no maximum is configured.
+  optional string max_order_notional_quote = 22;
+
+  // The venue's default limit on resting orders a typical account may hold on
+  // this pair at once: good-till-cancelled and good-till-date orders that have
+  // not ended. Immediate-or-cancel, fill-or-kill and market orders never
+  // count, and a replaced order keeps its place. An order past it is rejected
+  // with MAX_OPEN_ORDERS_PER_PAIR. An account may have a lower limit of its
+  // own; that is not part of this public configuration and would be returned
+  // by an account-scoped read.
+  uint32 max_open_orders_per_pair = 23;
+
+  // Additional maximum notional for market orders as a decimal string in
+  // quote-asset units. Base-sized market orders are valued at the buy protection
+  // price or the sell reference price before slippage, without rounding. For
+  // quote-sized market buys, the entire all-in maximum quote debit must also fit
+  // this maximum. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is
+  // configured.
+  optional string max_market_notional_quote = 24;
 }
 
 // GetSpotConfigRequest has no parameters.
@@ -471,6 +603,16 @@ message GetSpotConfigResponse {
 
   // Snapshot generation timestamp, in seconds since the Unix epoch (UTC).
   uint64 ts_sec = 3;
+
+  // The venue's default limit on resting orders a typical account may hold
+  // across all pairs together: good-till-cancelled and good-till-date orders
+  // that have not ended. Immediate-or-cancel, fill-or-kill and market orders
+  // never count, and a replaced order keeps its place. An order past it is
+  // rejected with MAX_OPEN_ORDERS_TOTAL. Each pair's own limit is
+  // PairConfig.max_open_orders_per_pair. An account may have a lower limit of
+  // its own; that is not part of this public configuration and would be
+  // returned by an account-scoped read.
+  uint32 max_open_orders_total = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,9 +620,13 @@ message GetSpotConfigResponse {
 // ---------------------------------------------------------------------------
 
 service MarketDataService {
+  option (polyester.api.docs_group) = "marketdata";
+
   // Retrieve recent public trades for a spot market.
   // Results are ordered newest-first and support optional aggressor side,
-  // inclusive time-range, and opaque keyset pagination filters.
+  // inclusive time-range, and opaque keyset pagination filters. With
+  // after_trade_id, it walks the symbol's trades by trade identifier,
+  // oldest first and gap-free, to backfill trades missed on a live stream.
   rpc GetTrades(GetTradesRequest) returns (GetTradesResponse) {
     option (polyester.api.public) = true;
   }

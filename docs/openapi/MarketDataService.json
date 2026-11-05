@@ -29,7 +29,7 @@
             "type": "array"
           },
           "symbol": {
-            "description": "Numeric spot market identifier echoed from the request.",
+            "description": "Trading pair symbol echoed from the request path, e.g. BTC-USDT.",
             "type": "string"
           },
           "timeframe": {
@@ -82,7 +82,7 @@
                   "type": "integer"
                 },
                 "quantityScale": {
-                  "description": "Integer scale for quantities and balances in this asset (0..18). A scale of 8 means one whole asset is represented as 100000000 in scaled integer fields such as qty_scaled.",
+                  "description": "Decimal scale (0..18) for this asset's order quantities and other fields that explicitly reference quantity_scale. A scale of 8 represents one whole asset as 100000000 in those fields. Account balance amounts use fixed 18-decimal units independently of this value.",
                   "format": "int32",
                   "type": "integer"
                 }
@@ -98,6 +98,11 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "maxOpenOrdersTotal": {
+            "description": "The venue's default limit on resting orders a typical account may hold across all pairs together: good-till-cancelled and good-till-date orders that have not ended. Immediate-or-cancel, fill-or-kill and market orders never count, and a replaced order keeps its place. An order past it is rejected with MAX_OPEN_ORDERS_TOTAL. Each pair's own limit is PairConfig.max_open_orders_per_pair. An account may have a lower limit of its own; that is not part of this public configuration and would be returned by an account-scoped read.",
+            "format": "int32",
+            "type": "integer"
           },
           "pairs": {
             "description": "Pairs ordered by symbol in ascending alphabetical order.",
@@ -129,10 +134,12 @@
                 },
                 "delistingAt": {
                   "description": "Scheduled delisting timestamp. When unset, the pair has no explicit delisting time.",
+                  "format": "date-time",
                   "type": "string"
                 },
                 "listingAt": {
                   "description": "Scheduled listing timestamp. When unset, the pair has no explicit future listing time.",
+                  "format": "date-time",
                   "type": "string"
                 },
                 "marketdata": {
@@ -148,13 +155,36 @@
                       "type": "array"
                     }
                   },
-                  "required": [],
+                  "required": [
+                    "orderbookPriceBuckets"
+                  ],
                   "type": "object"
                 },
                 "maxClientRefDriftBps": {
                   "description": "Maximum allowed drift between client reference price and server reference price for MARKET orders, in basis points (1 bp = 0.01%), when client reference pricing is used.",
                   "format": "int32",
                   "type": "integer"
+                },
+                "maxLimitQtyBase": {
+                  "description": "Largest quantity of one limit order, as a decimal string in base-asset units. A replace is checked on its new total less the quantity already filled. An order above it is rejected with MAX_QTY. Absent when the pair has no maximum.",
+                  "type": "string"
+                },
+                "maxMarketNotionalQuote": {
+                  "description": "Additional maximum notional for market orders as a decimal string in quote-asset units. Base-sized market orders are valued at the buy protection price or the sell reference price before slippage, without rounding. For quote-sized market buys, the entire all-in maximum quote debit must also fit this maximum. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is configured.",
+                  "type": "string"
+                },
+                "maxMarketQtyBase": {
+                  "description": "Largest quantity of one market order, as a decimal string in base-asset units. A market order sized by quote amount is checked once converted to base. An order above it is rejected with MAX_QTY. Absent when the pair has no maximum.",
+                  "type": "string"
+                },
+                "maxOpenOrdersPerPair": {
+                  "description": "The venue's default limit on resting orders a typical account may hold on this pair at once: good-till-cancelled and good-till-date orders that have not ended. Immediate-or-cancel, fill-or-kill and market orders never count, and a replaced order keeps its place. An order past it is rejected with MAX_OPEN_ORDERS_PER_PAIR. An account may have a lower limit of its own; that is not part of this public configuration and would be returned by an account-scoped read.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "maxOrderNotionalQuote": {
+                  "description": "Maximum per-order notional as a decimal string in quote-asset units. Base-sized orders are checked using quantity times limit price, or market protection price, without rounding. For quote-sized buys, the entire all-in maximum quote debit must also fit this maximum. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is configured.",
+                  "type": "string"
                 },
                 "minNotionalQuote": {
                   "description": "Minimum order notional as a decimal string in quote-asset units.",
@@ -210,10 +240,9 @@
                 "baseQuantityScale",
                 "defaultMarketSlippageBpsBuy",
                 "defaultMarketSlippageBpsSell",
-                "delistingAt",
-                "listingAt",
                 "marketdata",
                 "maxClientRefDriftBps",
+                "maxOpenOrdersPerPair",
                 "minNotionalQuote",
                 "minQtyBase",
                 "quoteAsset",
@@ -237,6 +266,7 @@
         },
         "required": [
           "assets",
+          "maxOpenOrdersTotal",
           "pairs",
           "tsSec"
         ],
@@ -245,12 +275,46 @@
       "polyester.rest.MarketDataService_GetTrades.Response": {
         "additionalProperties": false,
         "properties": {
+          "completeThroughTradeId": {
+            "description": "With afterTradeId only: every trade with matchId at or below it exists and is returned by this endpoint.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "epochEnds": {
+            "description": "Set only with after_trade_id. Every epoch whose last trade (or, for an epoch without trades, its start) lies between after_trade_id and next_after_trade_id, both inclusive, ascending by epoch. A page that ends exactly on an epoch's last trade is followed by a page that still reports that epoch's end.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "epoch": {
+                  "description": "The epoch.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "lastTradeId": {
+                  "description": "match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch ended without trades.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "epoch",
+                "lastTradeId"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextAfterTradeId": {
+            "description": "With afterTradeId only: the afterTradeId of the next call. It never moves backwards; equal to the request's afterTradeId when nothing newer is available yet.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
           "nextPageToken": {
-            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "description": "Opaque cursor for the next page. Empty when no more results exist, and always empty with after_trade_id.",
             "type": "string"
           },
           "trades": {
-            "description": "Trades ordered newest-first by execution timestamp, with match_id as a tie-breaker.",
+            "description": "Trades ordered newest-first by execution timestamp, with match_id as a tie-breaker; with after_trade_id, ascending by match_id.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -265,12 +329,12 @@
                   "type": "string"
                 },
                 "price": {
-                  "description": "Trade price in quote-asset units scaled by 1e9.",
+                  "description": "Trade price as a decimal string in quote asset units per base asset unit, for example '61000.25'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
                 "qty": {
-                  "description": "Traded base-asset quantity scaled by the pair's base_quantity_scale from GetSpotConfig.",
+                  "description": "Traded quantity as a decimal string in base asset units, for example '0.001'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -312,13 +376,15 @@
           "DISABLED",
           "CANCEL_ONLY",
           "POST_ONLY",
-          "REDUCE_ONLY"
+          "REDUCE_ONLY",
+          "HALTED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "CANCEL_ONLY": "Only cancellations are accepted.",
           "DISABLED": "New orders are temporarily disabled.",
           "ENABLED": "New orders and cancellations are accepted.",
+          "HALTED": "Trading is halted: only cancellations are accepted, and new orders are rejected with MARKET_HALTED.",
           "POST_ONLY": "New orders must use a post-only execution variant.",
           "REDUCE_ONLY": "New spot orders are blocked by reduce-only policy."
         }
@@ -338,13 +404,18 @@
         "enum": [
           "1s",
           "1m",
+          "3m",
           "5m",
           "15m",
           "30m",
           "1h",
+          "2h",
           "4h",
-          "1d",
+          "6h",
+          "8h",
           "12h",
+          "1d",
+          "3d",
           "1w",
           "1mo"
         ],
@@ -357,16 +428,26 @@
           "1m": "1 minute",
           "1mo": "1 month (calendar month, UTC)",
           "1s": "1 second",
-          "1w": "1 week",
+          "1w": "1 week, starting Monday 00:00 UTC",
+          "2h": "2 hours",
           "30m": "30 minutes",
+          "3d": "3 days, counted from 1970-01-01 UTC",
+          "3m": "3 minutes",
           "4h": "4 hours",
-          "5m": "5 minutes"
+          "5m": "5 minutes",
+          "6h": "6 hours",
+          "8h": "8 hours"
         }
       }
     },
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "BrokerApiKeyAuth": {
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. The broker's members create, rotate and revoke keys through the QuickSwap broker API, and a key may rotate itself.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -398,6 +479,7 @@
                       "quantityScale": 8
                     }
                   ],
+                  "maxOpenOrdersTotal": 1,
                   "pairs": [
                     {
                       "allowBuyFeeFromBase": false,
@@ -413,11 +495,16 @@
                         ]
                       },
                       "maxClientRefDriftBps": 1,
+                      "maxLimitQtyBase": "100000",
+                      "maxMarketNotionalQuote": "123.45",
+                      "maxMarketQtyBase": "100000",
+                      "maxOpenOrdersPerPair": 1,
+                      "maxOrderNotionalQuote": "123.45",
                       "minNotionalQuote": "10",
                       "minQtyBase": "0.0001",
                       "quoteAsset": "USDT",
                       "quoteQuantityScale": 6,
-                      "referencePriceScale": 5000000,
+                      "referencePriceScale": 1,
                       "status": "ENABLED",
                       "stepSize": "0.0001",
                       "symbol": "BTC-USDT",
@@ -471,10 +558,10 @@
             "name": "endTime",
             "required": false,
             "schema": {
-              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Include the current open candle when available. It is prepended to the newest-first candle list and does not count toward limit.",
@@ -524,10 +611,10 @@
             "name": "startTime",
             "required": false,
             "schema": {
-              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Candle bucket timeframe, such as 1m, 5m, 1h, or 1d.",
@@ -556,7 +643,7 @@
                       "42150",
                       "41900",
                       "42080",
-                      "1234567890000000000",
+                      "12345678900",
                       "12.3456"
                     ]
                   ],
@@ -568,7 +655,7 @@
                       "42150000000000",
                       "41900000000000",
                       "42080000000000",
-                      "1234567890000000000"
+                      "12345678900"
                     ]
                   ],
                   "symbol": "BTC-USDT",
@@ -599,7 +686,7 @@
     },
     "/v1/spot/markets/{symbol}/trades": {
       "get": {
-        "description": "Retrieve recent public trades for a spot symbol, ordered newest first. Supports optional aggressor side, inclusive time-range, and opaque page-token pagination filters.",
+        "description": "Retrieve recent public trades for a spot symbol, ordered newest first. Supports optional aggressor side, inclusive time-range, and opaque page-token pagination filters. With afterTradeId, walks the symbol's trades by trade identifier, oldest first and gap-free, to backfill trades missed on a live stream.",
         "operationId": "MarketDataService_GetTrades",
         "parameters": [
           {
@@ -613,15 +700,25 @@
             }
           },
           {
+            "description": "Exclusive trade-identifier cursor (unsigned 64-bit decimal string) for gap-free backfill: returns trades with matchId above it, ascending, up to completeThroughTradeId. Use 0 to start from the first trade, then nextAfterTradeId. Cannot be combined with side, startTime, endTime or pageToken.",
+            "in": "query",
+            "name": "afterTradeId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
+          },
+          {
             "description": "Filter trades executed at or before this time (inclusive, RFC3339)",
             "in": "query",
             "name": "endTime",
             "required": false,
             "schema": {
-              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Maximum trades to return. Default 100, max 1000.",
@@ -641,7 +738,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Filter by aggressor side. BUY means the taker bought the base asset; SELL means the taker sold the base asset.",
@@ -653,9 +751,9 @@
                 {
                   "$ref": "#/components/schemas/polyester.rest.enum.marketdata.v1.SideFilter"
                 }
-              ],
-              "example": "BUY"
-            }
+              ]
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           },
           {
             "description": "Filter trades executed at or after this time (inclusive, RFC3339)",
@@ -663,10 +761,10 @@
             "name": "startTime",
             "required": false,
             "schema": {
-              "example": "2025-01-01T00:00:00Z",
               "format": "date-time",
               "type": "string"
-            }
+            },
+            "x-poly-example-omitted": "cross-field-constraint"
           }
         ],
         "responses": {
@@ -674,13 +772,21 @@
             "content": {
               "application/json": {
                 "example": {
+                  "completeThroughTradeId": "1",
+                  "epochEnds": [
+                    {
+                      "epoch": "1",
+                      "lastTradeId": "1"
+                    }
+                  ],
+                  "nextAfterTradeId": "1",
                   "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
                   "trades": [
                     {
                       "executedAt": "2025-01-01T00:00:00Z",
                       "matchId": "100001",
-                      "price": "0.005",
-                      "qty": "100000",
+                      "price": "61000.25",
+                      "qty": "0.001",
                       "side": "BUY",
                       "symbol": "BTC-USDT"
                     }

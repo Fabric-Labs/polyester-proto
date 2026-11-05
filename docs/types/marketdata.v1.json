@@ -44,7 +44,7 @@
             "name": "quantity_scale",
             "jsonName": "quantityScale",
             "number": 5,
-            "doc": "Integer scale for quantities and balances in this asset (0..18).\n A scale of 8 means one whole asset is represented as 100000000 in scaled\n integer fields such as qty_scaled.",
+            "doc": "Decimal scale (0..18) for this asset's order quantities and other fields\n that explicitly reference quantity_scale. A scale of 8 represents one whole\n asset as 100000000 in those fields. Account balance amounts use fixed\n 18-decimal units independently of this value.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -96,7 +96,7 @@
             "name": "open",
             "jsonName": "open",
             "number": 4,
-            "doc": "opening primary-market price in scale 9",
+            "doc": "Opening primary-market price in scale 9: the previous candle's close, or\n the first trade for a market's first candle.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -105,7 +105,7 @@
             "name": "high",
             "jsonName": "high",
             "number": 5,
-            "doc": "highest primary-market price in scale 9",
+            "doc": "highest primary-market price in scale 9, including the open",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -114,7 +114,7 @@
             "name": "low",
             "jsonName": "low",
             "number": 6,
-            "doc": "lowest primary-market price in scale 9",
+            "doc": "lowest primary-market price in scale 9, including the open",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -151,7 +151,7 @@
     {
       "name": "marketdata.v1.CandlePoint",
       "kind": "message",
-      "doc": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume, quote_volume].",
+      "doc": "CandlePoint is one OHLCV bucket represented with scaled integers.\n\n A primary candle opens at the previous candle's close, so consecutive\n candles join at every timeframe; a market's first candle opens at its first\n trade. High and low include the open. A bucket without trades is flat at\n the previous close with zero volume.\n\n REST responses render these values as decimal strings in tuple order:\n [ts_sec, open, high, low, close, volume, quote_volume].",
       "message": {
         "fields": [
           {
@@ -167,7 +167,7 @@
             "name": "open",
             "jsonName": "open",
             "number": 2,
-            "doc": "Opening price in quote units. Primary candles use scale 9; composite\n reference candles use the pair's reference_price_scale from GetSpotConfig.",
+            "doc": "Opening price in quote units: for a primary candle, the previous\n candle's close, or the first trade for a market's first candle. Primary\n candles use scale 9; composite reference candles use the pair's\n reference_price_scale from GetSpotConfig.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -176,7 +176,7 @@
             "name": "high",
             "jsonName": "high",
             "number": 3,
-            "doc": "Highest traded price, using the same scale as open.",
+            "doc": "Highest price in the bucket, including the open, using the same scale as\n open.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -185,7 +185,7 @@
             "name": "low",
             "jsonName": "low",
             "number": 4,
-            "doc": "Lowest traded price, using the same scale as open.",
+            "doc": "Lowest price in the bucket, including the open, using the same scale as\n open.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -212,7 +212,7 @@
             "name": "is_closed",
             "jsonName": "isClosed",
             "number": 7,
-            "doc": "True only for WebSocket terminal updates of a closed bucket.\n Historical API rows and current open-candle rows set this to false.",
+            "doc": "True for a closed candle bucket, including historical API rows and\n WebSocket terminal updates. False only while the bucket is still open.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -230,7 +230,7 @@
     {
       "name": "marketdata.v1.GetCandlesColumnsRequest",
       "kind": "message",
-      "doc": "GetCandlesColumnsRequest selects a spot market candle series for columnar output.\n\n The response is ordered oldest-first for efficient chart ingestion. When both\n start_time and end_time are set, both bounds are inclusive.",
+      "doc": "GetCandlesColumnsRequest selects a spot market candle series for columnar output.\n\n Each response page is ordered oldest-first. Pagination selects the newest\n eligible closed candles first and continues toward older candles. When both\n start_time and end_time are set, both bounds are inclusive.",
       "message": {
         "cel": [
           {
@@ -310,7 +310,7 @@
             "name": "include_incomplete",
             "jsonName": "includeIncomplete",
             "number": 6,
-            "doc": "Include the current open candle when it is available and inside the\n requested range.\n The open candle is prepended to the newest-first candle list and does not\n count toward the closed-candle limit.",
+            "doc": "Include the current open candle when available and inside the requested\n range. It appears last in the oldest-first response columns and does not\n count toward the closed-candle limit.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -326,7 +326,7 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 8,
-            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to symbol, timeframe, time bounds, and oldest-first candle ordering.\n Inclusion flags and columnar response shape may change between pages.",
+            "doc": "Opaque exclusive keyset cursor for older closed candles, bound to symbol,\n timeframe, and time bounds. Columns within each page are ordered oldest-first.\n Inclusion flags and response shape may change between pages.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -341,7 +341,7 @@
     {
       "name": "marketdata.v1.GetCandlesColumnsResponse",
       "kind": "message",
-      "doc": "GetCandlesColumnsResponse returns the same candle series as GetCandles but in columnar form.\n This is optimized for charting clients that ingest arrays of each field (binary only).\n\n Ordering: values are returned oldest-first (ascending ts_sec).",
+      "doc": "GetCandlesColumnsResponse returns the same candle series as GetCandles but in columnar form.\n This is optimized for charting clients that ingest arrays of each field (binary only).\n\n Ordering: values within each page are oldest-first (ascending ts_sec).\n Continuation pages contain older candles.",
       "message": {
         "fields": [
           {
@@ -374,7 +374,7 @@
             "name": "open",
             "jsonName": "open",
             "number": 4,
-            "doc": "Opening primary-market prices use scale 9. Reference prices use the pair's\n reference_price_scale from GetSpotConfig.",
+            "doc": "Opening primary-market prices use scale 9: each is the previous candle's\n close, or the first trade for a market's first candle. Reference prices\n use the pair's reference_price_scale from GetSpotConfig.",
             "repeated": true,
             "protoScalar": "int64",
             "jsonType": "string",
@@ -384,7 +384,7 @@
             "name": "high",
             "jsonName": "high",
             "number": 5,
-            "doc": "Highest primary-market prices use scale 9. Reference prices use the pair's\n reference_price_scale from GetSpotConfig.",
+            "doc": "Highest primary-market prices, including the open, use scale 9. Reference\n prices use the pair's reference_price_scale from GetSpotConfig.",
             "repeated": true,
             "protoScalar": "int64",
             "jsonType": "string",
@@ -394,7 +394,7 @@
             "name": "low",
             "jsonName": "low",
             "number": 6,
-            "doc": "Lowest primary-market prices use scale 9. Reference prices use the pair's\n reference_price_scale from GetSpotConfig.",
+            "doc": "Lowest primary-market prices, including the open, use scale 9. Reference\n prices use the pair's reference_price_scale from GetSpotConfig.",
             "repeated": true,
             "protoScalar": "int64",
             "jsonType": "string",
@@ -919,6 +919,15 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          },
+          {
+            "name": "max_open_orders_total",
+            "jsonName": "maxOpenOrdersTotal",
+            "number": 4,
+            "doc": "The venue's default limit on resting orders a typical account may hold\n across all pairs together: good-till-cancelled and good-till-date orders\n that have not ended. Immediate-or-cancel, fill-or-kill and market orders\n never count, and a replaced order keeps its place. An order past it is\n rejected with MAX_OPEN_ORDERS_TOTAL. Each pair's own limit is\n PairConfig.max_open_orders_per_pair. An account may have a lower limit of\n its own; that is not part of this public configuration and would be\n returned by an account-scoped read.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -926,7 +935,7 @@
     {
       "name": "marketdata.v1.GetTradesRequest",
       "kind": "message",
-      "doc": "GetTradesRequest selects recent public trades for one spot market.\n\n Results are ordered newest-first by execution timestamp, with match_id as a\n tie-breaker. When both start_time and end_time are set, both bounds are\n inclusive.",
+      "doc": "GetTradesRequest selects recent public trades for one spot market.\n\n Results are ordered newest-first by execution timestamp, with match_id as a\n tie-breaker. When both start_time and end_time are set, both bounds are\n inclusive.\n\n With after_trade_id set, the request instead walks the symbol's trades by\n trade identifier (match_id), oldest first and gap-free, to backfill trades\n missed on a live stream: see after_trade_id.",
       "message": {
         "cel": [
           {
@@ -938,6 +947,11 @@
             "id": "get_trades.time_not_future",
             "message": "start_time and end_time must not be more than 5 minutes in the future",
             "expression": "(!has(this.start_time) || this.start_time \u003c= now + duration('300s')) \u0026\u0026 (!has(this.end_time) || this.end_time \u003c= now + duration('300s'))"
+          },
+          {
+            "id": "get_trades.after_trade_id_exclusive",
+            "message": "after_trade_id cannot be combined with start_time, end_time, side or page_token",
+            "expression": "!has(this.after_trade_id) || (!has(this.start_time) \u0026\u0026 !has(this.end_time) \u0026\u0026 this.side == 0 \u0026\u0026 this.page_token == '')"
           }
         ],
         "fields": [
@@ -1011,6 +1025,15 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "after_trade_id",
+            "jsonName": "afterTradeId",
+            "number": 7,
+            "doc": "Exclusive trade-identifier cursor for gap-free backfill. When set, the\n results are the symbol's trades with match_id greater than\n after_trade_id, ascending by match_id, up to limit, and only trades at or\n below the response's complete_through_trade_id: every page is gap-free.\n Trade identifiers order trades across epochs too, so a walk crosses\n epoch ends without a gap. Pass 0 to start from the symbol's first trade,\n then the response's next_after_trade_id. Cannot be combined with\n start_time, end_time, side or page_token.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -1025,7 +1048,7 @@
             "name": "trades",
             "jsonName": "trades",
             "number": 1,
-            "doc": "Trades ordered newest-first by execution timestamp, with match_id as a\n tie-breaker.",
+            "doc": "Trades ordered newest-first by execution timestamp, with match_id as a\n tie-breaker; with after_trade_id, ascending by match_id.",
             "repeated": true,
             "protoRef": "marketdata.v1.MarketTrade"
           },
@@ -1033,7 +1056,7 @@
             "name": "next_page_token",
             "jsonName": "nextPageToken",
             "number": 2,
-            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "doc": "Opaque cursor for the next page. Empty when no more results exist, and\n always empty with after_trade_id.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -1041,6 +1064,32 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "complete_through_trade_id",
+            "jsonName": "completeThroughTradeId",
+            "number": 3,
+            "doc": "Set only with after_trade_id; 0 otherwise. Every trade of the symbol\n with match_id at or below this value exists and is returned by this\n method. Identifiers in that range that no trade has, the rest of an\n ended epoch and every identifier below a later epoch's first, are\n covered too. Newer trades may exist that are not available here yet; it\n only grows.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "next_after_trade_id",
+            "jsonName": "nextAfterTradeId",
+            "number": 4,
+            "doc": "Set only with after_trade_id; 0 otherwise. The after_trade_id of the\n next call; it never moves backwards. On a full page (limit trades) it is\n the last trade's match_id. Otherwise it is the greater of after_trade_id\n and complete_through_trade_id, so a walk progresses across epoch ends\n and empty epochs without trades to carry it. When it equals the\n request's after_trade_id, nothing newer is available yet: retry later\n with backoff.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "epoch_ends",
+            "jsonName": "epochEnds",
+            "number": 5,
+            "doc": "Set only with after_trade_id. Every epoch whose last trade (or, for an\n epoch without trades, its start) lies between after_trade_id and\n next_after_trade_id, both inclusive, ascending by epoch. A page that\n ends exactly on an epoch's last trade is followed by a page that still\n reports that epoch's end.",
+            "repeated": true,
+            "protoRef": "marketdata.v1.TradeEpochEnd"
           }
         ]
       }
@@ -1572,6 +1621,23 @@
       }
     },
     {
+      "name": "marketdata.v1.MarketTradeBatch",
+      "kind": "message",
+      "doc": "MarketTradeBatch is one realtime publication on a symbol's public trade\n stream: every trade queued for the stream when it was sent, at most 256 and\n at most 64 KiB, in execution order.\n\n match_id identifies a trade. Apply trades in array order and in publication\n order; a trade whose match_id was already received replaces the earlier copy.\n When the subscription reports that missed publications could not be\n recovered, reload recent trades over REST.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Trades in execution order, oldest first. At least one trade.",
+            "repeated": true,
+            "protoRef": "marketdata.v1.MarketTrade"
+          }
+        ]
+      }
+    },
+    {
       "name": "marketdata.v1.PairConfig",
       "kind": "message",
       "doc": "PairConfig describes one spot trading pair and its trading constraints.",
@@ -1735,6 +1801,47 @@
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
+          },
+          {
+            "name": "max_limit_qty_base",
+            "jsonName": "maxLimitQtyBase",
+            "number": 20,
+            "doc": "Largest quantity of one limit order, as a decimal string in base-asset\n units. A replace is checked on its new total less the quantity already\n filled. An order above it is rejected with MAX_QTY. Absent when the pair\n has no maximum.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "max_market_qty_base",
+            "jsonName": "maxMarketQtyBase",
+            "number": 21,
+            "doc": "Largest quantity of one market order, as a decimal string in base-asset\n units. A market order sized by quote amount is checked once converted to\n base. An order above it is rejected with MAX_QTY. Absent when the pair\n has no maximum.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "max_order_notional_quote",
+            "jsonName": "maxOrderNotionalQuote",
+            "number": 22,
+            "doc": "Maximum per-order notional as a decimal string in quote-asset units.\n Base-sized orders are checked using quantity times limit price, or market\n protection price, without rounding. For quote-sized buys, the entire all-in\n maximum quote debit must also fit this maximum. Exceeding it returns\n MAX_NOTIONAL. Absent when no maximum is configured.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "max_open_orders_per_pair",
+            "jsonName": "maxOpenOrdersPerPair",
+            "number": 23,
+            "doc": "The venue's default limit on resting orders a typical account may hold on\n this pair at once: good-till-cancelled and good-till-date orders that have\n not ended. Immediate-or-cancel, fill-or-kill and market orders never\n count, and a replaced order keeps its place. An order past it is rejected\n with MAX_OPEN_ORDERS_PER_PAIR. An account may have a lower limit of its\n own; that is not part of this public configuration and would be returned\n by an account-scoped read.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_market_notional_quote",
+            "jsonName": "maxMarketNotionalQuote",
+            "number": 24,
+            "doc": "Additional maximum notional for market orders as a decimal string in\n quote-asset units. Base-sized market orders are valued at the buy protection\n price or the sell reference price before slippage, without rounding. For\n quote-sized market buys, the entire all-in maximum quote debit must also fit\n this maximum. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is\n configured.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -1787,6 +1894,11 @@
             "name": "PAIR_STATUS_REDUCE_ONLY",
             "number": 5,
             "doc": "New spot orders are blocked by reduce-only policy."
+          },
+          {
+            "name": "PAIR_STATUS_HALTED",
+            "number": 6,
+            "doc": "Trading is halted: only cancellations are accepted, and new orders are\n rejected with MARKET_HALTED."
           }
         ]
       }
@@ -1813,7 +1925,7 @@
     {
       "name": "marketdata.v1.Timeframe",
       "kind": "enum",
-      "doc": "Timeframe represents an OHLCV candle bucket.\n\n Most values are fixed-duration buckets. `MONTH_1` is calendar-based (UTC\n month boundaries).",
+      "doc": "Timeframe represents an OHLCV candle bucket.\n\n All buckets are in UTC; daylight saving time never shifts a boundary.\n Fixed-duration buckets start at whole multiples of their duration since\n 1970-01-01T00:00:00Z, so every bucket up to 1 day starts on a UTC midnight\n boundary and `DAY_3` buckets start every third day counted from\n 1970-01-01. `WEEK_1` buckets start on Monday 00:00 UTC. `MONTH_1` is\n calendar-based (UTC month boundaries). Values are listed shortest first.",
       "enum": {
         "values": [
           {
@@ -1825,6 +1937,11 @@
             "name": "MIN_1",
             "number": 2,
             "doc": "1 minute"
+          },
+          {
+            "name": "MIN_3",
+            "number": 12,
+            "doc": "3 minutes"
           },
           {
             "name": "MIN_5",
@@ -1847,14 +1964,24 @@
             "doc": "1 hour"
           },
           {
+            "name": "HOUR_2",
+            "number": 13,
+            "doc": "2 hours"
+          },
+          {
             "name": "HOUR_4",
             "number": 7,
             "doc": "4 hours"
           },
           {
-            "name": "DAY_1",
-            "number": 8,
-            "doc": "1 day"
+            "name": "HOUR_6",
+            "number": 14,
+            "doc": "6 hours"
+          },
+          {
+            "name": "HOUR_8",
+            "number": 15,
+            "doc": "8 hours"
           },
           {
             "name": "HOUR_12",
@@ -1862,14 +1989,51 @@
             "doc": "12 hours"
           },
           {
+            "name": "DAY_1",
+            "number": 8,
+            "doc": "1 day"
+          },
+          {
+            "name": "DAY_3",
+            "number": 16,
+            "doc": "3 days, counted from 1970-01-01 UTC"
+          },
+          {
             "name": "WEEK_1",
             "number": 10,
-            "doc": "1 week"
+            "doc": "1 week, starting Monday 00:00 UTC"
           },
           {
             "name": "MONTH_1",
             "number": 11,
             "doc": "1 month (calendar month, UTC)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketdata.v1.TradeEpochEnd",
+      "kind": "message",
+      "doc": "TradeEpochEnd reports where one epoch of a symbol's trade identifiers\n ended. Trade identifiers of epoch e are greater than (e-1) * 2^40 and less\n than e * 2^40; a later epoch's identifiers are greater than every earlier\n epoch's.",
+      "message": {
+        "fields": [
+          {
+            "name": "epoch",
+            "jsonName": "epoch",
+            "number": 1,
+            "doc": "The epoch.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "last_trade_id",
+            "jsonName": "lastTradeId",
+            "number": 2,
+            "doc": "match_id of the epoch's last trade; (epoch-1) * 2^40 when the epoch\n ended without trades.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }

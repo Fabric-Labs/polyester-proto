@@ -1,10 +1,16 @@
 {
   "components": {
     "schemas": {
-      "claims.v1.ClaimDailyRewardRequest": {
+      "polyester.rest.ClaimsService_ClaimDailyReward.Request": {
         "additionalProperties": false,
-        "description": "ClaimDailyRewardRequest claims today's reward for the authenticated root account.",
-        "title": "ClaimDailyRewardRequest",
+        "properties": {
+          "subaccountId": {
+            "description": "Optional public id of a subaccount owned by the authenticated root account that receives the reward. When omitted, the reward is paid to the root account. Subaccounts shared with the caller but owned by another root account cannot be selected. The destination is fixed when today's claim is created; retries return the existing claim and its destination.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [],
         "type": "object"
       },
       "polyester.rest.ClaimsService_ClaimDailyReward.Response": {
@@ -35,7 +41,12 @@
                 "type": "string"
               }
             },
-            "required": [],
+            "required": [
+              "campaignId",
+              "claimPolicy",
+              "description",
+              "name"
+            ],
             "type": "object"
           },
           "claimId": {
@@ -89,6 +100,11 @@
             ],
             "description": "Current claim state."
           },
+          "subaccountId": {
+            "description": "Subaccount public id that receives this claim's reward. Zero or omitted when the reward is paid to the root account.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          },
           "transfers": {
             "description": "Transfers created for each reward asset. Empty while the claim is processing.",
             "items": {
@@ -114,6 +130,7 @@
           }
         },
         "required": [
+          "claimId",
           "resetAt",
           "rewards",
           "state",
@@ -149,12 +166,25 @@
                 "type": "string"
               }
             },
-            "required": [],
+            "required": [
+              "campaignId",
+              "claimPolicy",
+              "description",
+              "name"
+            ],
             "type": "object"
           },
           "claimId": {
             "description": "Claim identifier. Empty until a claim has been created.",
             "type": "string"
+          },
+          "payoutDelayReason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.claims.v1.ErrorCode"
+              }
+            ],
+            "description": "Why the payout of today's claim is delayed: the claim reward is temporarily unavailable, or reward payouts for this campaign are paused. Set only while the state is payout delayed; unspecified or omitted otherwise."
           },
           "resetAt": {
             "description": "Start of the next UTC calendar day.",
@@ -197,9 +227,15 @@
               }
             ],
             "description": "Current state of today's claim."
+          },
+          "subaccountId": {
+            "description": "Subaccount public id that receives today's claimed reward. Zero or omitted when no claim has been created yet or when the reward is paid to the root account.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
           }
         },
         "required": [
+          "claimId",
           "resetAt",
           "rewards",
           "state"
@@ -220,20 +256,64 @@
           "AVAILABLE",
           "PROCESSING",
           "CLAIMED",
-          "UNAVAILABLE"
+          "UNAVAILABLE",
+          "PAYOUT_DELAYED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "AVAILABLE": "Today's reward is available to claim.",
           "CLAIMED": "Today's reward was claimed successfully.",
+          "PAYOUT_DELAYED": "Today's claim is recorded but its payout is delayed. It is retried and paid automatically; the payout delay reason gives the cause.",
           "PROCESSING": "Today's claim is being processed. Retrying returns the same claim.",
           "UNAVAILABLE": "No reward is active for the current UTC day."
+        }
+      },
+      "polyester.rest.enum.claims.v1.ErrorCode": {
+        "enum": [
+          "CLAIM_TEMPORARILY_UNAVAILABLE",
+          "UNAUTHENTICATED",
+          "RATE_LIMIT_EXCEEDED",
+          "CLAIM_UNAVAILABLE",
+          "CONFLICT",
+          "INVALID_REQUEST",
+          "REQUEST_TOO_LARGE",
+          "SERVICE_UNAVAILABLE",
+          "INTERNAL_ERROR",
+          "PERMISSION_DENIED",
+          "FAILED_PRECONDITION",
+          "SOCIAL_VERIFICATION_REQUIRED",
+          "SUBACCOUNT_NOT_FOUND",
+          "SUBACCOUNT_INACTIVE",
+          "CLAIM_PAYOUT_UNAVAILABLE"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "CLAIM_PAYOUT_UNAVAILABLE": "Reward payouts for this campaign are paused. Today's claim is kept and paid automatically once payouts resume.",
+          "CLAIM_TEMPORARILY_UNAVAILABLE": "The claim reward is temporarily unavailable. Please try again later.",
+          "CLAIM_UNAVAILABLE": "No reward is available for the current UTC day.",
+          "CONFLICT": "The request encountered concurrent claim activity. Retry the request.",
+          "FAILED_PRECONDITION": "A required condition for completing the claim was not satisfied.",
+          "INTERNAL_ERROR": "The request failed because of an unexpected server error.",
+          "INVALID_REQUEST": "The request payload is invalid.",
+          "PERMISSION_DENIED": "The claim request was not permitted.",
+          "RATE_LIMIT_EXCEEDED": "The applicable request rate limit was exceeded.",
+          "REQUEST_TOO_LARGE": "The REST request body exceeds the 1 KiB limit.",
+          "SERVICE_UNAVAILABLE": "The service is temporarily unable to complete the request.",
+          "SOCIAL_VERIFICATION_REQUIRED": "Verify an X or Discord account before claiming a reward.",
+          "SUBACCOUNT_INACTIVE": "The selected subaccount is owned by the authenticated root account but is not active.",
+          "SUBACCOUNT_NOT_FOUND": "The selected subaccount does not exist or is not owned by the authenticated root account.",
+          "UNAUTHENTICATED": "A valid session is required. API keys cannot access claims."
         }
       }
     },
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "BrokerApiKeyAuth": {
+        "description": "Broker API key, sent as a bearer token and accepted only by the QuickSwap broker API. The broker API key is a server credential. Call this API from the broker's backend, never from a browser or mobile app. The broker's members create, rotate and revoke keys through the QuickSwap broker API, and a key may rotate itself.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -262,6 +342,7 @@
                     "name": "value"
                   },
                   "claimId": "value",
+                  "payoutDelayReason": "CLAIM_TEMPORARILY_UNAVAILABLE",
                   "resetAt": "2025-01-01T00:00:00Z",
                   "rewards": [
                     {
@@ -270,7 +351,8 @@
                       "assetId": 100
                     }
                   ],
-                  "state": "AVAILABLE"
+                  "state": "AVAILABLE",
+                  "subaccountId": "45LUmqjT"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/polyester.rest.ClaimsService_GetDailyClaimStatus.Response"
@@ -298,18 +380,16 @@
     },
     "/v1/trading/daily-claim/claim": {
       "post": {
-        "description": "Claim today's reward once for the authenticated root account. Requires a session JWT; API keys are not accepted. All reward assets are transferred together, and retries return the same claim.",
+        "description": "Claim today's reward once for the authenticated root account, paid to the root account or to a subaccount it owns. Requires a session JWT; API keys are not accepted. All reward assets are transferred together, and retries return the same claim and destination.",
         "operationId": "ClaimsService_ClaimDailyReward",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {
+                "subaccountId": "45LUmqjT"
+              },
               "schema": {
                 "$ref": "#/components/schemas/polyester.rest.ClaimsService_ClaimDailyReward.Request"
-              }
-            },
-            "application/proto": {
-              "schema": {
-                "$ref": "#/components/schemas/claims.v1.ClaimDailyRewardRequest"
               }
             }
           },
@@ -337,6 +417,7 @@
                     }
                   ],
                   "state": "AVAILABLE",
+                  "subaccountId": "45LUmqjT",
                   "transfers": [
                     {
                       "assetId": 100,
@@ -360,7 +441,7 @@
           "session_token"
         ],
         "x-poly-error-catalog": "core:generic",
-        "x-poly-error-proto-pkg": "claims.v1",
+        "x-poly-error-proto-pkg": "polyester.rest.ClaimsService_ClaimDailyReward",
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "claims.v1.ClaimDailyRewardRequest",
         "x-poly-response-type": "claims.v1.ClaimDailyRewardResponse",
