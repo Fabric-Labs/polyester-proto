@@ -864,7 +864,8 @@
           "AUTH_KEY_EXPIRED",
           "AUTH_KEY_DISABLED",
           "AUTH_IP_NOT_ALLOWED",
-          "AUTH_API_KEY_NOT_ACCEPTED"
+          "AUTH_API_KEY_NOT_ACCEPTED",
+          "AUTH_WALLET_ALREADY_LINKED"
         ],
         "title": "AuthErrorCode",
         "type": "string"
@@ -9109,7 +9110,7 @@
       },
       "changelog.v1.Change": {
         "additionalProperties": false,
-        "description": "Change is one announced change. Published content never changes.",
+        "description": "Change is one announced change. A republished post may reword or withdraw it.",
         "properties": {
           "actionRequired": {
             "description": "True when users or integrators must act.",
@@ -9136,7 +9137,7 @@
             "type": "string"
           },
           "id": {
-            "description": "Stable opaque 64-bit identifier, identical across environments.",
+            "description": "Stable opaque 64-bit identifier, identical across environments and across\n revisions of a post.",
             "format": "int64",
             "title": "id",
             "type": [
@@ -9200,7 +9201,7 @@
           },
           "publishedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Publication time of the announcing post.",
+            "description": "Time of first publication of the announcing post.",
             "title": "published_at"
           },
           "sectionHeading": {
@@ -9282,7 +9283,7 @@
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort.",
+            "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort. When the post it\n points into was republished since, paging restarts at the first change of\n that post's current revision, so changes of that post can appear again;\n match them by id.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -9381,7 +9382,7 @@
       },
       "changelog.v1.Post": {
         "additionalProperties": false,
-        "description": "Post is one complete published post.",
+        "description": "Post is one complete published post at its current revision.",
         "properties": {
           "sections": {
             "description": "Sections in publication order.",
@@ -9446,11 +9447,16 @@
           },
           "publishedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Publication time.",
+            "description": "Time of first publication. It never changes when the post is republished.",
             "title": "published_at"
           },
+          "revision": {
+            "description": "Published revision, starting at 1. Each republication of the post, for\n example to correct its copy or withdraw a change, increments it.",
+            "title": "revision",
+            "type": "integer"
+          },
           "slug": {
-            "description": "Stable post identifier, unique within this environment.",
+            "description": "Stable post identifier, unique within this environment. It never changes\n when the post is republished.",
             "title": "slug",
             "type": "string"
           },
@@ -9458,6 +9464,11 @@
             "description": "Title.",
             "title": "title",
             "type": "string"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the current revision was published; equals published_at for revision 1.",
+            "title": "updated_at"
           }
         },
         "title": "PostSummary",
@@ -13580,7 +13591,7 @@
             "type": "array"
           },
           "symbolId": {
-            "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n all enabled markets.",
+            "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n every configured market, including disabled ones. Markets whose delisting\n time has passed are never returned.",
             "items": {
               "exclusiveMinimum": 0,
               "maxItems": 2000,
@@ -14663,7 +14674,7 @@
       },
       "orders.v1.BatchReplaceOrdersRequest": {
         "additionalProperties": false,
-        "description": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\neach item target must be unique within a batch",
+        "description": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\n Read the batch's status with GetBatchReplaceStatus within the same window;\n after it, reconcile the individual orders and never resubmit an accepted batch.\neach item target must be unique within a batch",
         "properties": {
           "items": {
             "description": "Replacement items.",
@@ -14817,7 +14828,7 @@
             ]
           },
           "updatedTsNs": {
-            "description": "Latest status timestamp in nanoseconds since epoch.",
+            "description": "Latest status timestamp in nanoseconds since epoch. For an item refused\n after its admission, this is when the refusal was recorded, or a later\n time at which the service recovered and observed it, so two reads may\n show different times for the same refusal. Do not use it to identify the\n refusal.",
             "format": "int64",
             "title": "updated_ts_ns",
             "type": [
@@ -15653,7 +15664,7 @@
       },
       "orders.v1.GetBatchReplaceStatusRequest": {
         "additionalProperties": false,
-        "description": "GetBatchReplaceStatusRequest retrieves one admitted batch by server identity.\n Batch admission replay lasts 60 seconds from acceptance. If status is\n unavailable, reconcile the individual orders; absence does not prove rejection.",
+        "description": "GetBatchReplaceStatusRequest retrieves one accepted batch by server identity.\n A batch's status is retained for 60 seconds from its acceptance, the same\n time-limited window in which an identical retry replays its admission. It\n is readable as soon as BatchReplaceOrders returns; each item's execution\n phase then advances asynchronously. UNAVAILABLE means the status cannot be\n established yet: retry the same request within the window. NOT_FOUND means\n the account has no retained batch with this identity: none was accepted for\n it, or the window ended. NOT_FOUND never proves that a replacement was\n rejected. After the window, reconcile the individual orders, and never\n submit an accepted batch again because its status is not found.",
         "properties": {
           "batchRequestId": {
             "description": "Server-issued batch identity from BatchReplaceOrders.",
@@ -15682,7 +15693,7 @@
       },
       "orders.v1.GetBatchReplaceStatusResponse": {
         "additionalProperties": false,
-        "description": "GetBatchReplaceStatusResponse returns durable batch and per-item finality.",
+        "description": "GetBatchReplaceStatusResponse returns a batch's admission and each item's\n current execution phase.",
         "properties": {
           "acceptedCount": {
             "description": "Number of admitted items.",
@@ -15726,7 +15737,7 @@
             "type": "integer"
           },
           "updatedTsNs": {
-            "description": "Latest batch status timestamp in nanoseconds since epoch.",
+            "description": "Latest batch status timestamp in nanoseconds since epoch: the latest of\n its acceptance and its items' update times, so it can show a recovery\n time as an item's can.",
             "format": "int64",
             "title": "updated_ts_ns",
             "type": [
@@ -21445,7 +21456,7 @@
         "properties": {
           "status": {
             "$ref": "#/components/schemas/triggers.v1.TriggerStatus",
-            "description": "Final status (should be STATUS_CANCELED).",
+            "description": "The trigger's status after the cancel, which is always canceled.",
             "title": "status"
           },
           "triggerId": {
@@ -25370,7 +25381,7 @@
     },
     "/orders.v1.OrdersReadService/GetBatchReplaceStatus": {
       "post": {
-        "description": "Retrieve durable execution status for one admitted batch replacement.",
+        "description": "Retrieve the execution status of one accepted batch replacement, retained\n for 60 seconds from its acceptance. Retry UNAVAILABLE with the same\n request; NOT_FOUND means no retained batch, never a rejected replacement.",
         "operationId": "OrdersReadService_GetBatchReplaceStatus",
         "parameters": [
           {
@@ -25431,7 +25442,7 @@
             "description": "Error"
           }
         },
-        "summary": "Retrieve durable execution status for one admitted batch replacement.",
+        "summary": "Retrieve the execution status of one accepted batch replacement, retained  for 60 seconds from its acceptance. Retry UNAVAILABLE with the same  request; NOT_FOUND means no retained batch, never a rejected replacement.",
         "tags": [
           "OrdersReadService"
         ]
@@ -32846,11 +32857,11 @@
             }
           },
           {
-            "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort.",
+            "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort. When the post it\n points into was republished since, paging restarts at the first change of\n that post's current revision, so changes of that post can appear again;\n match them by id.",
             "in": "query",
             "name": "pageToken",
             "schema": {
-              "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort.",
+              "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Reuse\n it only with the same filters, time bounds and sort. When the post it\n points into was republished since, paging restarts at the first change of\n that post's current revision, so changes of that post can appear again;\n match them by id.",
               "maxLength": 512,
               "title": "page_token",
               "type": "string"
@@ -32880,7 +32891,7 @@
     },
     "/v1/changelog/posts": {
       "get": {
-        "description": "List published post summaries, newest first. Use limit 1 to poll for the\n latest post.",
+        "description": "List published post summaries, newest first. Use limit 1 to poll for the\n latest post. To follow edits to published posts, compare each post's\n revision.",
         "operationId": "ChangelogService_ListPosts",
         "parameters": [
           {
@@ -32929,7 +32940,7 @@
     },
     "/v1/changelog/posts/{slug}": {
       "get": {
-        "description": "Get one complete published post by slug.",
+        "description": "Get one complete published post by slug, at its current revision.",
         "operationId": "ChangelogService_GetPost",
         "parameters": [
           {
@@ -33294,11 +33305,11 @@
         "operationId": "MarketOverviewService_ListMarketOverview",
         "parameters": [
           {
-            "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n all enabled markets.",
+            "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n every configured market, including disabled ones. Markets whose delisting\n time has passed are never returned.",
             "in": "query",
             "name": "symbolId",
             "schema": {
-              "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n all enabled markets.",
+              "description": "Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns\n every configured market, including disabled ones. Markets whose delisting\n time has passed are never returned.",
               "items": {
                 "exclusiveMinimum": 0,
                 "maxItems": 2000,

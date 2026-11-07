@@ -3,6 +3,27 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-07 — develop-20261107T200655Z
+
+Uniform request-size and rate-limit problems, editable changelog posts, QuickSwap small-amount outcomes and a wallet-already-linked sign-in error.
+
+- [2026-11-04T1214Z-chain-deposit-v1](changes/2026-11-04T1214Z-chain-deposit-v1.md): changed `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.guard.v1.GuardSignerService`, `swap.v1.SwapService`, `swap.quickswap.v1.QuickSwapService`, `transfer.v1.InternalTransferService`, `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`, `fees.v1.FeeService`, `checkpoints.v1.CheckpointService`. **Breaking.**
+- [2026-11-04T1630Z-ledger-read-v1](changes/2026-11-04T1630Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`. **Breaking.**
+- [2026-11-04T1633Z-triggers-v1](changes/2026-11-04T1633Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-05T1045Z-auth-v1](changes/2026-11-05T1045Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.AddressBookService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.SocialVerificationService`, `auth.v1.SubaccountService`. **Breaking.**
+- [2026-11-05T1248Z-chain-withdraw-v1](changes/2026-11-05T1248Z-chain-withdraw-v1.md): changed `chain.withdraw.v1.WithdrawService`, `transfer.v1.InternalTransferService`, `auth.v1.PolicyService`.
+- [2026-11-05T1252Z-auth-v1](changes/2026-11-05T1252Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.SubaccountRoleService`, `vip.v1.VIPService`, `ratelimit.v1.RateLimitService`, `changelog.v1.ChangelogService`. **Breaking.**
+- [2026-11-05T1327Z-orders-v1](changes/2026-11-05T1327Z-orders-v1.md): changed `orders.v1.OrdersReadService`, `orders.v1.OrdersService`.
+- [2026-11-05T1425Z-orders-v1](changes/2026-11-05T1425Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.AuthService`, `auth.v1.SubaccountRoleService`, `vip.v1.VIPService`, `ratelimit.v1.RateLimitService`, `changelog.v1.ChangelogService`. **Breaking.**
+- [2026-11-05T1442Z-swap-quickswap-v1](changes/2026-11-05T1442Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2125Z-swap-quickswap-v1](changes/2026-11-05T2125Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2145Z-marketoverview-v1](changes/2026-11-05T2145Z-marketoverview-v1.md): changed `marketoverview.v1.MarketOverviewService`.
+- [2026-11-05T2208Z-swap-quickswap-v1](changes/2026-11-05T2208Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2224Z-changelog-v1](changes/2026-11-05T2224Z-changelog-v1.md): changed `changelog.v1.ChangelogService`.
+- [2026-11-05T2300Z-swap-quickswap-v1](changes/2026-11-05T2300Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-06T0002Z-triggers-v1](changes/2026-11-06T0002Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-07T1018Z-auth-v1](changes/2026-11-07T1018Z-auth-v1.md): changed `auth.v1.AuthService`.
+
 ## 2026-11-04 — develop-20261104T112923Z
 
 Fee reserve rates and breakdown, removal of the holds list, canonical REST problem types and stricter trigger checks.
