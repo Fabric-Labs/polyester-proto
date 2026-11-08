@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<messageSchema package="tradews" id="7" version="36" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
+<messageSchema package="tradews" id="7" version="36" semanticVersion="1.1.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for low-latency trading commands, acknowledgements, and authenticated private events">
   <types>
     <enum name="CancelAllListingStatus" encodingType="uint8" description="Availability of the cancel-all order listing, independent of its submission outcome">
       <validValue name="UNSPECIFIED" description="Listing status was not provided; used for other commands">0</validValue>
@@ -38,6 +38,7 @@
       <validValue name="BATCH_CREATE_ORDERS" description="Submits up to 20 new orders, each admitted or rejected on its own">7</validValue>
       <validValue name="BATCH_REPLACE_ORDERS" description="Modifies up to 50 orders on one trading pair, each amended in place or replaced, and admitted or rejected on its own">8</validValue>
       <validValue name="BATCH_CANCEL_ORDERS" description="Requests cancellation of up to 50 orders, each accepted or rejected on its own">9</validValue>
+      <validValue name="CANCEL_ALL_AFTER" description="Arms, refreshes or disarms the account's cancel-all-after timer">10</validValue>
     </enum>
 
     <enum name="Side" encodingType="ZeroNullUint8" description="Direction of an order or account execution">
@@ -330,6 +331,12 @@
       <validValue name="BATCH_CREATE_ORDERS" description="Batch order placement operation">5</validValue>
       <validValue name="BATCH_REPLACE_ORDERS" description="Batch order modification operation">6</validValue>
       <validValue name="BATCH_CANCEL_ORDERS" description="Batch order cancellation operation">7</validValue>
+      <validValue name="CANCEL_ALL_AFTER" description="Cancel-all-after timer operation; an arm, a refresh and a disarm each count against the cancellation quota">8</validValue>
+    </enum>
+
+    <enum name="CancelAllAfterStatus" encodingType="uint8" description="State of the account's cancel-all-after timer after a CancelAllAfter applied">
+      <validValue name="ARMED" description="The timer is armed, or an armed timer was refreshed; unless refreshed again it expires at its deadline and cancels the open orders in its scope">1</validValue>
+      <validValue name="DISABLED" description="The account has no armed timer">2</validValue>
     </enum>
 
     <enum name="RateLimitPolicyClass" encodingType="ZeroNullUint8" description="Quota family used for a rate-limit decision">
@@ -475,6 +482,14 @@
     </group>
   </message>
 
+  <message name="CancelAllAfter" id="10" description="Arms, refreshes or disarms the account's cancel-all-after timer, a dead-man switch. Unless refreshed before its deadline, the timer expires and cancels what a CancelAllOrders with the same symbol and side scope cancels: the account's open orders in scope, including orders that triggers placed, which end CANCELED with CancelReason CANCEL_ALL_AFTER. It cancels no trigger: armed stop-loss, take-profit and trailing stops, running TWAPs and attached legs without a working exit stay active and can place new orders after it expires. The account has one timer, shared with the Orders API's CancelAllAfter: each arm replaces it, scope included, and a refresh or a disarm leaves a cancellation already in progress unchanged. The timer belongs to the account, not to this connection: closing the connection neither disarms nor expires it. Refresh it well within the timeout, for example every 15 to 30 seconds with a 60-second timeout. Resending a request is safe: an arm restarts the timer from when it applies, and a disarm is idempotent. Each request counts against the cancellation rate limit">
+    <field name="seq" id="1" type="uint64" description="Required per-connection client sequence number; the first admitted message is 1 and each subsequently admitted message increments by exactly 1"/>
+    <field name="correlationId" id="2" type="uint64" description="Client-chosen correlation token copied unchanged into the corresponding CancelAllAfterAck or rejection"/>
+    <field name="timeoutSec" id="3" type="uint32" description="Timer duration in seconds: 0 disarms the timer; 10 to 120 arms it, or refreshes an armed one, to expire that many seconds after the request applies; any other value is rejected with CANCEL_ALL_AFTER_TIMEOUT_INVALID"/>
+    <field name="symbolId" id="4" type="ZeroNullUint32" presence="optional" description="Stable numeric trading-pair identifier returned by GetSpotConfig whose open orders expiry cancels; zero for every pair. An arm naming an unknown pair is rejected with UNKNOWN_SYMBOL; a disarm ignores this field"/>
+    <field name="side" id="5" type="Side" presence="optional" description="Order side that expiry cancels; null for both sides. A disarm ignores this field"/>
+  </message>
+
   <message name="CommandAck" id="20" description="Confirms that a trading command was accepted; later order and execution events report lifecycle outcomes">
     <field name="seq" id="1" type="uint64" description="Client sequence number copied from the accepted command"/>
     <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the accepted command"/>
@@ -617,5 +632,16 @@
     <field name="symbolId" id="1" type="uint32" description="Stable numeric trading-pair identifier returned by GetSpotConfig"/>
     <field name="reason" id="2" type="MarketResyncReason" description="Why events of the pair may have been missed; the recovery is the same for every reason"/>
     <field name="gatewayTsNs" id="3" type="uint64" epoch="unix" timeUnit="nanosecond" description="Timestamp when this WebSocket message was encoded, in nanoseconds since the Unix epoch, UTC"/>
+  </message>
+
+  <message name="CancelAllAfterAck" id="30" description="Answers a CancelAllAfter with the account's cancel-all-after timer after the request applied">
+    <field name="seq" id="1" type="uint64" description="Client sequence number copied from the CancelAllAfter"/>
+    <field name="correlationId" id="2" type="uint64" description="Client correlation token copied from the CancelAllAfter"/>
+    <field name="status" id="3" type="CancelAllAfterStatus" description="Whether the timer is armed after the request"/>
+    <field name="timeoutSec" id="4" type="uint32" description="The armed timer's duration in seconds; zero when DISABLED"/>
+    <field name="expiresAtTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="When the armed timer expires unless refreshed, in nanoseconds since the Unix epoch, UTC: tsNs plus timeoutSec; zero when DISABLED"/>
+    <field name="symbolId" id="6" type="ZeroNullUint32" presence="optional" description="Trading pair whose open orders the armed timer cancels on expiry; zero for every pair, and when DISABLED"/>
+    <field name="side" id="7" type="Side" presence="optional" description="Order side the armed timer cancels on expiry; null for both sides, and when DISABLED"/>
+    <field name="tsNs" id="8" type="uint64" epoch="unix" timeUnit="nanosecond" description="When the request applied, in nanoseconds since the Unix epoch, UTC"/>
   </message>
 </messageSchema>
