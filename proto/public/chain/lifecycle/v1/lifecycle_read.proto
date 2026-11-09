@@ -112,8 +112,31 @@ enum ListOrderBy {
   ORDER_BY_STARTED_AT = 2;
 }
 
+// FlowParticipation says how an account takes part in a lifecycle flow.
+enum FlowParticipation {
+  // Participation was not specified. As a ListFlows filter it matches every
+  // flow the selected account owns or receives.
+  PARTICIPATION_UNSPECIFIED = 0;
+
+  // The account owns the flow: it made the deposit, withdrawal, or transfer.
+  // For a transfer this is the sending account, including a move between the
+  // account's own Funding and Trading balances.
+  PARTICIPATION_OWNER = 1;
+
+  // The account receives a transfer that another account owns, such as a
+  // transfer from another user, a transfer from another subaccount of the same
+  // main account, or a reward payout.
+  PARTICIPATION_RECIPIENT = 2;
+}
+
 // ListFlowsRequest filters and paginates lifecycle flow summaries.
 message ListFlowsRequest {
+  option (buf.validate.message).cel = {
+    id: "chain_lifecycle.list_flows_participation_selector"
+    message: "participation requires owner_account_id or smart_account_address"
+    expression: "this.participation == 0 || has(this.owner_account_id) || has(this.smart_account_address)"
+  };
+
   // Maximum number of flows to return. Defaults to 100 when omitted; maximum is
   // 500.
   uint32 limit = 1 [(buf.validate.field).uint32.lte = 500];
@@ -139,7 +162,9 @@ message ListFlowsRequest {
   ListScope scope = 6 [(buf.validate.field).enum.defined_only = true];
 
   // Optional account selector. Omit to list across accounts the caller is
-  // allowed to inspect.
+  // allowed to inspect. A selected account matches the flows it owns and the
+  // transfers it receives from other accounts; use `participation` to narrow
+  // to one of them.
   oneof account_selector {
     // Public account identifier for a main account or subaccount.
     fixed64 owner_account_id = 7 [(buf.validate.field).fixed64.gt = 0];
@@ -176,12 +201,21 @@ message ListFlowsRequest {
   }];
 
   // Opaque keyset cursor returned by a previous response. The cursor is
-  // exclusive and bound to the caller, filters, account selector, sort
-  // direction, and ordering timestamp.
+  // exclusive and bound to the request it was returned for: the account
+  // selector, participation, every filter including scope, sort direction,
+  // and ordering timestamp. Send it with that same request; only `limit` may
+  // change. A cursor sent with any other request is rejected as invalid.
   string page_token = 12 [(buf.validate.field).string.max_len = 512];
 
   // Timestamp used for ordering and pagination. Defaults to last activity.
   ListOrderBy order_by = 13 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional participation filter for the selected account. Unspecified
+  // returns the flows the account owns and the transfers it receives.
+  // `PARTICIPATION_OWNER` returns only the flows it owns, and
+  // `PARTICIPATION_RECIPIENT` only the transfers it receives from another
+  // account. Requires `owner_account_id` or `smart_account_address`.
+  FlowParticipation participation = 14 [(buf.validate.field).enum.defined_only = true];
 }
 
 // ListFlowsResponse returns one page of flow summaries.
@@ -429,6 +463,14 @@ message FlowSummaryView {
   // still completes normally once progress resumes. Always false for terminal
   // flows.
   bool is_delayed = 36;
+
+  // How the account selected by a ListFlows request takes part in this flow:
+  // `PARTICIPATION_OWNER` for a flow it owns, including a transfer it sent, or
+  // `PARTICIPATION_RECIPIENT` for a transfer it received from another account.
+  // Each flow appears once with one participation. Unspecified when the
+  // response is not scoped to an account, such as ListFlows without an account
+  // selector, flow detail, and realtime updates.
+  FlowParticipation participation = 37;
 }
 
 // FlowSummaryProgressView describes progress within the current visible step.

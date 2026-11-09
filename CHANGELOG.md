@@ -3,6 +3,16 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-08 — develop-20261108T161328Z
+
+Received transfers in account flow lists, a trading WebSocket cancel-all-after command, per-request receive windows and per-key replay capacity.
+
+- [2026-11-07T1512Z-chain-lifecycle-v1](changes/2026-11-07T1512Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`. **Breaking.**
+- [2026-11-07T2151Z-tradews-v1](changes/2026-11-07T2151Z-tradews-v1.md): added `orders.v1.OrdersService`.
+- [2026-11-07T2154Z-orders-v1](changes/2026-11-07T2154Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.AuthService`.
+- [2026-11-08T0007Z-triggers-v1](changes/2026-11-08T0007Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`.
+- [2026-11-08T0338Z-auth-v1](changes/2026-11-08T0338Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `chain.guard.v1.GuardSignerService`, `swap.v1.SwapService`, `transfer.v1.InternalTransferService`.
+
 ## 2026-11-07 — develop-20261107T200655Z
 
 Uniform request-size and rate-limit problems, editable changelog posts, QuickSwap small-amount outcomes and a wallet-already-linked sign-in error.
