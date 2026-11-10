@@ -705,6 +705,55 @@ message GetBrokerStatsResponse {
   repeated BrokerStatsPeriod periods = 1;
 }
 
+// ListVaultBalancesRequest selects a broker's default and affiliate vaults.
+message ListVaultBalancesRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public vault subaccount ID. Omit to include every vault, including disabled
+  // affiliates. A root account or another broker's vault is NOT_FOUND.
+  fixed64 vault_account_id = 2;
+  // Maximum vaults, default 20, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque exclusive keyset cursor, bound to the broker and vault filter.
+  // Reuse with the same broker and vault_account_id; limit may change.
+  string page_token = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// VaultAssetBalance is the current posted balance in one asset.
+message VaultAssetBalance {
+  // Unified asset ID, including assets no longer enabled for new swaps.
+  uint32 asset_id = 1;
+  // Settled balance of the vault's Funding and Trading accounts, at 18 decimals.
+  // Pending credits are excluded. This is not a withdrawability guarantee.
+  TokenAmount amount = 2;
+  // Funds committed to pending outgoing transfers, at 18 decimals. amount
+  // still counts these funds and has NOT been reduced by pending_outgoing.
+  // amount minus pending_outgoing is the balance not yet committed to an
+  // outgoing transfer. This excludes order holds and is not a withdrawability guarantee.
+  TokenAmount pending_outgoing = 3;
+}
+
+// VaultBalance is one vault's current balance observation.
+message VaultBalance {
+  // Public vault subaccount ID.
+  fixed64 vault_account_id = 1;
+  // Asset balances in ascending asset_id order. Empty for an unfunded vault.
+  repeated VaultAssetBalance assets = 2;
+  // UTC time this vault's balance read completed. Vaults are read separately;
+  // this does not describe an atomic snapshot across vaults or pages.
+  google.protobuf.Timestamp as_of = 3;
+}
+
+// ListVaultBalancesResponse lists vaults in ascending account creation-ID
+// order, independent of their encoded public IDs. A failed balance read fails
+// the entire page; it is never represented as a zero balance.
+message ListVaultBalancesResponse {
+  // Default and affiliate vault balances, at most limit vaults.
+  repeated VaultBalance vaults = 1;
+  // Opaque exclusive keyset cursor. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
 // QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.
 // Every request names its broker. The caller is either the broker's API key,
 // sent as a bearer token (see QuickSwapService), or a member's interactive
@@ -713,7 +762,7 @@ message GetBrokerStatsResponse {
 //
 // | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |
 // | --- | --- | --- | --- | --- | --- | --- |
-// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |
+// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances) | yes | yes | yes | yes | yes | yes, except ListMembers |
 // | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |
 // | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |
 // | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |
@@ -742,6 +791,20 @@ service QuickSwapBrokerService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker"
       description: "Get the broker, its limits and current usage, and the caller's role."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultBalances reads current balances for this broker's own vaults.
+  // All broker roles and the broker's API keys can read, without step-up.
+  // Errors: NOT_FOUND for an unknown broker or vault; UNAVAILABLE when a
+  // balance cannot be read. No partial page is returned on a read failure.
+  rpc ListVaultBalances(ListVaultBalancesRequest) returns (ListVaultBalancesResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault balances"
+      description: "Read current balances of a broker's default and affiliate vaults."
       tags: "QuickSwap Broker"
     };
   }

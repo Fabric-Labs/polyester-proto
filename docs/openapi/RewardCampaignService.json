@@ -10,6 +10,19 @@
         "format": "date-time",
         "type": "string"
       },
+      "rewards.v1.AcknowledgeMyRewardAwardResponse": {
+        "additionalProperties": false,
+        "description": "AcknowledgeMyRewardAwardResponse returns the award with its persisted seen state.",
+        "properties": {
+          "award": {
+            "$ref": "#/components/schemas/rewards.v1.RewardAward",
+            "description": "Current award. First acknowledgement timestamps are preserved on retries; fulfillment_revision is unchanged.",
+            "title": "award"
+          }
+        },
+        "title": "AcknowledgeMyRewardAwardResponse",
+        "type": "object"
+      },
       "rewards.v1.ListMyRewardAwardsResponse": {
         "additionalProperties": false,
         "description": "ListMyRewardAwardsResponse contains newest awards first.",
@@ -23,7 +36,7 @@
             "type": "array"
           },
           "awardsMayChange": {
-            "description": "True while a campaign can still publish new awards, or while one of this account's awards is awaiting a destination, ready for payout, or failed and may be retried. When false, repeated polling cannot return new awards or award changes until a new campaign is created; check again on the next page load or focus.",
+            "description": "True while a campaign can still publish new awards, or while one of this account's awards is awaiting a destination, ready for payout, or failed and may be retried. When false, repeated polling cannot return new awards or delivery changes until a new campaign is created; check again on the next page load or focus. Seen marks can still change when another session acknowledges an award.",
             "title": "awards_may_change",
             "type": "boolean"
           },
@@ -65,6 +78,11 @@
             "title": "campaign_name",
             "type": "string"
           },
+          "deliverySeenAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time the recipient first acknowledged seeing delivery of this paid award. Absent until explicitly acknowledged; independent of revealed_at.",
+            "title": "delivery_seen_at"
+          },
           "destinationAddress": {
             "description": "Recipient payout destination once submitted. Empty until provided.",
             "title": "destination_address",
@@ -98,6 +116,11 @@
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "Publication time.",
             "title": "published_at"
+          },
+          "revealedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time the recipient first acknowledged revealing this award. Absent until explicitly acknowledged; shared across sessions and devices.",
+            "title": "revealed_at"
           },
           "transactionId": {
             "description": "External transaction identifier once staff records delivery. Empty until delivered.",
@@ -167,7 +190,7 @@
   "paths": {
     "/v1/rewards/awards": {
       "get": {
-        "description": "List published campaign awards for the authenticated root account. Requires a session token.",
+        "description": "List published campaign awards for the authenticated root account, newest first. An API key needs READ_REWARDS and must be scoped to the main account.",
         "operationId": "RewardCampaignService_ListMyRewardAwards",
         "parameters": [
           {
@@ -206,12 +229,14 @@
                       "awardId": "value",
                       "campaignId": "value",
                       "campaignName": "value",
+                      "deliverySeenAt": "2025-01-01T00:00:00Z",
                       "destinationAddress": "0x3333333333333333333333333333333333333333",
                       "fulfillmentMethod": "EXTERNAL_TESTNET",
                       "fulfillmentRevision": "1",
                       "fulfillmentState": "AWAITING_DESTINATION",
                       "network": "value",
                       "publishedAt": "2025-01-01T00:00:00Z",
+                      "revealedAt": "2025-01-01T00:00:00Z",
                       "transactionId": "value"
                     }
                   ],
@@ -231,13 +256,126 @@
           "Rewards"
         ],
         "x-poly-authentication-methods": [
-          "session_token"
+          "session_token",
+          "api_key"
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "rewards.v1",
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "rewards.v1.ListMyRewardAwardsRequest",
         "x-poly-response-type": "rewards.v1.ListMyRewardAwardsResponse"
+      }
+    },
+    "/v1/rewards/awards/{award_id}/acknowledge": {
+      "post": {
+        "description": "Record revealing an award or seeing a paid award's delivery for the authenticated recipient. Requires a session token. Repeated acknowledgements preserve the first timestamps. Existing awards remain unseen until explicitly acknowledged.",
+        "operationId": "RewardCampaignService_AcknowledgeMyRewardAward",
+        "parameters": [
+          {
+            "description": "Award owned by the authenticated root account. Must be a UUID.",
+            "example": "7d32e3e0-5bcb-4a09-9184-cd4c8e95bc91",
+            "in": "path",
+            "name": "award_id",
+            "required": true,
+            "schema": {
+              "description": "Award owned by the authenticated root account. Must be a UUID.",
+              "format": "uuid",
+              "title": "award_id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "deliverySeen": true,
+                "revealed": true
+              },
+              "schema": {
+                "additionalProperties": false,
+                "description": "AcknowledgeMyRewardAwardRequest marks an owned award as seen without changing its delivery state.\nat least one acknowledgement must be selected",
+                "properties": {
+                  "deliverySeen": {
+                    "description": "Record that the recipient saw this award's delivery. Requires a paid award; otherwise the entire request fails with failed_precondition. False leaves the existing mark unchanged.",
+                    "title": "delivery_seen",
+                    "type": "boolean"
+                  },
+                  "revealed": {
+                    "description": "Record that the recipient revealed this award. False leaves the existing mark unchanged.",
+                    "title": "revealed",
+                    "type": "boolean"
+                  }
+                },
+                "title": "AcknowledgeMyRewardAwardRequest",
+                "type": "object"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "AcknowledgeMyRewardAwardRequest marks an owned award as seen without changing its delivery state.\nat least one acknowledgement must be selected",
+                "properties": {
+                  "deliverySeen": {
+                    "description": "Record that the recipient saw this award's delivery. Requires a paid award; otherwise the entire request fails with failed_precondition. False leaves the existing mark unchanged.",
+                    "title": "delivery_seen",
+                    "type": "boolean"
+                  },
+                  "revealed": {
+                    "description": "Record that the recipient revealed this award. False leaves the existing mark unchanged.",
+                    "title": "revealed",
+                    "type": "boolean"
+                  }
+                },
+                "title": "AcknowledgeMyRewardAwardRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "award": {
+                    "amountBaseUnits": "123.45",
+                    "assetId": 100,
+                    "awardId": "value",
+                    "campaignId": "value",
+                    "campaignName": "value",
+                    "deliverySeenAt": "2025-01-01T00:00:00Z",
+                    "destinationAddress": "0x3333333333333333333333333333333333333333",
+                    "fulfillmentMethod": "EXTERNAL_TESTNET",
+                    "fulfillmentRevision": "1",
+                    "fulfillmentState": "AWAITING_DESTINATION",
+                    "network": "value",
+                    "publishedAt": "2025-01-01T00:00:00Z",
+                    "revealedAt": "2025-01-01T00:00:00Z",
+                    "transactionId": "value"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/rewards.v1.AcknowledgeMyRewardAwardResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Acknowledge My Reward Award",
+        "tags": [
+          "Rewards"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "rewards.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "rewards.v1.AcknowledgeMyRewardAwardRequest",
+        "x-poly-response-type": "rewards.v1.AcknowledgeMyRewardAwardResponse"
       }
     },
     "/v1/rewards/awards/{award_id}/destination": {
@@ -349,12 +487,14 @@
                     "awardId": "value",
                     "campaignId": "value",
                     "campaignName": "value",
+                    "deliverySeenAt": "2025-01-01T00:00:00Z",
                     "destinationAddress": "0x3333333333333333333333333333333333333333",
                     "fulfillmentMethod": "EXTERNAL_TESTNET",
                     "fulfillmentRevision": "1",
                     "fulfillmentState": "AWAITING_DESTINATION",
                     "network": "value",
                     "publishedAt": "2025-01-01T00:00:00Z",
+                    "revealedAt": "2025-01-01T00:00:00Z",
                     "transactionId": "value"
                   }
                 },

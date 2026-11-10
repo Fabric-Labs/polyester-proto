@@ -3,6 +3,28 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-10 — develop-20261110T055512Z
+
+API keys read account data with granular permissions, internal transfer lookup with flow IDs, network memo requirements, broker vault balances, cross-device reward acknowledgements and path and body ID mismatch errors.
+
+- [2026-11-08T2129Z-orders-v1](changes/2026-11-08T2129Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-08T2135Z-transfer-v1](changes/2026-11-08T2135Z-transfer-v1.md): changed `transfer.v1.InternalTransferService`, `chain.withdraw.v1.WithdrawService`, `claims.v1.ClaimsService`, `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`, `auth.v1.PolicyService`.
+- [2026-11-08T2157Z-claims-v1](changes/2026-11-08T2157Z-claims-v1.md): changed `claims.v1.ClaimsService`.
+- [2026-11-08T2222Z-orders-v1](changes/2026-11-08T2222Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-08T2232Z-marketdata-v1](changes/2026-11-08T2232Z-marketdata-v1.md): changed `marketdata.v1.HeatmapService`.
+- [2026-11-08T2245Z-auth-v1](changes/2026-11-08T2245Z-auth-v1.md): changed `auth.v1.MFAService`, `auth.v1.SubaccountService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`. **Breaking.**
+- [2026-11-08T2305Z-auth-v1](changes/2026-11-08T2305Z-auth-v1.md): changed `auth.v1.PolicyService`.
+- [2026-11-09T0345Z-orders-v1](changes/2026-11-09T0345Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-09T0958Z-ledger-v1](changes/2026-11-09T0958Z-ledger-v1.md): changed `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-09T1438Z-rewards-v1](changes/2026-11-09T1438Z-rewards-v1.md): added `rewards.v1.RewardCampaignService`.
+- [2026-11-09T1448Z-auth-v1](changes/2026-11-09T1448Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `auth.v1.SubaccountRoleService`, `auth.v1.SocialVerificationService`, `vip.v1.VIPService`.
+- [2026-11-09T1454Z-transfer-v1](changes/2026-11-09T1454Z-transfer-v1.md): added `transfer.v1.InternalTransferService`.
+- [2026-11-09T1511Z-chain-zipper-v1](changes/2026-11-09T1511Z-chain-zipper-v1.md): added `chain.zipper.v1.ZipperService`, `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-09T1632Z-swap-quickswap-v1](changes/2026-11-09T1632Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-09T1817Z-auth-v1](changes/2026-11-09T1817Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.ResolveService`, `chain.withdraw.v1.WithdrawService`, `claims.v1.ClaimsService`, `checkpoints.v1.CheckpointService`, `rewards.v1.RewardCampaignService`. **Breaking.**
+- [2026-11-09T2102Z-rewards-v1](changes/2026-11-09T2102Z-rewards-v1.md): changed `rewards.v1.RewardCampaignService`. **Breaking.**
+- [2026-11-10T0200Z-swap-quickswap-v1](changes/2026-11-10T0200Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+
 ## 2026-11-08 — develop-20261108T161328Z
 
 Received transfers in account flow lists, a trading WebSocket cancel-all-after command, per-request receive windows and per-key replay capacity.
