@@ -9,7 +9,14 @@ import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/rewards/v1;rewardsv1";
-option (gnostic.openapi.v3.document) = { tags: [{ name: "Rewards" description: "Published campaign awards for authenticated root accounts." }] };
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Rewards"
+      description: "Published campaign awards for authenticated root accounts."
+    }
+  ]
+};
 
 // RewardFulfillmentMethod identifies how an award will be delivered.
 enum RewardFulfillmentMethod {
@@ -54,23 +61,57 @@ message RewardAward {
   string destination_address = 11;
   // External transaction identifier once staff records delivery. Empty until delivered.
   string transaction_id = 12;
+  // Time the recipient first acknowledged revealing this award. Absent until explicitly acknowledged; shared across sessions and devices.
+  google.protobuf.Timestamp revealed_at = 13;
+  // Time the recipient first acknowledged seeing delivery of this paid award. Absent until explicitly acknowledged; independent of revealed_at.
+  google.protobuf.Timestamp delivery_seen_at = 14;
 }
 
 // SetMyRewardDestinationRequest records the authenticated recipient's payout destination.
 message SetMyRewardDestinationRequest {
   // Award owned by the authenticated root account.
-  string award_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string award_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
   // Destination address interpreted according to the award campaign's network.
-  string destination_address = 2 [(buf.validate.field).string = {min_len: 1, max_len: 512}];
+  string destination_address = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 512
+  }];
   // Fulfillment revision observed by the recipient.
   uint64 expected_revision = 3 [(buf.validate.field).uint64.gt = 0];
   // Client-generated idempotency identifier. Maximum 128 characters.
-  string request_id = 4 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string request_id = 4 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
 }
 
 // SetMyRewardDestinationResponse returns the updated award.
 message SetMyRewardDestinationResponse {
   // Award with the persisted destination and updated fulfillment state.
+  RewardAward award = 1;
+}
+
+// AcknowledgeMyRewardAwardRequest marks an owned award as seen without changing its delivery state.
+message AcknowledgeMyRewardAwardRequest {
+  option (buf.validate.message).cel = {
+    id: "reward_acknowledgement.required"
+    message: "at least one acknowledgement must be selected"
+    expression: "this.revealed || this.delivery_seen"
+  };
+  // Award owned by the authenticated root account. Must be a UUID.
+  string award_id = 1 [(buf.validate.field).string.uuid = true];
+  // Record that the recipient revealed this award. False leaves the existing mark unchanged.
+  bool revealed = 2;
+  // Record that the recipient saw this award's delivery. Requires a paid award; otherwise the entire request fails with failed_precondition. False leaves the existing mark unchanged.
+  bool delivery_seen = 3;
+}
+
+// AcknowledgeMyRewardAwardResponse returns the award with its persisted seen state.
+message AcknowledgeMyRewardAwardResponse {
+  // Current award. First acknowledgement timestamps are preserved on retries; fulfillment_revision is unchanged.
   RewardAward award = 1;
 }
 
@@ -88,7 +129,7 @@ message ListMyRewardAwardsResponse {
   repeated RewardAward awards = 1;
   // Opaque continuation token. Empty when no more results exist.
   string next_page_token = 2;
-  // True while a campaign can still publish new awards, or while one of this account's awards is awaiting a destination, ready for payout, or failed and may be retried. When false, repeated polling cannot return new awards or award changes until a new campaign is created; check again on the next page load or focus.
+  // True while a campaign can still publish new awards, or while one of this account's awards is awaiting a destination, ready for payout, or failed and may be retried. When false, repeated polling cannot return new awards or delivery changes until a new campaign is created; check again on the next page load or focus. Seen marks can still change when another session acknowledges an award.
   bool awards_may_change = 3;
 }
 
@@ -97,12 +138,28 @@ service RewardCampaignService {
   option (polyester.api.docs_group) = "rewards";
 
   // List published awards for the authenticated root account, newest first.
+  // An API key needs READ_REWARDS and must be scoped to the main account.
   rpc ListMyRewardAwards(ListMyRewardAwardsRequest) returns (ListMyRewardAwardsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/rewards/awards"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List My Reward Awards"
-      description: "List published campaign awards for the authenticated root account. Requires a session token."
+      description: "List published campaign awards for the authenticated root account, newest first. An API key needs READ_REWARDS and must be scoped to the main account."
+      tags: "Rewards"
+    };
+  }
+
+  // Acknowledge revealing an award or seeing its delivery for the authenticated root account. At least one mark is required. Marks are independent, permanent and idempotent; timestamps are assigned at first acknowledgement. Awards owned by another account return not_found.
+  rpc AcknowledgeMyRewardAward(AcknowledgeMyRewardAwardRequest) returns (AcknowledgeMyRewardAwardResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {
+      post: "/v1/rewards/awards/{award_id}/acknowledge"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Acknowledge My Reward Award"
+      description: "Record revealing an award or seeing a paid award's delivery for the authenticated recipient. Requires a session token. Repeated acknowledgements preserve the first timestamps. Existing awards remain unseen until explicitly acknowledged."
       tags: "Rewards"
     };
   }

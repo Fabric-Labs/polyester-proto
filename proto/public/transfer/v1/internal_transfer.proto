@@ -173,12 +173,56 @@ message CreateInternalTransferResponse {
   ResolvedDestination destination = 8;
   // Public status for the transfer request.
   InternalTransferStatus status = 9;
+  // Authoritative lifecycle flow identifier. Use GetFlowById to read the flow;
+  // its ledger settlement step links back through milestone_tx_ref.
+  string flow_id = 10;
+}
+
+// GetInternalTransferRequest selects an accepted transfer from the source account.
+message GetInternalTransferRequest {
+  // Optional source public subaccount ID. Omitted means the authenticated root
+  // account. The caller must have access to the selected subaccount.
+  fixed64 subaccount_id = 1;
+  oneof identifier {
+    option (buf.validate.oneof).required = true;
+    // Exact server-owned request ID returned by CreateInternalTransfer.
+    string request_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+    // Exact transfer ID returned by CreateInternalTransfer or ListTransfers.
+    string transfer_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 39, pattern: "^[1-9][0-9]*$"}];
+  }
+}
+
+// GetInternalTransferResponse links an accepted transfer to its lifecycle flow.
+message GetInternalTransferResponse {
+  // Stable server-owned intake request identifier.
+  string request_id = 1;
+  // Stable transfer identifier shared by its debit and credit ledger entries.
+  string transfer_id = 2;
+  // Authoritative lifecycle identifier for GetFlowById. The flow's ledger
+  // settlement step links back through milestone_tx_ref.
+  string flow_id = 3;
+  // Acceptance timestamp in nanoseconds since epoch (UTC).
+  uint64 accepted_at_ts_ns = 4;
 }
 
 // InternalTransferService manages authenticated Trading to Trading internal
 // transfer intake.
 service InternalTransferService {
   option (polyester.api.docs_group) = "account";
+
+  // Read an accepted transfer by request ID or transfer ID, scoped to its source
+  // account. JWT session authentication only; API keys are not supported.
+  // Returns NotFound for unknown, pending, or inaccessible transfers. This read
+  // does not submit or retry a transfer and requires no fresh MFA.
+  rpc GetInternalTransfer(GetInternalTransferRequest) returns (GetInternalTransferResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {get: "/v1/trading/internal-transfers"};
+    option (gnostic.openapi.v3.operation) = {
+      tags: ["Internal Transfers"]
+      summary: "Get Internal Transfer"
+      description: "Read an accepted transfer by request ID or transfer ID for an authorized source account. JWT session authentication only."
+    };
+  }
 
   // Create or return one accepted Trading to Trading transfer.
   // Root-owner same-owner transfers and root-owner transfers to explicitly

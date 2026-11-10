@@ -13,8 +13,14 @@ import "polyester/api/options.proto";
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
 
 // PolicyAction is a high-level permission that can be granted by a policy.
-// Write-style actions also grant the matching read visibility where needed by
-// the product experience.
+// The product actions TRADE_SPOT through SWAP apply to sub-account and API-key
+// policies, and their write-style actions also grant the matching read
+// visibility where needed by the product experience. The account permissions
+// from READ_API_KEYS on apply to API-key policies only: a sub-account policy
+// refuses them. Each grants exactly the calls it names and never implies
+// another permission. A main-account permission is honored only for an API
+// key scoped to the main account; a key scoped to a sub-account is refused
+// even when its policy grants it.
 enum PolicyAction {
   // No policy action selected. An empty API-key action list grants no access;
   // sub-account policies retain their mandatory read-only actions.
@@ -55,6 +61,47 @@ enum PolicyAction {
   // spot orders on the account's behalf, which also remain subject to the
   // sub-account's spot trading policy.
   SWAP = 16;
+  // Allow listing and reading API keys. A key scoped to the main account sees
+  // the main account's keys and those of its sub-accounts; a key scoped to a
+  // sub-account sees only that sub-account's keys.
+  READ_API_KEYS = 17;
+  // Allow listing and reading API-key policies. A key scoped to the main
+  // account sees every API-key policy of the main account; a key scoped to a
+  // sub-account sees only the policies attached to that sub-account's keys.
+  READ_API_POLICIES = 18;
+  // Allow listing and reading sub-account policies. A key scoped to the main
+  // account sees every sub-account policy of the main account; a key scoped to
+  // a sub-account sees only the policy attached to that sub-account.
+  READ_SUBACCOUNT_POLICIES = 19;
+  // Allow reading what the key itself may do on a sub-account within its
+  // scope.
+  READ_SUBACCOUNT_PERMISSIONS = 20;
+  // Allow reading the main account's VIP status. Main-account permission.
+  READ_VIP_STATUS = 21;
+  // Allow reading the main account's social verification status: provider,
+  // handle, status, and verification time. Main-account permission.
+  READ_SOCIAL_VERIFICATION = 22;
+  // Allow reading the main account's profile and username history.
+  // Main-account permission.
+  READ_PROFILE = 23;
+  // Allow resolving an account by username, account ID, or smart-account
+  // address. Any key of the main account may use it, whatever its scope.
+  READ_ACCOUNT_DIRECTORY = 24;
+  // Allow validating an external withdraw destination within the key's scope
+  // without creating, signing, or reserving a withdraw. It does not allow
+  // withdrawing.
+  READ_WITHDRAW_VALIDATION = 25;
+  // Allow reading the main account's daily reward claim status.
+  // Main-account permission.
+  READ_DAILY_CLAIMS = 26;
+  // Allow claiming the main account's daily reward, paid to the main account
+  // or a sub-account it owns. Main-account permission.
+  CLAIM_DAILY_REWARD = 27;
+  // Allow reading the main account's checkpoints. Main-account permission.
+  READ_CHECKPOINTS = 28;
+  // Allow reading the main account's published reward awards. Main-account
+  // permission.
+  READ_REWARDS = 29;
 }
 
 // MarketScope describes how a policy applies to spot markets.
@@ -221,7 +268,8 @@ message SubaccountPolicySpec {
 
   // High-level actions enabled for the sub-account policy. Mandatory read-only
   // actions are included when omitted. Up to 64 unique explicit actions are
-  // allowed.
+  // allowed. Account permissions such as READ_API_KEYS apply to API-key
+  // policies only and are refused here.
   repeated PolicyAction actions = 7 [
     (buf.validate.field).repeated = {
       unique: true
@@ -536,24 +584,30 @@ message SetApiKeyPolicyResponse {}
 service PolicyService {
   option (polyester.api.docs_group) = "account";
 
-  // List sub-account policy templates available to the caller.
+  // List sub-account policy templates available to the caller. An API key
+  // needs READ_SUBACCOUNT_POLICIES; a key scoped to a sub-account sees only the
+  // policy attached to that sub-account.
   rpc ListSubaccountPolicies(ListSubaccountPoliciesRequest) returns (ListSubaccountPoliciesResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/policies/subaccounts"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Subaccount Policies"
-      description: "List sub-account policy templates available to the caller."
+      description: "List sub-account policy templates available to the caller. An API key needs READ_SUBACCOUNT_POLICIES; a key scoped to a sub-account sees only the policy attached to that sub-account."
       tags: "Auth Service"
     };
   }
 
-  // Get a sub-account policy template by id.
+  // Get a sub-account policy template by id. An API key needs
+  // READ_SUBACCOUNT_POLICIES; a key scoped to a sub-account reads only the
+  // policy attached to that sub-account.
   rpc GetSubaccountPolicy(GetSubaccountPolicyRequest) returns (GetSubaccountPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/policies/subaccounts/{policy_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Subaccount Policy"
-      description: "Retrieve a single sub-account policy template by policy ID."
+      description: "Retrieve a single sub-account policy template by policy ID. An API key needs READ_SUBACCOUNT_POLICIES; a key scoped to a sub-account reads only the policy attached to that sub-account."
       tags: "Auth Service"
     };
   }
@@ -617,24 +671,30 @@ service PolicyService {
 
   // --- API key policies ---
 
-  // List API key policy templates available to the caller.
+  // List API key policy templates available to the caller. An API key needs
+  // READ_API_POLICIES; a key scoped to a sub-account sees only the policies
+  // attached to that sub-account's keys.
   rpc ListApiPolicies(ListApiPoliciesRequest) returns (ListApiPoliciesResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/policies/api-keys"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List API Key Policies"
-      description: "List API key policy templates available to the caller."
+      description: "List API key policy templates available to the caller. An API key needs READ_API_POLICIES; a key scoped to a sub-account sees only the policies attached to that sub-account's keys."
       tags: "Auth Service"
     };
   }
 
-  // Get an API key policy template by id.
+  // Get an API key policy template by id. An API key needs
+  // READ_API_POLICIES; a key scoped to a sub-account reads only the policies
+  // attached to that sub-account's keys.
   rpc GetApiPolicy(GetApiPolicyRequest) returns (GetApiPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/policies/api-keys/{policy_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get API Key Policy"
-      description: "Retrieve a single API key policy template by policy ID."
+      description: "Retrieve a single API key policy template by policy ID. An API key needs READ_API_POLICIES; a key scoped to a sub-account reads only the policies attached to that sub-account's keys."
       tags: "Auth Service"
     };
   }

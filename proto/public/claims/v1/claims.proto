@@ -54,6 +54,10 @@ enum ErrorCode {
   ERROR_CODE_SUBACCOUNT_INACTIVE = 14;
   // Reward payouts for this campaign are paused. Today's claim is kept and paid automatically once payouts resume.
   ERROR_CODE_CLAIM_PAYOUT_UNAVAILABLE = 15;
+  // Today's claim is recorded and its reward payout was submitted, but its result could not be
+  // confirmed. The claim is never paid twice: read the claim status, or retry the claim to get its
+  // current state. The error detail names the claim.
+  ERROR_CODE_CLAIM_OUTCOME_UNKNOWN = 16;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.
@@ -64,6 +68,8 @@ enum ErrorCode {
 message ErrorDetail {
   // Stable error code matching the REST problem+json code field.
   ErrorCode code = 1;
+  // Identifier of the claim the error concerns. Set only with CLAIM_OUTCOME_UNKNOWN; empty otherwise.
+  string claim_id = 2;
 }
 
 // ClaimPolicy controls how often a recipient may claim from a campaign.
@@ -178,30 +184,35 @@ message ClaimDailyRewardResponse {
   fixed64 subaccount_id = 8;
 }
 
-// ClaimsService provides daily campaign rewards. A session JWT is required; API keys are not accepted.
+// ClaimsService provides daily campaign rewards. It accepts a session token, or an API key
+// scoped to the main account whose policy grants the call's account permission.
 service ClaimsService {
   option (polyester.api.docs_group) = "testnet";
 
   // Get today's reward and claim status for the authenticated root account. Future reward schedules are not returned.
+  // An API key needs READ_DAILY_CLAIMS and must be scoped to the main account.
   rpc GetDailyClaimStatus(GetDailyClaimStatusRequest) returns (GetDailyClaimStatusResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/trading/daily-claim"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Daily Claim Status"
-      description: "Get today's reward and claim status for the authenticated root account. Requires a session JWT; API keys are not accepted. Future reward schedules are not returned."
+      description: "Get today's reward and claim status for the authenticated root account. Future reward schedules are not returned. An API key needs READ_DAILY_CLAIMS and must be scoped to the main account."
       tags: "Daily Claim"
     };
   }
   // Claim today's reward once for the authenticated root account, paid to the root account or to a subaccount it owns. All reward assets are transferred together, and retries return the same claim.
+  // An API key needs CLAIM_DAILY_REWARD and must be scoped to the main account.
   rpc ClaimDailyReward(ClaimDailyRewardRequest) returns (ClaimDailyRewardResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {
       post: "/v1/trading/daily-claim/claim"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Claim Daily Reward"
-      description: "Claim today's reward once for the authenticated root account, paid to the root account or to a subaccount it owns. Requires a session JWT; API keys are not accepted. All reward assets are transferred together, and retries return the same claim and destination."
+      description: "Claim today's reward once for the authenticated root account, paid to the root account or to a subaccount it owns. All reward assets are transferred together, and retries return the same claim and destination. An API key needs CLAIM_DAILY_REWARD and must be scoped to the main account."
       tags: "Daily Claim"
     };
   }
