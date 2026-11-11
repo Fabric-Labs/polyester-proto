@@ -13,14 +13,15 @@ import "polyester/api/options.proto";
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
 
 // PolicyAction is a high-level permission that can be granted by a policy.
-// The product actions TRADE_SPOT through SWAP apply to sub-account and API-key
-// policies, and their write-style actions also grant the matching read
-// visibility where needed by the product experience. The account permissions
-// from READ_API_KEYS on apply to API-key policies only: a sub-account policy
-// refuses them. Each grants exactly the calls it names and never implies
-// another permission. A main-account permission is honored only for an API
-// key scoped to the main account; a key scoped to a sub-account is refused
-// even when its policy grants it.
+// Product actions apply to sub-account and API-key policies, and their
+// write-style actions also grant the matching read visibility where needed by
+// the product experience. Account permissions, each documented below as an
+// account permission or a main-account permission, apply to API-key policies
+// only: a sub-account policy refuses them. Each account permission grants
+// exactly the calls it names and never implies another permission. A
+// main-account permission is honored only for an API key scoped to the main
+// account; a key scoped to a sub-account is refused even when its policy
+// grants it. An API key without a policy has no permission at all.
 enum PolicyAction {
   // No policy action selected. An empty API-key action list grants no access;
   // sub-account policies retain their mandatory read-only actions.
@@ -32,10 +33,12 @@ enum PolicyAction {
   // this does not grant mutation access to a read-only API key.
   TRADE_SPOT = 1;
   // Allow internal transfers between sub-accounts or linked Polyester accounts,
-  // including reading internal transfer history.
+  // including reading internal transfer history. Moves value out of the
+  // account, so an assistant API key can never be allowed it.
   INTERNAL_TRANSFER = 3;
   // Allow value to leave Trading through external withdrawals. Destination
-  // authorization is enforced separately from this policy.
+  // authorization is enforced separately from this policy. Moves value out of
+  // the account, so an assistant API key can never be allowed it.
   EXTERNAL_WITHDRAW = 4;
   // Allow reading balances and equity for a sub-account or API key.
   READ_BALANCES = 5;
@@ -49,12 +52,15 @@ enum PolicyAction {
   // Allow creating, updating, deleting, and copying saved destination entries,
   // including reading the address book. Address-book writes accept only a
   // session token, so on an API-key policy this grants address-book reads only.
+  // It manages where value can leave the account, so an assistant API key can
+  // never be allowed it.
   MANAGE_ADDRESS_BOOK = 12;
   // Allow reading the auto-withdraw rule and its runs.
   READ_AUTO_WITHDRAW = 14;
   // Allow creating, changing, and disabling the auto-withdraw rule, including
   // reading it. A rule pays value out, so changing one also requires
-  // EXTERNAL_WITHDRAW, and API keys can never change one.
+  // EXTERNAL_WITHDRAW, API keys can never change one, and an assistant API key
+  // can never be allowed it.
   MANAGE_AUTO_WITHDRAW = 15;
   // Allow quoting, creating, and reading Swaps: market conversions of the
   // account's own Trading balance from one asset into another. Each Swap places
@@ -63,18 +69,20 @@ enum PolicyAction {
   SWAP = 16;
   // Allow listing and reading API keys. A key scoped to the main account sees
   // the main account's keys and those of its sub-accounts; a key scoped to a
-  // sub-account sees only that sub-account's keys.
+  // sub-account sees only that sub-account's keys. Account permission.
   READ_API_KEYS = 17;
   // Allow listing and reading API-key policies. A key scoped to the main
   // account sees every API-key policy of the main account; a key scoped to a
   // sub-account sees only the policies attached to that sub-account's keys.
+  // Account permission.
   READ_API_POLICIES = 18;
   // Allow listing and reading sub-account policies. A key scoped to the main
   // account sees every sub-account policy of the main account; a key scoped to
-  // a sub-account sees only the policy attached to that sub-account.
+  // a sub-account sees only the policy attached to that sub-account. Account
+  // permission.
   READ_SUBACCOUNT_POLICIES = 19;
   // Allow reading what the key itself may do on a sub-account within its
-  // scope.
+  // scope. Account permission.
   READ_SUBACCOUNT_PERMISSIONS = 20;
   // Allow reading the main account's VIP status. Main-account permission.
   READ_VIP_STATUS = 21;
@@ -86,10 +94,11 @@ enum PolicyAction {
   READ_PROFILE = 23;
   // Allow resolving an account by username, account ID, or smart-account
   // address. Any key of the main account may use it, whatever its scope.
+  // Account permission.
   READ_ACCOUNT_DIRECTORY = 24;
   // Allow validating an external withdraw destination within the key's scope
   // without creating, signing, or reserving a withdraw. It does not allow
-  // withdrawing.
+  // withdrawing. Account permission.
   READ_WITHDRAW_VALIDATION = 25;
   // Allow reading the main account's daily reward claim status.
   // Main-account permission.
@@ -102,6 +111,27 @@ enum PolicyAction {
   // Allow reading the main account's published reward awards. Main-account
   // permission.
   READ_REWARDS = 29;
+  // Allow creating a deposit address within the key's scope. Account
+  // permission.
+  CREATE_DEPOSIT_ADDRESS = 10;
+  // Allow listing the deposit addresses within the key's scope. Account
+  // permission.
+  READ_DEPOSIT_ADDRESSES = 30;
+  // Allow listing and reading the subaccounts within the key's scope. Account
+  // permission.
+  READ_SUBACCOUNTS = 31;
+  // Allow reading the activity of the subaccounts within the key's scope.
+  // Account permission.
+  READ_SUBACCOUNT_ACTIVITY = 32;
+  // Allow listing the members of the subaccounts within the key's scope.
+  // Account permission.
+  READ_SUBACCOUNT_MEMBERS = 33;
+  // Allow listing the outgoing invites of the subaccounts within the key's
+  // scope. Account permission.
+  READ_SUBACCOUNT_INVITES = 34;
+  // Allow reading the Guard Signer status within the key's scope; a key never
+  // reads another main account's Guard Signer. Account permission.
+  READ_GUARD_SIGNER_STATUS = 35;
 }
 
 // MarketScope describes how a policy applies to spot markets.
@@ -510,7 +540,9 @@ message CreateApiPolicyRequest {
   ];
   // Optional API key identifier to bind this newly-created policy to
   // atomically. When set, the caller must be allowed to manage the key and the
-  // create+assign operation consumes a single fresh step-up proof.
+  // create+assign operation consumes a single fresh step-up proof. An
+  // assistant API key cannot be assigned a policy that allows a money-out
+  // action: FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
   string assign_to_key_id = 2 [(buf.validate.field).string.pattern = "^$|^ak_[a-f0-9]{32}$"];
 }
 
@@ -714,7 +746,9 @@ service PolicyService {
     };
   }
 
-  // Change selected fields on an existing API key policy template.
+  // Change selected fields on an existing API key policy template. Adding a
+  // money-out action to a policy attached to an assistant API key returns
+  // FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
   rpc UpdateApiPolicy(UpdateApiPolicyRequest) returns (UpdateApiPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
@@ -741,7 +775,9 @@ service PolicyService {
     };
   }
 
-  // Attach or clear an API key policy for a key.
+  // Attach or clear an API key policy for a key. Attaching a policy that allows
+  // a money-out action to an assistant API key returns FailedPrecondition with
+  // AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
   rpc SetApiKeyPolicy(SetApiKeyPolicyRequest) returns (SetApiKeyPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;

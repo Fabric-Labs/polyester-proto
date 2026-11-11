@@ -86,7 +86,7 @@
             "name": "min_amount_e18",
             "jsonName": "minAmountE18",
             "number": 4,
-            "doc": "A run pays this asset only when the payable amount reaches this\n minimum, in 18-decimal asset units, and the rule's min_usd_value_e18;\n otherwise the balance stays on the account for a later run. Must be at\n least the route's withdrawal minimum.",
+            "doc": "A run pays this asset only when the payable amount reaches this\n minimum, in 18-decimal asset units, and the rule's min_usd_value_e18;\n otherwise the balance stays on the account for a later run. Must be at\n least min_floor_e18 when the rule is set.",
             "protoRef": "polyester.type.v1.U128",
             "validate": {
               "required": true
@@ -101,6 +101,13 @@
             "validate": {
               "required": true
             }
+          },
+          {
+            "name": "min_floor_e18",
+            "jsonName": "minFloorE18",
+            "number": 6,
+            "doc": "Returned in responses only; ignored in requests. The least amount one\n payout to this destination can pay now, in 18-decimal asset units: the\n route's withdrawal minimum, and more than its current network fee. It\n follows the network fee, so it can change between reads. A run pays at\n least this floor and min_amount_e18, and a new rule needs a\n min_amount_e18 of at least the floor. Unset when the route or its network\n fee is not known now; a new rule for that destination is then refused\n with FEE_UNAVAILABLE or a route code.",
+            "protoRef": "polyester.type.v1.U128"
           }
         ]
       }
@@ -115,7 +122,7 @@
             "name": "asset_id",
             "jsonName": "assetId",
             "number": 1,
-            "doc": "Asset whose payout paused the rule.",
+            "doc": "Asset whose payout paused the rule; zero when no payout did.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -124,7 +131,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 2,
-            "doc": "Machine-readable reason: destination_not_whitelisted when the\n destination left the account's external withdraw whitelist,\n destination_invalid when it is no longer a valid destination, or\n authority_revoked when the person who set the rule may no longer change\n it or withdraw from the account.",
+            "doc": "Machine-readable reason: destination_not_whitelisted when the\n destination left the account's external withdraw whitelist,\n destination_invalid when it is no longer a valid destination, or\n authority_revoked when the person who set the rule may no longer change\n it or withdraw from the account. On a broker vault the rule pauses with\n authority_revoked as soon as its author's broker role changes in any\n way: removed, demoted, or promoted (for example Finance to Owner), and\n also when the author is removed and added back. An Owner or Finance\n member resumes it with a fresh step-up.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -141,9 +148,155 @@
       }
     },
     {
+      "name": "chain.withdraw.v1.AutoWithdrawPreviewAsset",
+      "kind": "message",
+      "doc": "AutoWithdrawPreviewAsset is what the next run would do with one asset,\n sized from the account's balance now.",
+      "message": {
+        "fields": [
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 1,
+            "doc": "Ledger asset.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 2,
+            "doc": "External destination chain identifier; zero when the rule has no\n destination for the asset.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 3,
+            "doc": "Canonical destination address; empty when the rule has no destination\n for the asset.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "available_e18",
+            "jsonName": "availableE18",
+            "number": 4,
+            "doc": "The account's available balance of the asset now, in 18-decimal asset\n units.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "payable_e18",
+            "jsonName": "payableE18",
+            "number": 5,
+            "doc": "What the run would pay, in 18-decimal asset units: the available balance\n up to max_amount_e18, rounded down to whole on-chain units, or zero when\n it holds. The network fee is taken out of it on the way.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "held_back_e18",
+            "jsonName": "heldBackE18",
+            "number": 6,
+            "doc": "What would stay on the account, in 18-decimal asset units:\n available_e18 minus payable_e18.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "hold_reason",
+            "jsonName": "holdReason",
+            "number": 7,
+            "doc": "Why held_back_e18 stays, or why nothing pays: below_minimum (below\n minimum_e18 or the rule's min_usd_value_e18), price_unavailable (the\n rule has a USD minimum and no current price values the asset),\n no_destination (the rule pays no destination for the asset),\n destination_cooling_down (a broker vault pays a destination only once\n it has been on the vault's external withdraw whitelist for 24 hours;\n see payable_from), above_max (the balance above max_amount_e18 stays)\n or dust (less than one whole on-chain unit stays); empty when the whole\n balance pays.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "minimum_e18",
+            "jsonName": "minimumE18",
+            "number": 8,
+            "doc": "The least one payout of the asset pays, in 18-decimal asset units: the\n destination's min_amount_e18, or its min_floor_e18 when that is higher\n and known now. Unset when the rule has no destination for the asset.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "value_usd_e18",
+            "jsonName": "valueUsdE18",
+            "number": 9,
+            "doc": "USD value, in 18-decimal USD units, of what the asset pays before its\n minimums (the available balance up to max_amount_e18, rounded down to\n whole on-chain units), at the current price as of priced_at. A rule with\n a USD minimum compares this value with it. Unset when no current price\n values the asset or the rule has no destination for it.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "priced_at",
+            "jsonName": "pricedAt",
+            "number": 10,
+            "doc": "When the price behind value_usd_e18 was observed; unset with it.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "network_fee_e18",
+            "jsonName": "networkFeeE18",
+            "number": 11,
+            "doc": "The network fee a payout to the destination is expected to be charged\n now, in 18-decimal asset units: the route's latest sampled network fee,\n the same figure min_floor_e18 stays above. It is taken out of the\n payout, so the destination receives about payable_e18 minus this fee.\n Unset when the rule has no destination for the asset or the fee is not\n known now.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "network_fee_sampled_at",
+            "jsonName": "networkFeeSampledAt",
+            "number": 12,
+            "doc": "When network_fee_e18 was sampled; unset with it.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "payable_from",
+            "jsonName": "payableFrom",
+            "number": 13,
+            "doc": "Set only on a broker vault while the destination is cooling down: when\n it can be paid, 24 hours after it was added to the vault's external\n withdraw whitelist. Unset with hold_reason destination_cooling_down\n when that time is not known yet.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.AutoWithdrawPreviewStatus",
+      "kind": "enum",
+      "doc": "AutoWithdrawPreviewStatus is whether the next run would pay, judged from\n the account's balances now.",
+      "enum": {
+        "values": [
+          {
+            "name": "WILL_PAY",
+            "number": 1,
+            "doc": "At least one asset would pay."
+          },
+          {
+            "name": "ROLLS_OVER",
+            "number": 2,
+            "doc": "Nothing would pay: every asset with a destination is below its minimum\n or the rule's USD minimum, has no current price for that minimum, or\n pays a broker vault's destination that is still cooling down. The\n balance stays on the account for a later run."
+          },
+          {
+            "name": "NO_DESTINATION",
+            "number": 3,
+            "doc": "Nothing would pay, and every positive balance is in an asset the rule\n has no destination for."
+          },
+          {
+            "name": "PAUSED",
+            "number": 4,
+            "doc": "The rule is paused, by a person or by itself (see pause); no run starts\n until it is resumed."
+          },
+          {
+            "name": "NO_RULE",
+            "number": 5,
+            "doc": "The account has no rule."
+          }
+        ]
+      }
+    },
+    {
       "name": "chain.withdraw.v1.AutoWithdrawRule",
       "kind": "message",
-      "doc": "AutoWithdrawRule is one version of an account's auto-withdraw rule. Each\n change or disable creates the next version; only the latest version runs,\n and a run in progress keeps the version it started with but pays nothing\n further once that version is no longer the latest.",
+      "doc": "AutoWithdrawRule is one version of an account's auto-withdraw rule. Each\n change, pause or resume creates the next version; only the latest version\n runs, and a run in progress keeps the version it started with but pays\n nothing further once that version is no longer the latest.",
       "message": {
         "fields": [
           {
@@ -168,7 +321,7 @@
             "name": "enabled",
             "jsonName": "enabled",
             "number": 3,
-            "doc": "Whether the rule runs. A disabled version has no destinations.",
+            "doc": "Whether the rule runs. A paused version (enabled false) keeps its\n schedule and destinations, so it resumes to the same destinations. The\n rule runs only while enabled and without a pause.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -183,7 +336,7 @@
             "name": "destinations",
             "jsonName": "destinations",
             "number": 5,
-            "doc": "One destination per paid asset, ordered by asset_id.",
+            "doc": "One destination per paid asset, ordered by asset_id. Empty only on a\n version that was disabled before pausing kept destinations.",
             "repeated": true,
             "protoRef": "chain.withdraw.v1.AutoWithdrawDestination"
           },
@@ -200,7 +353,7 @@
             "name": "pause",
             "jsonName": "pause",
             "number": 7,
-            "doc": "Set when the rule paused itself; a new version resumes it.",
+            "doc": "Set when the rule paused itself; resuming it or setting a new rule\n clears it.",
             "protoRef": "chain.withdraw.v1.AutoWithdrawPause"
           },
           {
@@ -209,6 +362,15 @@
             "number": 8,
             "doc": "Least USD value one payout of the rule pays, in 18-decimal USD units;\n zero means no USD minimum.",
             "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "created_by_account_id",
+            "jsonName": "createdByAccountId",
+            "number": 9,
+            "doc": "Public account ID of the person who created this version.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -314,12 +476,12 @@
           {
             "name": "RUN_PARTIALLY_FAILED",
             "number": 4,
-            "doc": "Some payouts failed; their funds are back on the account."
+            "doc": "Some payouts failed. Each failed step says where its funds are\n (STEP_FAILED)."
           },
           {
             "name": "RUN_FAILED",
             "number": 5,
-            "doc": "Every attempted payout failed; the funds are back on the account."
+            "doc": "Every attempted payout failed. Each failed step says where its funds are\n (STEP_FAILED)."
           },
           {
             "name": "RUN_SKIPPED",
@@ -478,7 +640,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 7,
-            "doc": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
+            "doc": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, destination_cooling_down\n (a broker vault's destination added to its external withdraw whitelist\n less than 24 hours ago; the funds stay for a later run),\n authority_revoked, gateway_capacity_insufficient (the funds stay for a\n later run), withdrawal_released or withdrawal_failed; empty otherwise.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -503,6 +665,13 @@
             "jsonName": "valueUsdE18",
             "number": 10,
             "doc": "USD value of the payable amount when the run started, in 18-decimal USD\n units, checked against the rule's min_usd_value_e18. Unset when the rule\n has no USD minimum or no current price was available.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "network_fee_e18",
+            "jsonName": "networkFeeE18",
+            "number": 11,
+            "doc": "The network fee charged on the withdrawal, in 18-decimal asset units.\n Once it completed: taken out of amount_e18, so the destination received\n amount_e18 minus this fee. Once Zipper rejected it or its execution\n failed: the fee Zipper kept, which is not refunded. Unset until the step\n is final, when it was skipped or failed before it reached Zipper, and\n when the fee was not reported.",
             "protoRef": "polyester.type.v1.U128"
           }
         ]
@@ -537,7 +706,7 @@
           {
             "name": "STEP_FAILED",
             "number": 5,
-            "doc": "The withdrawal failed; its funds are back on the account."
+            "doc": "The withdrawal failed. Where its funds are depends on when it failed,\n which its withdrawal flow shows:\n - before it left the account: they stay on the account;\n - rejected by Zipper (flow REFUNDED, reason ZIPPER_VALIDATION_REJECTED or\n   ZIPPER_EXECUTION_REJECTED): amount_e18 less network_fee_e18 is\n   refunded, as zTokens, to the account's smart account wallet, not to\n   the account's balance, and the network fee is not refunded;\n - its execution failed after its destination transaction was sent (flow\n   FAILED, reason ZIPPER_WITHDRAW_EXECUTION_FAILED): Zipper reviews it and\n   settles it outside Polyester Chain; nothing is returned to the account."
           },
           {
             "name": "STEP_SKIPPED",
@@ -709,54 +878,6 @@
             "doc": "Stable server-owned intent identifier for the accepted withdraw lifecycle.\n Clients use this id to follow later progress for the same withdraw flow.",
             "protoScalar": "string",
             "jsonType": "string"
-          }
-        ]
-      }
-    },
-    {
-      "name": "chain.withdraw.v1.DisableAutoWithdrawRuleRequest",
-      "kind": "message",
-      "doc": "DisableAutoWithdrawRuleRequest stops the rule of the root account or one\n subaccount.",
-      "message": {
-        "fields": [
-          {
-            "name": "subaccount_id",
-            "jsonName": "subaccountId",
-            "number": 1,
-            "doc": "Public subaccount ID; omit for the root account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64"
-          },
-          {
-            "name": "expected_version",
-            "jsonName": "expectedVersion",
-            "number": 2,
-            "doc": "The account's latest rule version.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "chain.withdraw.v1.DisableAutoWithdrawRuleResponse",
-      "kind": "message",
-      "doc": "DisableAutoWithdrawRuleResponse returns the disabled version.",
-      "message": {
-        "fields": [
-          {
-            "name": "rule",
-            "jsonName": "rule",
-            "number": 1,
-            "doc": "The created, disabled version.",
-            "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
           }
         ]
       }
@@ -986,6 +1107,31 @@
             "name": "ERROR_CODE_AMOUNT_EXCEEDS_ROUTE_PRECISION",
             "number": 44,
             "doc": "The withdraw amount has more decimal places than the destination\n network's token supports (AssetChainVariant.source_decimals). Round\n amount_e18 down to a whole number of that token's smallest units before\n signing."
+          },
+          {
+            "name": "ERROR_CODE_DESTINATION_INVALID",
+            "number": 45,
+            "doc": "An auto-withdraw destination address is not a valid withdrawal\n destination on its chain. ErrorDetail.field_path names the destination."
+          },
+          {
+            "name": "ERROR_CODE_MIN_AMOUNT_BELOW_FLOOR",
+            "number": 46,
+            "doc": "An auto-withdraw destination's min_amount_e18 is below the least amount\n a payout to it can pay. ErrorDetail.min_floor_e18 is that floor and\n ErrorDetail.field_path names the field."
+          },
+          {
+            "name": "ERROR_CODE_ROUTE_UNSUPPORTED",
+            "number": 47,
+            "doc": "No enabled withdrawal route pays an auto-withdraw destination's asset to\n its destination chain. ErrorDetail.field_path names the field."
+          },
+          {
+            "name": "ERROR_CODE_VERSION_CONFLICT",
+            "number": 48,
+            "doc": "expected_version is not the auto-withdraw rule's latest version: another\n change landed first. Read the rule again before retrying."
+          },
+          {
+            "name": "ERROR_CODE_EXTERNAL_DESTINATION_COOLING_DOWN",
+            "number": 49,
+            "doc": "A broker vault pays an external destination only once it has been on the\n vault's external withdraw whitelist for 24 hours, and this one was added\n more recently. ErrorDetail.payable_from is when it can be paid; unset\n when that time is not known yet. Retry after it."
           }
         ]
       }
@@ -1002,6 +1148,30 @@
             "number": 1,
             "doc": "Stable error code matching the REST problem+json code field.",
             "protoRef": "chain.withdraw.v1.ErrorCode"
+          },
+          {
+            "name": "field_path",
+            "jsonName": "fieldPath",
+            "number": 2,
+            "doc": "Field the error is about, as a protobuf field path such as\n destinations[0].min_amount_e18; empty when the error concerns no single\n field. Usually a field of the request. A refused auto-withdraw resume\n names a field of the stored rule instead, such as\n destinations[1].destination_address of AutoWithdrawRule, which the\n request does not carry.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "min_floor_e18",
+            "jsonName": "minFloorE18",
+            "number": 3,
+            "doc": "Set only with MIN_AMOUNT_BELOW_FLOOR: the least amount, in 18-decimal\n asset units, the destination's min_amount_e18 may be.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "payable_from",
+            "jsonName": "payableFrom",
+            "number": 4,
+            "doc": "Set only with EXTERNAL_DESTINATION_COOLING_DOWN, when known: the time\n from which the destination can be paid.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
           }
         ]
       }
@@ -1036,6 +1206,49 @@
             "number": 1,
             "doc": "The latest version; unset when the account never had a rule.",
             "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.GetWalletBalancesRequest",
+      "kind": "message",
+      "doc": "GetWalletBalancesRequest selects the account whose smart account wallet\n to read.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.GetWalletBalancesResponse",
+      "kind": "message",
+      "doc": "GetWalletBalancesResponse is the smart account wallet's zToken balances,\n read from Polyester Chain at its latest block.",
+      "message": {
+        "fields": [
+          {
+            "name": "smart_account_address",
+            "jsonName": "smartAccountAddress",
+            "number": 1,
+            "doc": "Smart account wallet whose balances these are.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "balances",
+            "jsonName": "balances",
+            "number": 2,
+            "doc": "Every zToken the wallet holds a nonzero balance of, ordered by\n zipped_asset_id. Empty when it holds none.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.WalletBalance"
           }
         ]
       }
@@ -1106,6 +1319,145 @@
             "doc": "Cursor for the next page. Empty when no more results exist.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.PreviewAutoWithdrawRunRequest",
+      "kind": "message",
+      "doc": "PreviewAutoWithdrawRunRequest previews the next run of the rule of the\n root account or one subaccount.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.PreviewAutoWithdrawRunResponse",
+      "kind": "message",
+      "doc": "PreviewAutoWithdrawRunResponse previews the next run.",
+      "message": {
+        "fields": [
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 1,
+            "doc": "Whether the next run would pay.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawPreviewStatus"
+          },
+          {
+            "name": "next_run_at",
+            "jsonName": "nextRunAt",
+            "number": 2,
+            "doc": "When the next run starts: its UTC slot, or, while a due slot waits for\n the scheduler, that slot. For an hourly rule, the next hourly check.\n Unset when the account has no rule or the rule is paused.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "rule_version",
+            "jsonName": "ruleVersion",
+            "number": 3,
+            "doc": "The latest rule version; zero when the account has no rule.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "pause",
+            "jsonName": "pause",
+            "number": 4,
+            "doc": "Set when the rule paused itself; a rule paused by a person has none.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawPause"
+          },
+          {
+            "name": "min_usd_value_e18",
+            "jsonName": "minUsdValueE18",
+            "number": 5,
+            "doc": "The rule's least USD value of one payout, in 18-decimal USD units; zero\n means no USD minimum. Unset when the account has no rule.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "assets",
+            "jsonName": "assets",
+            "number": 6,
+            "doc": "One entry per destination of the rule, then per other asset with a\n positive balance, ordered by asset_id. Empty when the account has no\n rule or the rule is paused.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.AutoWithdrawPreviewAsset"
+          },
+          {
+            "name": "computed_at",
+            "jsonName": "computedAt",
+            "number": 7,
+            "doc": "When the balances, prices and fees the preview used were read.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.SetAutoWithdrawRuleEnabledRequest",
+      "kind": "message",
+      "doc": "SetAutoWithdrawRuleEnabledRequest pauses or resumes the rule of the root\n account or one subaccount, keeping its schedule and destinations.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Public subaccount ID; omit for the root account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "expected_version",
+            "jsonName": "expectedVersion",
+            "number": 2,
+            "doc": "The account's latest rule version. A mismatch is rejected so concurrent\n changes never overwrite each other.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "enabled",
+            "jsonName": "enabled",
+            "number": 3,
+            "doc": "false pauses the rule; true resumes it.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.SetAutoWithdrawRuleEnabledResponse",
+      "kind": "message",
+      "doc": "SetAutoWithdrawRuleEnabledResponse returns the rule's latest version.",
+      "message": {
+        "fields": [
+          {
+            "name": "rule",
+            "jsonName": "rule",
+            "number": 1,
+            "doc": "The created version, or the latest version unchanged when the rule was\n already in the requested state.",
+            "protoRef": "chain.withdraw.v1.AutoWithdrawRule"
           }
         ]
       }
@@ -1375,6 +1727,57 @@
             "doc": "Canonical destination address when valid. Empty when valid is false.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.WalletBalance",
+      "kind": "message",
+      "doc": "WalletBalance is one zToken the smart account wallet holds.",
+      "message": {
+        "fields": [
+          {
+            "name": "zipped_asset_id",
+            "jsonName": "zippedAssetId",
+            "number": 1,
+            "doc": "Zipped asset of the zToken: the network-specific asset, as\n chain.lifecycle.v1.AssetIds.zipped_asset_id names it.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "unified_asset_id",
+            "jsonName": "unifiedAssetId",
+            "number": 2,
+            "doc": "Unified asset the zToken stands for, as\n chain.lifecycle.v1.AssetIds.unified_asset_id names it.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "chain_id",
+            "jsonName": "chainId",
+            "number": 3,
+            "doc": "External network of the zipped asset, as the `chain_id` of a chain\n returned by `GetDepositWithdrawConfig`.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "ztoken_address",
+            "jsonName": "ztokenAddress",
+            "number": 4,
+            "doc": "zToken contract address on Polyester Chain.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "amount_e18",
+            "jsonName": "amountE18",
+            "number": 5,
+            "doc": "Balance in 18-decimal units: every zToken has 18 decimals.",
+            "protoRef": "polyester.type.v1.U128"
           }
         ]
       }
