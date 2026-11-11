@@ -1,0 +1,1734 @@
+syntax = "proto3";
+
+package ai.v1;
+
+import "alerts/v1/price_alerts.proto";
+import "buf/validate/validate.proto";
+import "chain/deposit/v1/deposit.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "ledger/read/v1/ledger_read.proto";
+import "marketdata/v1/marketdata.proto";
+import "orders/v1/orders.proto";
+import "orders/v1/orders_read.proto";
+import "polyester/api/options.proto";
+import "triggers/v1/triggers.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/ai/v1;aiv1";
+// Document-level OpenAPI metadata for the Assistant API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Assistant Service"
+      description: "Conversations with the Polyester trading assistant: messages, resumable run event streams, approvals and memories."
+    }
+  ]
+};
+
+// ErrorCode identifies an Assistant API error.
+enum ErrorCode {
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // No conversation of the caller has this ID.
+  CONVERSATION_NOT_FOUND = 1;
+  // No run of the caller has this ID.
+  RUN_NOT_FOUND = 2;
+  // No approval of the caller has this ID.
+  APPROVAL_NOT_FOUND = 3;
+  // No memory of the caller has this ID.
+  MEMORY_NOT_FOUND = 4;
+  // The conversation already has an active run. Wait for it to end, or cancel
+  // it, before sending another message.
+  RUN_ACTIVE = 5;
+  // The idempotency key was already used with a different request. The
+  // original run stands.
+  IDEMPOTENCY_CONFLICT = 6;
+  // The approval was already decided the other way. The first decision
+  // stands.
+  APPROVAL_ALREADY_DECIDED = 7;
+  // The approval expired before it was decided. Nothing was executed.
+  APPROVAL_EXPIRED = 8;
+  // The caller sent too many messages or used up their assistant allowance;
+  // retry later.
+  USAGE_LIMIT_REACHED = 9;
+  // A required service is temporarily unavailable; retry the same request.
+  SERVICE_UNAVAILABLE = 10;
+  // No pending key setup of the caller has this ID: it was never prepared,
+  // it expired without being registered, or a later setup replaced it.
+  // Prepare the keys again.
+  KEY_SETUP_NOT_FOUND = 11;
+  // The setup's public keys are not registered as the caller's assistant
+  // keys: they were not submitted yet, or their registration was refused.
+  // Nothing changed.
+  KEY_SETUP_NOT_REGISTERED = 12;
+}
+
+// ErrorDetail is attached to Assistant API errors as an error detail of type
+// ai.v1.ErrorDetail.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+}
+
+// MessageRole is the author of a conversation message.
+enum MessageRole {
+  // Not set. Never returned.
+  ROLE_UNSPECIFIED = 0;
+  // The user.
+  USER = 1;
+  // The assistant.
+  ASSISTANT = 2;
+}
+
+// FailureCategory classifies why a run failed.
+enum FailureCategory {
+  // Not set. Never returned.
+  FAILURE_UNSPECIFIED = 0;
+  // The run was cancelled with CancelRun.
+  CANCELLED = 1;
+  // The run reached its step or usage budget before it could finish.
+  BUDGET_EXCEEDED = 2;
+  // The run needed an action the caller is not permitted to take.
+  PERMISSION_DENIED = 3;
+  // The language model was unavailable and the run could not continue; send
+  // the message again later.
+  MODEL_UNAVAILABLE = 4;
+  // The run could not continue because of an unexpected error.
+  UNEXPECTED_ERROR = 5;
+}
+
+// ApprovalDecision is the user's answer to an approval request.
+enum ApprovalDecision {
+  // Not set. Rejected in requests.
+  DECISION_UNSPECIFIED = 0;
+  // Approve: the action runs exactly as summarized.
+  APPROVE = 1;
+  // Reject: the action does not run.
+  REJECT = 2;
+}
+
+// ApprovalStatus is the state of an approval request.
+enum ApprovalStatus {
+  // Not set. Never returned.
+  APPROVAL_UNSPECIFIED = 0;
+  // Waiting for a decision.
+  PENDING = 1;
+  // Approved by the user.
+  APPROVED = 2;
+  // Rejected by the user.
+  REJECTED = 3;
+  // Expired before a decision; the action did not run.
+  EXPIRED = 4;
+}
+
+// MemoryKind is what kind of fact a memory holds.
+enum MemoryKind {
+  // Not set. Never returned.
+  KIND_UNSPECIFIED = 0;
+  // A lasting fact or preference the user stated about themselves.
+  FACT = 1;
+  // A figure the user stated for their own planning, such as the account size
+  // they plan risk against. It is never a balance.
+  PLANNING_FIGURE = 2;
+  // A standing preference for how the assistant addresses and talks to the
+  // user, such as the name to use, the language, the tone and length of
+  // answers, or how risks are explained. The assistant applies every profile
+  // memory to every answer, so it is never searched and never appears in a
+  // MemoriesRecalled event. A user holds at most 10 profile memories.
+  PROFILE = 3;
+}
+
+// AssistantKeyState is the state of an assistant key the assistant holds.
+enum AssistantKeyState {
+  // Not set. Never returned.
+  KEY_STATE_UNSPECIFIED = 0;
+  // The assistant uses the key for its account.
+  ACTIVE = 1;
+  // The key was disabled when the assistant last checked it. The assistant
+  // keeps it and uses it again once it is enabled.
+  DISABLED = 2;
+}
+
+// Conversation is one conversation of the caller with the assistant.
+message Conversation {
+  // Public conversation ID.
+  fixed64 conversation_id = 1;
+  // Short title, derived from the conversation's first messages. Empty until
+  // one is available.
+  string title = 2;
+  // When the conversation was started.
+  google.protobuf.Timestamp created_at = 3;
+  // When the latest message of the conversation was recorded.
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// Message is one message of a conversation.
+message Message {
+  // Public message ID.
+  fixed64 message_id = 1;
+  // Author of the message.
+  MessageRole role = 2;
+  // Message text in Markdown. For an assistant message, the final text of its
+  // run; tool activity and views are not part of it.
+  string text = 3;
+  // When the message was recorded.
+  google.protobuf.Timestamp created_at = 4;
+  // The run the message started (user) or the run that wrote it (assistant).
+  // Replay that run with WatchRun from after_seq 0 to show its tool activity
+  // and views.
+  fixed64 run_id = 5;
+}
+
+// Memory is one fact the assistant remembers about the caller across
+// conversations, such as a stated preference. A corrected fact replaces the
+// earlier one, which is no longer listed.
+message Memory {
+  // Public memory ID.
+  fixed64 memory_id = 1;
+  // The remembered fact, in plain text.
+  string text = 2;
+  // When the fact was remembered.
+  google.protobuf.Timestamp created_at = 3;
+  // The conversation the fact was learned in. Omitted when that conversation
+  // is unknown.
+  optional fixed64 conversation_id = 4;
+  // What kind of fact the memory holds.
+  MemoryKind kind = 5;
+}
+
+// Usage is the language-model usage of one run, subagents included.
+message Usage {
+  // Input tokens processed, cached input included.
+  uint64 input_tokens = 1;
+  // Output tokens generated.
+  uint64 output_tokens = 2;
+  // Input tokens served from the prompt cache; a subset of input_tokens.
+  uint64 cached_input_tokens = 3;
+}
+
+// OrdersTable shows the caller's orders.
+message OrdersTable {
+  // Orders in the order the assistant fetched them, usually newest first.
+  repeated orders.v1.Order orders = 1;
+  // True when more orders matched than the table shows.
+  bool truncated = 2;
+  // Trading account (subaccount) the orders were read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 3;
+}
+
+// TriggersTable shows the caller's triggers: stop-losses, take-profits and
+// trailing stops (standalone or attached to an order), TWAPs and ladders,
+// with their configuration, status and progress.
+message TriggersTable {
+  // Triggers in the order the assistant fetched them, usually newest first.
+  // Each carries the fields the assistant read: its configuration, status,
+  // terminal reason, progress and times. subaccount_id, fee_asset,
+  // self_trade_prevention_mode, updated_at, armed_at and version are not
+  // set.
+  repeated triggers.v1.Trigger triggers = 1;
+  // True when more triggers matched than the table shows.
+  bool truncated = 2;
+  // Trading account (subaccount) the triggers were read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 3;
+}
+
+// BalancesTable shows the caller's balances.
+message BalancesTable {
+  // Balances, one per asset, highest available trading amount first.
+  repeated ledger.read.v1.AssetBalance balances = 1;
+  // Trading account (subaccount) the balances were read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 2;
+}
+
+// PriceChart shows candles of one spot market.
+message PriceChart {
+  // Numeric spot market identifier; resolve its symbol with GetSpotConfig.
+  uint32 symbol_id = 1;
+  // Timeframe of every candle.
+  marketdata.v1.Timeframe timeframe = 2;
+  // Candles oldest first.
+  repeated marketdata.v1.Candle candles = 3;
+}
+
+// MarkdownTableRow is one row of a MarkdownTable.
+message MarkdownTableRow {
+  // Cells in column order, each inline Markdown.
+  repeated string cells = 1;
+}
+
+// MarkdownTable is a generic table, for example a comparison of markets.
+message MarkdownTable {
+  // Column headings, each inline Markdown.
+  repeated string columns = 1;
+  // Rows in display order. A row has at most as many cells as there are
+  // columns; missing cells are empty.
+  repeated MarkdownTableRow rows = 2;
+  // True when the source had more rows than the table shows.
+  bool truncated = 3;
+}
+
+// DepositAddressCard shows one of the caller's deposit addresses, to copy. An
+// address takes deposits only on its own chain: show that chain's name next to
+// the address, and warn that sending another asset, or using another chain,
+// can lose the funds.
+message DepositAddressCard {
+  // The address and the chain it is assigned on. Resolve the chain's name, and
+  // the assets it carries, with GetDepositWithdrawConfig.
+  chain.deposit.v1.DepositAddress deposit_address = 1;
+  // Public unified asset ID (AssetConfig.ledger_id) the caller asked to
+  // deposit to this address. Omitted when the card shows the address without
+  // one asset, for example in a list of the caller's addresses.
+  optional uint32 asset_id = 2;
+  // Trading account (subaccount) the address belongs to: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 3;
+}
+
+// BalanceHistoryChart shows how the caller's balance of each asset changed
+// over a window ending at the time of the run.
+message BalanceHistoryChart {
+  // The window and its series, as GetBalanceHistory returns them for the
+  // caller's trading account. A series whose every point is zero is left out,
+  // so an account that held nothing in the window has no series.
+  ledger.read.v1.GetBalanceHistoryResponse history = 1;
+  // Trading account (subaccount) the history was read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 2;
+}
+
+// EquityHistoryChart shows the value of the caller's holdings over a window
+// ending at the time of the run.
+message EquityHistoryChart {
+  // The window and its series, as GetEquityHistorySeries returns them for the
+  // caller's trading account, grouped by account bucket or by asset.
+  // btc_prices_q is not set. The account's total equity at a point is the sum
+  // of every series at that point.
+  ledger.read.v1.GetEquityHistorySeriesResponse history = 1;
+  // Trading account (subaccount) the history was read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 2;
+}
+
+// TransfersTable shows the caller's settled transfers, one row per leg.
+message TransfersTable {
+  // Transfer legs newest first, as ListTransfers returns them for the
+  // caller's trading account. ts_us has millisecond precision.
+  repeated ledger.read.v1.TransferRow transfers = 1;
+  // True when more transfers matched than the table shows.
+  bool truncated = 2;
+  // Trading account (subaccount) the transfers were read from: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 3;
+}
+
+// View is structured content to render in the conversation, built from the
+// result of a tool the assistant called, never from model-written text.
+message View {
+  // Exactly one kind of view. A client that does not recognize the kind, for
+  // example one added after it was built, skips the view.
+  oneof kind {
+    // The caller's orders.
+    OrdersTable orders_table = 1;
+    // The caller's balances.
+    BalancesTable balances_table = 2;
+    // Candles of one spot market.
+    PriceChart price_chart = 3;
+    // A generic table.
+    MarkdownTable markdown_table = 5;
+    // One price alert of the caller, as the Price Alert API returns it.
+    alerts.v1.PriceAlert price_alert = 6;
+    // The caller's triggers.
+    TriggersTable triggers_table = 7;
+    // One deposit address of the caller.
+    DepositAddressCard deposit_address = 8;
+    // How the caller's balances changed over a window.
+    BalanceHistoryChart balance_history_chart = 9;
+    // The value of the caller's holdings over a window.
+    EquityHistoryChart equity_history_chart = 10;
+    // The caller's settled transfers.
+    TransfersTable transfers_table = 11;
+  }
+}
+
+// TextDelta appends text to the assistant's answer.
+message TextDelta {
+  // Markdown text to append, in order, to the text received so far.
+  string text = 1;
+}
+
+// DiscardPartial withdraws answer text that is about to be written again. The
+// assistant was interrupted while writing and regenerates its answer from an
+// earlier point; the regenerated text follows in later TextDelta events.
+message DiscardPartial {
+  // Drop the text of every TextDelta of this run whose seq is equal to or
+  // greater than this value, and received before this event. Tool, view and
+  // other events stay.
+  uint64 from_seq = 1;
+}
+
+// ToolStarted reports that the assistant started a tool call.
+message ToolStarted {
+  // Identifier of the call, unique within the run.
+  string tool_call_id = 1;
+  // Tool name, for example "get_candles".
+  string name = 2;
+  // Arguments the tool was called with.
+  google.protobuf.Struct input = 3;
+}
+
+// ToolFinished reports the end of a tool call. Results to show arrive as View
+// and MemoriesRecalled events.
+message ToolFinished {
+  // Identifier of the call, as in its ToolStarted event.
+  string tool_call_id = 1;
+  // Tool name.
+  string name = 2;
+  // True when the tool succeeded.
+  bool ok = 3;
+  // Short explanation of the failure. Omitted when ok is true.
+  optional string error_message = 4;
+}
+
+// RecalledMemory is one memory the assistant recalled during a run.
+message RecalledMemory {
+  // Public memory ID, as ListMemories returns it and DeleteMemory accepts it.
+  fixed64 memory_id = 1;
+  // The remembered fact, in plain text.
+  string text = 2;
+  // What kind of fact the memory holds.
+  MemoryKind kind = 3;
+}
+
+// MemoriesRecalled reports the memories one memory search of the run
+// returned. The assistant searches the user's memories for their message
+// before it answers, and may search again while answering, each time as a
+// recall_memories tool call. A search returns only the memories relevant to
+// what it searched for, so a message unrelated to every saved memory recalls
+// none. Profile memories are never searched: the assistant applies them to
+// every answer, and they are not reported here. The event follows that call's
+// ToolFinished event with ok true; a failed search has a ToolFinished event
+// with ok false and no MemoriesRecalled event.
+message MemoriesRecalled {
+  // Identifier of the search's tool call, as in its ToolStarted and
+  // ToolFinished events.
+  string tool_call_id = 1;
+  // The relevant memories found, at most 8, most relevant first; never a
+  // profile memory. Empty when none is relevant.
+  repeated RecalledMemory memories = 2;
+}
+
+// DestinationsSuggested reports the places in the client the assistant
+// offers the user to go to, for example to create a subaccount or change a
+// setting: show each as a button. The ids are those the run's SendMessage
+// declared in destinations; the client maps each to its own page or dialog.
+// The event follows the ToolFinished event, with ok true, of the
+// suggest_destinations call that chose them.
+message DestinationsSuggested {
+  // Identifier of the tool call, as in its ToolStarted and ToolFinished
+  // events.
+  string tool_call_id = 1;
+  // 1 to 3 destination ids, most relevant first, each declared in the run's
+  // SendMessage destinations. A client that no longer knows an id skips it.
+  repeated string destination_ids = 2;
+}
+
+// SkillLoaded reports that the assistant loaded a skill: instructions for one
+// kind of task. A skill grants no extra tools or permissions.
+message SkillLoaded {
+  // Skill name, for example "market-analysis".
+  string name = 1;
+}
+
+// SubagentStarted reports that the assistant delegated a task to a subagent,
+// a helper with its own instructions, tools and budget.
+message SubagentStarted {
+  // Identifier of the delegation, unique within the run.
+  string subagent_id = 1;
+  // Subagent name, for example "strategy-researcher".
+  string name = 2;
+}
+
+// SubagentFinished reports the end of a delegated task.
+message SubagentFinished {
+  // Identifier of the delegation, as in its SubagentStarted event.
+  string subagent_id = 1;
+  // Subagent name.
+  string name = 2;
+  // True when the subagent completed its task.
+  bool ok = 3;
+  // Short summary of the subagent's result. Omitted when it has none.
+  optional string summary = 4;
+}
+
+// ApprovalParameter is one key parameter of the action an approval approves,
+// for example "Slice interval" and "5 s".
+message ApprovalParameter {
+  // Short label, in plain words.
+  string label = 1;
+  // The value, in plain words, with its unit or asset when it has one.
+  string value = 2;
+}
+
+// ReferencePriceSource names the market price a ReferencePrice is.
+enum ReferencePriceSource {
+  // Not set. Never returned.
+  PRICE_SOURCE_UNSPECIFIED = 0;
+  // The best bid: the highest price a resting buy order offers.
+  BEST_BID = 1;
+  // The best ask: the lowest price a resting sell order offers.
+  BEST_ASK = 2;
+  // The price of the market's last trade.
+  LAST_PRICE = 3;
+  // The market's index price, aggregated from external exchanges.
+  INDEX_PRICE = 4;
+}
+
+// TriggerDirection is which way the watched price must move to fire a
+// trigger.
+enum TriggerDirection {
+  // Not set. Never returned.
+  DIRECTION_UNSPECIFIED = 0;
+  // Fires when the watched price rises to or above the trigger price.
+  AT_OR_ABOVE = 1;
+  // Fires when the watched price falls to or below the trigger price.
+  AT_OR_BELOW = 2;
+}
+
+// ReferencePrice is one current market price the order preview read, to
+// draw the order against.
+message ReferencePrice {
+  // The price, an exact decimal string in the quote asset.
+  string price = 1;
+  // Which market price it is.
+  ReferencePriceSource source = 2;
+  // When the price was set: for LAST_PRICE the time of the market's last
+  // trade, for the others when the assistant read it.
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+// OrderPriceField names one price of an order.
+enum OrderPriceField {
+  // Not set. Never returned.
+  PRICE_FIELD_UNSPECIFIED = 0;
+  // The limit price: of a limit order, of a stop-loss or take-profit's limit
+  // order, of a TWAP's limit slices; the most a buying trailing stop pays.
+  LIMIT_PRICE = 1;
+  // A stop-loss or take-profit's trigger price.
+  TRIGGER_PRICE = 2;
+  // A trailing stop's activation price.
+  ACTIVATION_PRICE = 3;
+  // A ladder's lowest level price.
+  LADDER_LOW_PRICE = 4;
+  // A ladder's highest level price.
+  LADDER_HIGH_PRICE = 5;
+  // An attached take-profit's trigger price.
+  TAKE_PROFIT_TRIGGER_PRICE = 6;
+  // An attached take-profit's limit exit price.
+  TAKE_PROFIT_LIMIT_PRICE = 7;
+  // An attached stop-loss's trigger price.
+  STOP_LOSS_TRIGGER_PRICE = 8;
+  // An attached stop-loss's limit exit price.
+  STOP_LOSS_LIMIT_PRICE = 9;
+  // An attached trailing stop's activation price.
+  TRAILING_STOP_ACTIVATION_PRICE = 10;
+  // The most an attached trailing stop's buy-back pays.
+  TRAILING_STOP_LIMIT_PRICE = 11;
+}
+
+// PriceOffsetDirection is which side of its reference a relative price is.
+enum PriceOffsetDirection {
+  // Not set. Never returned.
+  OFFSET_DIRECTION_UNSPECIFIED = 0;
+  // Above the reference.
+  ABOVE = 1;
+  // Below the reference.
+  BELOW = 2;
+}
+
+// PriceRounding is which way a resolved price was rounded onto the market's
+// tick size.
+enum PriceRounding {
+  // Not set. Never returned.
+  ROUNDING_UNSPECIFIED = 0;
+  // Down to the tick below: a price a buy trades at.
+  DOWN = 1;
+  // Up to the tick above: a price a sell trades at.
+  UP = 2;
+}
+
+// RelativePrice is a price of the order that the user gave relative to
+// another price, for example "10% below the current price", and that the
+// assistant resolved to the absolute price the order carries. The order is
+// placed at that absolute price, as approved, even when the reference moves
+// afterwards.
+message RelativePrice {
+  // Which price of the order it is.
+  OrderPriceField field = 1;
+  // The resolved price, an exact decimal string in the quote asset, as the
+  // order carries it: the reference moved by offset_bps, then rounded onto
+  // the market's tick size in the direction never worse for the order that
+  // trades at it: down for a buy, up for a sell. An attached exit trades
+  // the other way from its order.
+  string price = 2;
+  // Whether the price is above or below the reference.
+  PriceOffsetDirection direction = 3;
+  // The offset from the reference in basis points: 1000 is 10%. From 0 to
+  // 10000 above the reference, from 0 to 9999 below it. Zero is the
+  // reference itself, rounded onto the tick size as price says. A positive
+  // offset always resolves strictly above or below the reference, as
+  // direction says: one smaller than one tick size step is refused, never
+  // resolved to the reference or past it.
+  uint32 offset_bps = 4;
+  // The price it is relative to.
+  oneof reference {
+    // A market price the assistant read: for a stop-loss, take-profit or
+    // trailing stop the price it watches (last or index), for the others the
+    // best ask for a buy or the best bid for a sell; for an attached exit of
+    // a market order, that order's best ask or best bid. A reference set more
+    // than the approval's 10-minute lifetime before the approval was
+    // requested (a last price by its last trade) is refused.
+    ReferencePrice market = 5;
+    // The order's own limit price, an exact decimal string in the quote
+    // asset: the reference of an attached exit of a limit order.
+    string limit_price = 6;
+  }
+  // Which way the moved reference was rounded onto tick_size: DOWN for a
+  // price a buy trades at, UP for a sell.
+  PriceRounding rounding = 7;
+  // The market's tick size the price was rounded onto, an exact decimal
+  // string in the quote asset.
+  string tick_size = 8;
+}
+
+// AttachedExit is an attached take-profit or stop-loss.
+message AttachedExit {
+  // The price that fires the exit, an exact decimal string in the quote
+  // asset.
+  string trigger_price = 1;
+  // The exit's limit price, an exact decimal string in the quote asset.
+  // Omitted when the exit is a market order.
+  optional string limit_price = 2;
+}
+
+// AttachedTrailingStop is an attached trailing stop.
+message AttachedTrailingStop {
+  // How far the stop trails the price.
+  oneof trailing_distance {
+    // A price distance, an exact decimal string in the quote asset.
+    string distance = 1;
+    // A distance in basis points of the price: 50 is 0.5%.
+    uint32 distance_bps = 2;
+  }
+  // Tracking starts once the price reaches it, an exact decimal string in
+  // the quote asset. Omitted when tracking starts at once.
+  optional string activation_price = 3;
+  // The most the buy-back pays, an exact decimal string in the quote asset.
+  // Set only when the order sells.
+  optional string limit_price = 4;
+}
+
+// AttachedExits are exits that protect what a market or limit order fills,
+// armed as it fills. They close the order's position: they sell what a buy
+// order bought, so a take-profit fires above and a stop-loss below the entry,
+// and they buy back what a sell order sold, the other way round.
+message AttachedExits {
+  // The take-profit. Omitted when there is none.
+  AttachedExit take_profit = 1;
+  // The stop-loss. Omitted when there is none. Never set together with
+  // trailing_stop.
+  AttachedExit stop_loss = 2;
+  // The trailing stop. Omitted when there is none.
+  AttachedTrailingStop trailing_stop = 3;
+  // True when cancelling one exit ends the other.
+  bool oco = 4;
+}
+
+// MarketOrderPreview is a market order: it fills at once against the book.
+message MarketOrderPreview {
+  // The most the price may move against the order, in basis points: 50 is
+  // 0.5%. Omitted when the market's default cap applies.
+  optional uint32 max_slippage_bps = 1;
+  // Exits attached to the order. Omitted when it has none.
+  AttachedExits attached = 2;
+}
+
+// LimitOrderPreview is a limit order: it trades at its price or better.
+message LimitOrderPreview {
+  // The limit price, an exact decimal string in the quote asset.
+  string price = 1;
+  // GTC, GTD, IOC or FOK.
+  orders.v1.TimeInForce time_in_force = 2;
+  // When a GTD order expires. Omitted for other times in force.
+  google.protobuf.Timestamp expire_at = 3;
+  // True when the order is refused instead of trading at once.
+  bool post_only = 4;
+  // Exits attached to the order. Omitted when it has none.
+  AttachedExits attached = 5;
+}
+
+// StopOrderPreview is a stop-loss or take-profit: it places a market or limit
+// order once the watched price reaches the trigger price.
+message StopOrderPreview {
+  // The price that fires it, an exact decimal string in the quote asset.
+  string trigger_price = 1;
+  // The price it watches: LAST_PRICE or INDEX_PRICE.
+  orders.v1.TriggerPriceSource trigger_price_source = 2;
+  // Which way the watched price must move to reach trigger_price.
+  TriggerDirection direction = 3;
+  // The limit price of the order it places, an exact decimal string in the
+  // quote asset. Omitted when it places a market order.
+  optional string limit_price = 4;
+  // GTC, IOC or FOK for a limit order. Unspecified for a market order.
+  orders.v1.TimeInForce time_in_force = 5;
+  // True when its limit order is refused instead of trading at once.
+  bool post_only = 6;
+  // For a market order: the most the price may move against it, in basis
+  // points. Omitted for a limit order, or when the market's default cap
+  // applies.
+  optional uint32 max_slippage_bps = 7;
+  // True when the exchange reserves its funds when it creates it, before it
+  // fires. OrderPreview.reserved_amount states the amount when it is set.
+  bool funds_reserved = 8;
+}
+
+// TrailingStopPreview is a trailing stop: it follows the watched price by a
+// distance and fires when the price reverses by that distance. A sell
+// tracks the highest price and sells at market; a buy tracks the lowest
+// price and buys with an immediate-or-cancel limit order.
+message TrailingStopPreview {
+  // How far the stop trails the price.
+  oneof trailing_distance {
+    // A price distance, an exact decimal string in the quote asset.
+    string distance = 1;
+    // A distance in basis points of the price: 50 is 0.5%.
+    uint32 distance_bps = 2;
+  }
+  // Tracking starts once the price reaches it, an exact decimal string in
+  // the quote asset. Omitted when tracking starts at once.
+  optional string activation_price = 3;
+  // The price it watches: LAST_PRICE or INDEX_PRICE.
+  orders.v1.TriggerPriceSource trigger_price_source = 4;
+  // The most a buy pays, an exact decimal string in the quote asset. Set only
+  // for a buy.
+  optional string limit_price = 5;
+  // For a sell: the most the price may move against its market order, in
+  // basis points. Omitted when the market's default cap applies.
+  optional uint32 max_slippage_bps = 6;
+  // True when the exchange reserves its funds when it creates it, before it
+  // fires. OrderPreview.reserved_amount states the amount when it is set.
+  bool funds_reserved = 7;
+}
+
+// UnfilledSlicePolicy is what a TWAP does with a slice that has not filled
+// when the next slice is due.
+enum UnfilledSlicePolicy {
+  // Not set: the slices are market orders, immediate or cancel.
+  UNFILLED_SLICE_UNSPECIFIED = 0;
+  // What is left of the slice is canceled before the next slice is placed.
+  CANCEL_BEFORE_NEXT = 1;
+}
+
+// TwapPreview is a TWAP: the quantity split into slices placed at a fixed
+// interval. The first slice is placed at once, slice i (from 0) at
+// i × slice_interval_ms after it.
+message TwapPreview {
+  // Total duration in milliseconds.
+  uint64 duration_ms = 1;
+  // Milliseconds between two slices.
+  uint64 slice_interval_ms = 2;
+  // Number of slices.
+  uint32 slice_count = 3;
+  // The first slice's quantity, an exact decimal string in the base asset:
+  // quantity divided by slice_count, rounded down to the step size. Each
+  // later slice is the remaining quantity divided by the remaining slices,
+  // rounded down to the step size, so later slices may be slightly larger
+  // and the slices add up to quantity.
+  string slice_quantity = 4;
+  // Every slice's limit price, an exact decimal string in the quote asset.
+  // Omitted when slices are market orders.
+  optional string limit_price = 5;
+  // For market slices: the most the price may move against each slice, in
+  // basis points. Omitted for limit slices, or when the market's default cap
+  // applies.
+  optional uint32 max_slippage_bps = 6;
+  // What happens to a limit slice that has not filled when the next slice is
+  // due: CANCEL_BEFORE_NEXT. Unspecified for market slices.
+  UnfilledSlicePolicy unfilled_slice_policy = 7;
+  // True when the first slice is placed at once, when the TWAP is created;
+  // the later slices follow every slice_interval_ms.
+  bool first_slice_immediate = 8;
+}
+
+// LadderLevel is one limit order of a ladder.
+message LadderLevel {
+  // Its price, an exact decimal string in the quote asset.
+  string price = 1;
+  // Its quantity, an exact decimal string in the base asset.
+  string quantity = 2;
+}
+
+// LadderPreview is a ladder: good-till-canceled limit orders spread evenly
+// across a price range, all placed at once.
+message LadderPreview {
+  // The lowest level's price, an exact decimal string in the quote asset.
+  string low_price = 1;
+  // The highest level's price, an exact decimal string in the quote asset.
+  string high_price = 2;
+  // Every level, lowest price first: 2 to 100. The quantity is split
+  // equally, rounded down to the step size; the highest level gets the rest.
+  repeated LadderLevel levels = 3;
+  // True when every level is refused instead of trading at once.
+  bool post_only = 4;
+  // Every level's time in force: GTC.
+  orders.v1.TimeInForce time_in_force = 5;
+  // True when every level is placed at once, when the ladder is created.
+  bool all_levels_at_once = 6;
+}
+
+// OrderPreview is the exact order an approval places, as typed values to
+// draw it: a TWAP's slices on a timeline, a ladder's levels on a price axis,
+// a stop's trigger price against the current price. It is computed from the
+// exact order by the assistant's order checks, never written by the model,
+// and states the same order as the approval's summary and parameters.
+// Prices are exact decimal strings in the quote asset, quantities in the
+// base asset.
+message OrderPreview {
+  // Numeric spot market identifier.
+  uint32 symbol_id = 1;
+  // Market symbol, for example "SOL-USDT".
+  string symbol = 2;
+  // Base asset, for example "SOL".
+  string base_asset = 3;
+  // Quote asset, for example "USDT".
+  string quote_asset = 4;
+  // BUY or SELL.
+  orders.v1.Side side = 5;
+  // Total quantity, an exact decimal string in the base asset. Omitted only
+  // for a buy sized by quote_amount.
+  optional string quantity = 6;
+  // A buy market order, or buy immediate-or-cancel limit order, sized by
+  // spend: the most quote asset it spends, an exact decimal string. Omitted
+  // when quantity is set.
+  optional string quote_amount = 7;
+  // Estimated order value in the quote asset, a decimal string rounded to at
+  // most 2 decimals. Valued at: quote_amount when set; a market order or TWAP
+  // of market slices at reference_price; a limit order, ladder level or limit
+  // slice at its price; a stop at its limit price, else its trigger price; a
+  // trailing stop at its limit price, else its activation price, else the last
+  // price. Omitted when it cannot be estimated.
+  optional string estimated_value = 8;
+  // What the exchange reserves on the trading account when it creates a
+  // stop-loss, take-profit, trailing stop or ladder: an exact decimal string,
+  // in the base asset for a sell, in the quote asset (fee reserve included)
+  // for a buy. Omitted for market and limit orders, which reserve as they
+  // are placed, and for a TWAP, whose slices each use what is available when
+  // they are due.
+  optional string reserved_amount = 9;
+  // The current market price to draw the order against: for a stop-loss,
+  // take-profit or trailing stop the price it watches (last or index), for
+  // the others the best ask for a buy or the best bid for a sell. Omitted
+  // when the market has no such price.
+  ReferencePrice reference_price = 10;
+  // The order type and its own values. A client that does not recognize the
+  // kind, for example one added after it was built, shows the approval's
+  // summary and parameters only.
+  oneof kind {
+    // A market order.
+    MarketOrderPreview market = 11;
+    // A limit order.
+    LimitOrderPreview limit = 12;
+    // A stop-loss.
+    StopOrderPreview stop_loss = 13;
+    // A take-profit.
+    StopOrderPreview take_profit = 14;
+    // A trailing stop.
+    TrailingStopPreview trailing_stop = 15;
+    // A TWAP.
+    TwapPreview twap = 16;
+    // A ladder.
+    LadderPreview ladder = 17;
+  }
+  // The prices the user gave relative to another price, as resolved, in the
+  // order they appear in the order. Empty when every price was given as an
+  // absolute price.
+  repeated RelativePrice relative_prices = 18;
+}
+
+// QuoteValue is a value in one quote asset.
+message QuoteValue {
+  // Quote asset, for example "USDT".
+  string quote_asset = 1;
+  // The value, a decimal string in quote_asset rounded to at most 2
+  // decimals.
+  string value = 2;
+}
+
+// PlaceOrdersPreview is the exact set of limit orders an approval places
+// together. The exchange may refuse some of them and accept the others.
+message PlaceOrdersPreview {
+  // Every order, in the order the user gave them, each as typed values with
+  // its own estimated value and reference price.
+  repeated OrderPreview orders = 1;
+  // The estimated value of the whole set, one per quote asset, in the order
+  // the assets first appear in orders: the exact sum of its orders' values in
+  // that asset, then rounded.
+  repeated QuoteValue total_values = 2;
+}
+
+// SwapLegPreview is one spot market a swap's quote trades on.
+message SwapLegPreview {
+  // Market symbol, for example "BTC-USDT".
+  string symbol = 1;
+  // BUY or SELL: the side of the swap's order on the market.
+  orders.v1.Side side = 2;
+  // Estimated average fill price, in the quote asset per base asset, as a
+  // decimal string. Indicative: it comes from the quote's order-book depth.
+  string average_price = 3;
+  // Distance of average_price from the best price of the book, in basis
+  // points: the cost of the order's size against the depth.
+  uint32 price_impact_bps = 4;
+  // The account's spot taker fee rate on the market, in percent (for example
+  // "0.1" for 0.1%), as a decimal string.
+  string taker_fee_rate_percent = 5;
+  // Estimated fee, an exact decimal string in fee_asset.
+  string fee = 6;
+  // Asset the fee is charged in: the asset the leg receives.
+  string fee_asset = 7;
+}
+
+// SwapPreview is the swap an approval executes: spend amount of source_asset
+// from the trading account's Trading balance and receive destination_asset
+// there, through the spot order books at the account's taker fee. Nothing
+// leaves the account. Only min_amount_out binds: what cannot trade at that
+// rate, and any rest smaller than one order step, stays on the account.
+message SwapPreview {
+  // Asset spent, for example "USDT".
+  string source_asset = 1;
+  // Asset received, for example "BTC".
+  string destination_asset = 2;
+  // Amount spent, an exact decimal string in source_asset.
+  string amount = 3;
+  // Estimated amount received after fees at the quote's order-book depth, an
+  // exact decimal string in destination_asset. Indicative.
+  string expected_amount_out = 4;
+  // The least the swap receives after fees for the whole amount, an exact
+  // decimal string in destination_asset. Every traded part nets at least
+  // this rate.
+  string min_amount_out = 5;
+  // The accepted shortfall of min_amount_out from expected_amount_out, in
+  // basis points.
+  uint32 max_slippage_bps = 6;
+  // The markets the swap trades on, in order. A direct swap has one.
+  repeated SwapLegPreview legs = 7;
+  // When the quote was priced.
+  google.protobuf.Timestamp quoted_at = 8;
+  // The quote's expiry, 30 seconds after quoted_at. Approving after it
+  // executes nothing: the swap is requested again for a new quote.
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+// OrderToCancel is one open order a cancellation cancels, as it was when the
+// cancellation was requested.
+message OrderToCancel {
+  // Order ID.
+  fixed64 order_id = 1;
+  // Market symbol, for example "BTC-USDT".
+  string symbol = 2;
+  // BUY or SELL.
+  orders.v1.Side side = 3;
+  // The limit price, an exact decimal string in the quote asset. Omitted for
+  // a market order.
+  optional string price = 4;
+  // Total quantity, an exact decimal string in the base asset.
+  string quantity = 5;
+  // Quantity filled so far, an exact decimal string in the base asset.
+  string filled_quantity = 6;
+}
+
+// CancelOrdersPreview is the exact set of open orders an approval cancels:
+// orders named one by one, or every open order a cancel-all matches. It
+// cancels orders only; triggers stay active.
+message CancelOrdersPreview {
+  // Every order it cancels: a cancel-all's oldest first, otherwise in the
+  // order the user named them. Approving cancels exactly these; an order that
+  // matches a cancel-all after the approval is not cancelled under it.
+  repeated OrderToCancel orders = 1;
+  // True for a cancel-all: every open order on symbols and side.
+  bool cancel_all = 2;
+  // A cancel-all's markets, for example "BTC-USDT". Empty for every market,
+  // and for orders named one by one.
+  repeated string symbols = 3;
+  // A cancel-all's side, BUY or SELL. Unspecified for both sides, and for
+  // orders named one by one.
+  orders.v1.Side side = 4;
+  // A cancel-all's live triggers on its markets that stay active, as
+  // counted when it was requested. A lower bound when
+  // live_triggers_kept_lower_bound is true.
+  uint32 live_triggers_kept = 5;
+  // True when live_triggers_kept counts only the live triggers read, and
+  // more may stay active.
+  bool live_triggers_kept_lower_bound = 6;
+}
+
+// CancelTriggerPreview is the exact trigger an approval cancels, as it was
+// when the cancellation was requested.
+message CancelTriggerPreview {
+  // Trigger ID.
+  fixed64 trigger_id = 1;
+  // Numeric spot market identifier.
+  uint32 symbol_id = 2;
+  // Market symbol, for example "BTC-USDT".
+  string symbol = 3;
+  // STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, TWAP or LADDER.
+  triggers.v1.TriggerType type = 4;
+  // BUY or SELL.
+  orders.v1.Side side = 5;
+  // Its total quantity, an exact decimal string in the base asset.
+  string quantity = 6;
+  // A stop-loss's or take-profit's trigger price, or a trailing stop's
+  // current trigger price, an exact decimal string in the quote asset.
+  // Omitted for a TWAP or ladder, and when it has none yet.
+  optional string trigger_price = 7;
+  // A TWAP's or ladder's quantity filled so far, an exact decimal string in
+  // the base asset. Omitted for other types.
+  optional string filled_quantity = 8;
+  // A TWAP's slices done so far. Omitted for other types.
+  optional uint32 slices_done = 9;
+  // A TWAP's number of slices. Omitted for other types.
+  optional uint32 slice_count = 10;
+  // A ladder's levels with at least one fill. Omitted for other types.
+  optional uint32 levels_filled = 11;
+  // A ladder's number of levels. Omitted for other types.
+  optional uint32 level_count = 12;
+  // True when cancelling it also cancels its open orders: a TWAP's or a
+  // ladder's.
+  bool cancels_open_orders = 13;
+}
+
+// OrderChange is one open limit order a modification changes, before and
+// after.
+message OrderChange {
+  // Order ID.
+  fixed64 order_id = 1;
+  // BUY or SELL.
+  orders.v1.Side side = 2;
+  // The limit price now, an exact decimal string in the quote asset.
+  string price = 3;
+  // The new limit price, an exact decimal string in the quote asset. Omitted
+  // when the price does not change.
+  optional string new_price = 4;
+  // The total quantity now, filled part included, an exact decimal string in
+  // the base asset.
+  string quantity = 5;
+  // The new total quantity, filled part included, an exact decimal string in
+  // the base asset. Omitted when the quantity does not change.
+  optional string new_quantity = 6;
+  // Quantity filled so far, an exact decimal string in the base asset.
+  string filled_quantity = 7;
+  // True when the change replaces the order with a new order under a new
+  // order ID, at the back of the queue: a new price or a larger quantity.
+  // False when it amends the order in place, keeping its queue position.
+  bool replaced = 8;
+}
+
+// OrderChangePreview is the exact change an approval makes to open limit
+// orders of one market: their price or total quantity, before and after.
+message OrderChangePreview {
+  // Numeric spot market identifier.
+  uint32 symbol_id = 1;
+  // Market symbol, for example "BTC-USDT".
+  string symbol = 2;
+  // Base asset, for example "BTC".
+  string base_asset = 3;
+  // Quote asset, for example "USDT".
+  string quote_asset = 4;
+  // Every order it changes, in the order the user named them.
+  repeated OrderChange orders = 5;
+}
+
+// TriggerChangeAction is what an approval does to a trigger.
+enum TriggerChangeAction {
+  // Not set. Never returned.
+  TRIGGER_CHANGE_UNSPECIFIED = 0;
+  // Changes its trigger price, trailing distance, activation price or
+  // slippage cap.
+  MODIFY = 1;
+  // Pauses it: it keeps its settings and reserve but does not fire.
+  PAUSE = 2;
+  // Resumes a paused trigger.
+  RESUME = 3;
+}
+
+// TriggerSettings are the settings of a stop-loss, take-profit or trailing
+// stop that a change can touch, with its status.
+message TriggerSettings {
+  // The trigger's status: PAUSED after a pause; ARMED after a resume.
+  triggers.v1.TriggerStatus status = 1;
+  // A stop-loss's or take-profit's trigger price, an exact decimal string in
+  // the quote asset. Omitted for a trailing stop.
+  optional string trigger_price = 2;
+  // A trailing stop's distance. Unset for a stop-loss or take-profit.
+  oneof trailing_distance {
+    // A price distance, an exact decimal string in the quote asset.
+    string trailing_distance_price = 3;
+    // A distance in basis points of the price: 50 is 0.5%.
+    uint32 trailing_distance_bps = 4;
+  }
+  // A trailing stop's activation price, an exact decimal string in the quote
+  // asset. Omitted when tracking starts at once.
+  optional string activation_price = 5;
+  // The slippage cap of the market order it places. Unset when the market's
+  // default cap applies, or for a limit order.
+  oneof max_slippage {
+    // In basis points of the price: 50 is 0.5%.
+    uint32 max_slippage_bps = 6;
+    // A price distance, an exact decimal string in the quote asset.
+    string max_slippage_price = 8;
+  }
+  // The limit price of the order it places, or a buy trailing stop's most it
+  // pays, an exact decimal string in the quote asset. Never changes. Omitted
+  // when it places a market order.
+  optional string limit_price = 7;
+}
+
+// TriggerChangePreview is the exact change an approval makes to one
+// stop-loss, take-profit or trailing stop: its settings before and after.
+message TriggerChangePreview {
+  // Trigger ID.
+  fixed64 trigger_id = 1;
+  // Numeric spot market identifier.
+  uint32 symbol_id = 2;
+  // Market symbol, for example "BTC-USDT".
+  string symbol = 3;
+  // Base asset, for example "BTC".
+  string base_asset = 4;
+  // Quote asset, for example "USDT".
+  string quote_asset = 5;
+  // STOP_LOSS, TAKE_PROFIT or TRAILING_STOP.
+  triggers.v1.TriggerType type = 6;
+  // BUY or SELL.
+  orders.v1.Side side = 7;
+  // Its quantity, an exact decimal string in the base asset. Never changes.
+  string quantity = 8;
+  // MODIFY, PAUSE or RESUME.
+  TriggerChangeAction action = 9;
+  // The settings now.
+  TriggerSettings before = 10;
+  // The settings once the change applies.
+  TriggerSettings after = 11;
+  // The price it watches, to draw its trigger price against. Omitted for a
+  // pause, and when the market has no such price.
+  ReferencePrice reference_price = 12;
+  // Which way the watched price must move to reach the trigger price.
+  // Unspecified for a trailing stop.
+  TriggerDirection direction = 13;
+  // How the change moves what the trigger reserves, an exact decimal string
+  // in the quote asset, fee reserve included. Only a buy that places a
+  // market order reserves at its trigger price and slippage cap, so only its
+  // modification can move it. Unset when the reserve does not change.
+  oneof reserve_change {
+    // What the change reserves in addition.
+    string reserve_increase = 14;
+    // What the change releases.
+    string reserve_release = 15;
+  }
+  // True for a resume when the watched price is already past the trigger
+  // price: the trigger fires as soon as it resumes.
+  bool fires_on_resume = 16;
+}
+
+// ApprovalRequested reports that the run waits for the user to approve an
+// action, such as placing an order. The run continues once DecideApproval
+// answers it, or the approval expires. Nothing runs without an approval.
+message ApprovalRequested {
+  // Public approval ID, the argument of DecideApproval.
+  fixed64 approval_id = 1;
+  // What approving does, written from the exact action, never by the model.
+  string summary = 2;
+  // When the approval expires if undecided.
+  google.protobuf.Timestamp expires_at = 3;
+  // The action's key parameters in display order, such as the market, side,
+  // quantity, prices, a TWAP's duration and slices or a ladder's range,
+  // written from the same exact action as the summary. Show them with the
+  // summary.
+  repeated ApprovalParameter parameters = 4;
+  // Trading account (subaccount) the action acts on: the run's account, as
+  // SendMessageRequest.subaccount_id named it.
+  fixed64 account_id = 11;
+  // The action as typed values to draw it, from the same exact action as the
+  // summary; approving approves exactly it. At most one is set. Omitted when
+  // the action has no typed preview; a client that does not recognize the
+  // preview, for example one added after it was built, shows the summary and
+  // parameters only.
+  oneof preview {
+    // The order the approval places.
+    OrderPreview order_preview = 5;
+    // The open orders the approval cancels.
+    CancelOrdersPreview cancel_orders = 6;
+    // The change the approval makes to open limit orders.
+    OrderChangePreview order_change = 7;
+    // The change the approval makes to a trigger.
+    TriggerChangePreview trigger_change = 8;
+    // The limit orders the approval places together.
+    PlaceOrdersPreview place_orders = 9;
+    // The swap the approval executes within the trading account.
+    SwapPreview swap = 10;
+    // The trigger the approval cancels.
+    CancelTriggerPreview cancel_trigger = 12;
+  }
+}
+
+// ApprovalResolved reports the final state of an approval request.
+message ApprovalResolved {
+  // Public approval ID, as in its ApprovalRequested event.
+  fixed64 approval_id = 1;
+  // APPROVED, REJECTED or EXPIRED.
+  ApprovalStatus status = 2;
+}
+
+// RunCompleted is the last event of a run that finished its answer.
+message RunCompleted {
+  // Language-model usage of the run.
+  Usage usage = 1;
+}
+
+// RunFailed is the last event of a run that ended without finishing its
+// answer.
+message RunFailed {
+  // Why the run failed.
+  FailureCategory category = 1;
+  // Short explanation to show the user.
+  string message = 2;
+  // Language-model usage of the run until it failed.
+  Usage usage = 3;
+}
+
+// RunEvent is one recorded event of a run. Events are recorded before they are
+// sent, so a stream resumed from the last seq a client received misses and
+// repeats nothing.
+message RunEvent {
+  // Position of the event in its run: 1 for the first event, then increasing
+  // by exactly one.
+  uint64 seq = 1;
+  // When the event was recorded.
+  google.protobuf.Timestamp created_at = 2;
+  // Exactly one event. A client that does not recognize the event, for example
+  // one added after it was built, skips it.
+  oneof event {
+    // Answer text to append.
+    TextDelta text_delta = 3;
+    // Answer text to withdraw before it is written again.
+    DiscardPartial discard_partial = 4;
+    // A tool call started.
+    ToolStarted tool_started = 5;
+    // A tool call finished.
+    ToolFinished tool_finished = 6;
+    // A skill was loaded.
+    SkillLoaded skill_loaded = 7;
+    // A subagent started a delegated task.
+    SubagentStarted subagent_started = 8;
+    // A subagent finished its task.
+    SubagentFinished subagent_finished = 9;
+    // The run waits for an approval.
+    ApprovalRequested approval_requested = 10;
+    // An approval was decided or expired.
+    ApprovalResolved approval_resolved = 11;
+    // Structured content to render.
+    View view = 12;
+    // The run finished its answer. Last event of the run.
+    RunCompleted run_completed = 13;
+    // The run ended without finishing its answer. Last event of the run.
+    RunFailed run_failed = 14;
+    // The memories a memory search returned.
+    MemoriesRecalled memories_recalled = 15;
+    // Places in the client the assistant offers the user to go to.
+    DestinationsSuggested destinations_suggested = 16;
+  }
+}
+
+// AssistantKey is the assistant's key for one of the caller's accounts. The
+// assistant holds its private key; the API key it belongs to is listed and
+// revoked with the caller's other API keys.
+message AssistantKey {
+  // Subaccount the key acts on. Omitted for the main account.
+  optional fixed64 subaccount_id = 1;
+  // Opaque identifier of the API key.
+  string key_id = 2;
+  // Ed25519 public key, 32 bytes.
+  bytes public_key_ed25519 = 3;
+  // ACTIVE or DISABLED.
+  AssistantKeyState state = 4;
+}
+
+// AssistantKeyAccount names one account to give the assistant a key for.
+message AssistantKeyAccount {
+  // Subaccount. Omit for the main account.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// PreparedAssistantKey is a key pair the assistant generated for one account.
+message PreparedAssistantKey {
+  // Subaccount the key is for. Omitted for the main account.
+  optional fixed64 subaccount_id = 1;
+  // Ed25519 public key, 32 bytes. Register it as the account's assistant key
+  // with SetAssistantKeys.
+  bytes public_key_ed25519 = 2;
+  // The key's registration proof (64 bytes). Pass it unchanged as the key's
+  // registration_proof in SetAssistantKeys.
+  bytes registration_proof = 3;
+  // The key's registration deadline. Pass it unchanged as the key's
+  // registration_deadline in SetAssistantKeys; the key cannot be registered
+  // after it.
+  google.protobuf.Timestamp registration_deadline = 4;
+}
+
+// Destination is one place in the client the assistant may offer the user to
+// go to: a page, or a dialog such as deposit or transfer. The client declares
+// the destinations it has with each message; the assistant suggests them by
+// id, and the client maps each id to its own page or dialog.
+message Destination {
+  // The client's id of the destination, for example "page-subaccounts":
+  // lowercase letters, digits and hyphens, 1 to 64 characters.
+  string id = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9-]{0,63}$"];
+  // Its name as the client shows it, for example "Subaccounts", 1 to 80
+  // characters.
+  string title = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 80
+  }];
+  // What the user does there, in a few words or keywords, at most 200
+  // characters, for example "sub accounts, account management". The assistant
+  // reads it to choose a destination.
+  string description = 3 [(buf.validate.field).string.max_len = 200];
+}
+
+// SendMessageRequest sends the caller's message and starts a run that answers
+// it.
+message SendMessageRequest {
+  // Each destination id at most once.
+  option (buf.validate.message).cel = {
+    id: "send_message.unique_destinations"
+    message: "each destination id must be unique"
+    expression: "this.destinations.map(d, d.id).unique()"
+  };
+
+  // Conversation to continue. Omit to start a new conversation.
+  optional fixed64 conversation_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Message text, plain text or Markdown, 1 to 16000 characters.
+  string text = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 16000
+  }];
+  // Client-chosen key, unique per caller, that makes sending idempotent: the
+  // same key and request return the same run and conversation, also for a new
+  // conversation; another request with the same key is IDEMPOTENCY_CONFLICT.
+  string idempotency_key = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  // Trading account (subaccount) the run reads and acts on. It must be one
+  // the caller's account owns; any other value, also one that does not
+  // exist, is INVALID_ARGUMENT. Omit it to answer without account data: the
+  // run then has no account tools. It is part of the request the idempotency
+  // key covers.
+  optional fixed64 subaccount_id = 4 [(buf.validate.field).fixed64.gt = 0];
+  // The places in the client the run may suggest to the user, at most 100,
+  // each id at most once; their order does not matter. Omit them for a client
+  // that cannot take the user anywhere: the run then suggests nothing. They
+  // are part of the request the idempotency key covers.
+  repeated Destination destinations = 5 [(buf.validate.field).repeated.max_items = 100];
+}
+
+// SendMessageResponse identifies the started run.
+message SendMessageResponse {
+  // The run that answers the message. Follow it with WatchRun.
+  fixed64 run_id = 1;
+  // The conversation of the message: the requested one, or the new one.
+  fixed64 conversation_id = 2;
+}
+
+// WatchRunRequest selects a run and where to resume its events.
+message WatchRunRequest {
+  // Run to watch.
+  fixed64 run_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Return events with seq greater than this value. 0 replays the run from
+  // its first event; to resume, pass the seq of the last event received.
+  uint64 after_seq = 2;
+}
+
+// WatchRunResponse carries one run event.
+message WatchRunResponse {
+  // The event.
+  RunEvent event = 1;
+}
+
+// CancelRunRequest selects the run to cancel.
+message CancelRunRequest {
+  // Run to cancel.
+  fixed64 run_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// CancelRunResponse confirms that the cancellation was recorded.
+message CancelRunResponse {}
+
+// DecideApprovalRequest answers one approval request.
+message DecideApprovalRequest {
+  // Approval to decide, from an ApprovalRequested event.
+  fixed64 approval_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // The decision.
+  ApprovalDecision decision = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// DecideApprovalResponse returns the recorded state of the approval.
+message DecideApprovalResponse {
+  // APPROVED or REJECTED.
+  ApprovalStatus status = 1;
+}
+
+// ListConversationsRequest pages through the caller's conversations, most
+// recently updated first.
+message ListConversationsRequest {
+  // Maximum conversations to return. 0 means the default of 20; maximum 100.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, keyset-backed, exclusive cursor from a previous response. Bound to
+  // the caller, updated_at and conversation_id.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListConversationsResponse returns conversations.
+message ListConversationsResponse {
+  // Conversations ordered by updated_at descending, then conversation_id
+  // descending. A conversation updated while paging moves to the front, so a
+  // chain of pages started earlier does not return it again.
+  repeated Conversation conversations = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// ListMessagesRequest pages through one conversation's messages, newest first.
+message ListMessagesRequest {
+  // Conversation to read.
+  fixed64 conversation_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Maximum messages to return. 0 means the default of 50; maximum 200.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed, exclusive cursor from a previous response. Bound to
+  // the caller, the conversation, created_at and message_id.
+  string page_token = 3 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListMessagesResponse returns messages.
+message ListMessagesResponse {
+  // Messages ordered by created_at descending, then message_id descending.
+  repeated Message messages = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// ListMemoriesRequest pages through the caller's memories, newest first.
+message ListMemoriesRequest {
+  // Maximum memories to return. 0 means the default of 50; maximum 200.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed, exclusive cursor from a previous response. Bound to
+  // the caller, created_at and memory_id.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListMemoriesResponse returns memories.
+message ListMemoriesResponse {
+  // Memories ordered by created_at descending, then memory_id descending.
+  repeated Memory memories = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// DeleteMemoryRequest selects the memory to forget.
+message DeleteMemoryRequest {
+  // Memory to delete.
+  fixed64 memory_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// DeleteMemoryResponse confirms the deletion.
+message DeleteMemoryResponse {}
+
+// PrepareAssistantKeysRequest names the accounts to give the assistant keys
+// for.
+message PrepareAssistantKeysRequest {
+  // 1 to 64 accounts, each at most once.
+  repeated AssistantKeyAccount accounts = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 64
+  }];
+}
+
+// PrepareAssistantKeysResponse returns the public keys to register.
+message PrepareAssistantKeysResponse {
+  // The setup, the argument of CompleteAssistantKeys.
+  fixed64 setup_id = 1;
+  // One key per requested account, in request order.
+  repeated PreparedAssistantKey keys = 2;
+  // The keys' registration deadline: register them with SetAssistantKeys
+  // before this time. After it, they cannot be registered.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// CompleteAssistantKeysRequest selects the setup whose keys were registered.
+message CompleteAssistantKeysRequest {
+  // Setup from PrepareAssistantKeysResponse.
+  fixed64 setup_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// CompleteAssistantKeysResponse returns the keys the assistant now uses.
+message CompleteAssistantKeysResponse {
+  // The caller's assistant keys the assistant holds, oldest first.
+  repeated AssistantKey keys = 1;
+}
+
+// ListAssistantKeysRequest lists the assistant keys the assistant holds.
+message ListAssistantKeysRequest {}
+
+// ListAssistantKeysResponse returns the assistant keys the assistant holds.
+message ListAssistantKeysResponse {
+  // The caller's assistant keys the assistant holds, oldest first, at most
+  // one per account.
+  repeated AssistantKey keys = 1;
+}
+
+// AssistantService is the Polyester trading assistant. A user sends a
+// message, which starts a run: the assistant's answer, with the tools,
+// skills and subagents it uses. The run continues on the server when no
+// client watches it, and its events can be replayed and resumed with
+// WatchRun.
+//
+// Requests are authenticated with a session token. Every conversation, run,
+// approval and memory belongs to the authenticated user; another user's
+// resource is reported exactly as a missing one. The assistant reads the
+// user's account data with the user's own permissions, and an action that
+// changes the account, such as placing an order, runs only after the user
+// approves it with DecideApproval.
+service AssistantService {
+  option (polyester.api.docs_group) = "assistant";
+
+  // SendMessage records the caller's message and starts a run that answers
+  // it. It returns once the run is recorded; follow the run with WatchRun. A
+  // conversation runs one run at a time. It is idempotent per caller and key:
+  // repeat the request unchanged to resolve an unknown outcome.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: CONVERSATION_NOT_FOUND.
+  // - FAILED_PRECONDITION: RUN_ACTIVE; nothing is recorded.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original run stands.
+  // - RESOURCE_EXHAUSTED: USAGE_LIMIT_REACHED; retry later.
+  // - UNAVAILABLE, DEADLINE_EXCEEDED: SERVICE_UNAVAILABLE or an unknown
+  //   outcome; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Send Message"
+      description: "Send a message to the assistant and start the run that answers it."
+      tags: "Assistant Service"
+    };
+  }
+
+  // WatchRun streams a run's events in seq order: first the recorded events
+  // after after_seq, then new events as they are recorded. The stream ends
+  // after the run's last event, RunCompleted or RunFailed; watching an ended
+  // run replays its events and ends. The server may also end the stream
+  // early, for example during maintenance: reconnect with the seq of the last
+  // event received to continue without gaps or repeats. Watching does not
+  // keep a run alive, and a run continues when nobody watches it.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: RUN_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; reconnect with the last seq.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Watch Run"
+      description: "Stream a run's events from a given position, then live until the run ends."
+      tags: "Assistant Service"
+    };
+  }
+
+  // CancelRun asks an active run to stop. It returns once the request is
+  // recorded; the run then ends with RunFailed and category CANCELLED, and its
+  // subagents stop too. A pending approval of the run expires. Cancelling a
+  // run that already ended changes nothing and succeeds.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: RUN_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Run"
+      description: "Ask an active run to stop."
+      tags: "Assistant Service"
+    };
+  }
+
+  // DecideApproval approves or rejects a pending approval request of one of
+  // the caller's runs. An approved action runs exactly as its summary says,
+  // at most once. Repeating the same decision returns the recorded state.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: APPROVAL_NOT_FOUND.
+  // - FAILED_PRECONDITION: APPROVAL_ALREADY_DECIDED or APPROVAL_EXPIRED.
+  // - UNAVAILABLE, DEADLINE_EXCEEDED: SERVICE_UNAVAILABLE or an unknown
+  //   outcome; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc DecideApproval(DecideApprovalRequest) returns (DecideApprovalResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Decide Approval"
+      description: "Approve or reject an action the assistant asked to take."
+      tags: "Assistant Service"
+    };
+  }
+
+  // ListConversations lists the caller's conversations, most recently updated
+  // first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Conversations"
+      description: "List the caller's conversations, most recently updated first."
+      tags: "Assistant Service"
+    };
+  }
+
+  // ListMessages lists the messages of one of the caller's conversations,
+  // newest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - NOT_FOUND: CONVERSATION_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Messages"
+      description: "List the messages of one conversation, newest first."
+      tags: "Assistant Service"
+    };
+  }
+
+  // ListMemories lists what the assistant remembers about the caller, newest
+  // first. Each memory carries its kind: a PROFILE memory applies to every
+  // answer, the others are used when relevant to a message.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Memories"
+      description: "List what the assistant remembers about the caller, newest first."
+      tags: "Assistant Service"
+    };
+  }
+
+  // DeleteMemory makes the assistant forget one memory. Later runs no longer
+  // use it. Deleting a memory that is already deleted succeeds.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: MEMORY_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc DeleteMemory(DeleteMemoryRequest) returns (DeleteMemoryResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Memory"
+      description: "Make the assistant forget one memory."
+      tags: "Assistant Service"
+    };
+  }
+
+  // PrepareAssistantKeys starts setting up the keys the assistant acts with:
+  // it generates one Ed25519 key pair per account, keeps the private keys,
+  // and returns the public keys with their registration proofs and deadline.
+  // Then register them, with the policy of each account, in one
+  // SetAssistantKeys request with a fresh step-up proof before the deadline,
+  // and call CompleteAssistantKeys. The step-up proof goes to
+  // SetAssistantKeys only, never to the assistant. A setup replaces no key
+  // until it is registered.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or an account named twice.
+  // - RESOURCE_EXHAUSTED: USAGE_LIMIT_REACHED; too many setups are pending.
+  //   Complete one or wait until it expires.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc PrepareAssistantKeys(PrepareAssistantKeysRequest) returns (PrepareAssistantKeysResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Prepare Assistant Keys"
+      description: "Generate the assistant's key pairs for the given accounts and return their public keys to register."
+      tags: "Assistant Service"
+    };
+  }
+
+  // CompleteAssistantKeys finishes a setup once SetAssistantKeys registered
+  // its public keys: the assistant starts using them, and drops the keys the
+  // registration replaced or left out. Completing a completed setup returns
+  // the keys again.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: KEY_SETUP_NOT_FOUND.
+  // - FAILED_PRECONDITION: KEY_SETUP_NOT_REGISTERED; nothing changed.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CompleteAssistantKeys(CompleteAssistantKeysRequest) returns (CompleteAssistantKeysResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Complete Assistant Keys"
+      description: "Start using the keys of a setup once their registration succeeded."
+      tags: "Assistant Service"
+    };
+  }
+
+  // ListAssistantKeys lists the assistant keys the assistant holds for the
+  // caller, at most one per account. An account without one has no account
+  // tools in a conversation. To turn the assistant's access off, revoke the
+  // keys with DeleteAssistantKeys; the assistant then stops using them.
+  //
+  // Errors:
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListAssistantKeys(ListAssistantKeysRequest) returns (ListAssistantKeysResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Assistant Keys"
+      description: "List the keys the assistant holds for the caller's accounts."
+      tags: "Assistant Service"
+    };
+  }
+}

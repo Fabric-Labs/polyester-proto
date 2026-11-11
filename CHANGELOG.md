@@ -3,6 +3,52 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-11 — develop-20261111T051900Z
+
+API-key account permissions, single-use WebSocket login nonces, timed SBE order requests, a version endpoint, pausable auto-withdraw rules, QuickSwap broker payouts and referrals, and the assistant and price alerts on devnet.
+
+- [2026-11-08T1229Z-ai-v1](changes/2026-11-08T1229Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-08T1609Z-auth-v1](changes/2026-11-08T1609Z-auth-v1.md): added `auth.v1.SocialVerificationService`.
+- [2026-11-08T1621Z-ai-v1](changes/2026-11-08T1621Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-08T2042Z-auth-v1](changes/2026-11-08T2042Z-auth-v1.md): added `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `auth.v1.SubaccountService`.
+- [2026-11-08T2050Z-alerts-v1](changes/2026-11-08T2050Z-alerts-v1.md): changed `alerts.v1.PriceAlertService`, `ai.v1.AssistantService`. **Breaking.**
+- [2026-11-08T2356Z-polyester-ratelimit-v1](changes/2026-11-08T2356Z-polyester-ratelimit-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-09T0500Z-alerts-v1](changes/2026-11-09T0500Z-alerts-v1.md): changed `alerts.v1.PriceAlertService`.
+- [2026-11-09T0920Z-ai-v1](changes/2026-11-09T0920Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T0955Z-ai-v1](changes/2026-11-09T0955Z-ai-v1.md): changed `ai.v1.AssistantService`, `auth.v1.ApiKeyService`. **Breaking.**
+- [2026-11-09T1120Z-ai-v1](changes/2026-11-09T1120Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1205Z-marketdata-v1](changes/2026-11-09T1205Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-09T1239Z-ai-v1](changes/2026-11-09T1239Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1242Z-ai-v1](changes/2026-11-09T1242Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-09T1411Z-ai-v1](changes/2026-11-09T1411Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1415Z-ai-v1](changes/2026-11-09T1415Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1517Z-ai-v1](changes/2026-11-09T1517Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T2154Z-ai-v1](changes/2026-11-09T2154Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0036Z-auth-v1](changes/2026-11-10T0036Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `auth.v1.AddressBookService`, `chain.deposit.v1.DepositAddressService`, `chain.guard.v1.GuardSignerService`. **Breaking.**
+- [2026-11-10T0104Z-ai-v1](changes/2026-11-10T0104Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0127Z-system-v1](changes/2026-11-10T0127Z-system-v1.md): added `system.v1.SystemService`.
+- [2026-11-10T0209Z-auth-v1](changes/2026-11-10T0209Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-10T0328Z-ai-v1](changes/2026-11-10T0328Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-10T0423Z-ai-v1](changes/2026-11-10T0423Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0426Z-swap-quickswap-v1](changes/2026-11-10T0426Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-10T0455Z-orders-v1](changes/2026-11-10T0455Z-orders-v1.md): added `orders.v1.OrdersService`.
+- [2026-11-10T0524Z-ai-v1](changes/2026-11-10T0524Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-10T0615Z-swap-quickswap-v1](changes/2026-11-10T0615Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T0651Z-swap-quickswap-v1](changes/2026-11-10T0651Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-10T0816Z-swap-quickswap-v1](changes/2026-11-10T0816Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T0915Z-chain-withdraw-v1](changes/2026-11-10T0915Z-chain-withdraw-v1.md): removed `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`. **Breaking.**
+- [2026-11-10T1157Z-swap-quickswap-v1](changes/2026-11-10T1157Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-10T1305Z-swap-quickswap-v1](changes/2026-11-10T1305Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T1402Z-chain-withdraw-v1](changes/2026-11-10T1402Z-chain-withdraw-v1.md): added `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1511Z-swap-quickswap-v1](changes/2026-11-10T1511Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`, `chain.lifecycle.v1.LifecycleReadService`.
+- [2026-11-10T1542Z-chain-withdraw-v1](changes/2026-11-10T1542Z-chain-withdraw-v1.md): added `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1744Z-ledger-v1](changes/2026-11-10T1744Z-ledger-v1.md): added `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`.
+- [2026-11-10T1824Z-swap-quickswap-v1](changes/2026-11-10T1824Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T1933Z-chain-lifecycle-v1](changes/2026-11-10T1933Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1949Z-chain-withdraw-v1](changes/2026-11-10T1949Z-chain-withdraw-v1.md): changed `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`.
+- [2026-11-10T2232Z-orders-v1](changes/2026-11-10T2232Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-11T0411Z-swap-quickswap-v1](changes/2026-11-11T0411Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapReferralService`.
+
 ## 2026-11-10 — develop-20261110T055512Z
 
 API keys read account data with granular permissions, internal transfer lookup with flow IDs, network memo requirements, broker vault balances, cross-device reward acknowledgements and path and body ID mismatch errors.
