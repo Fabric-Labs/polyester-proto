@@ -3,6 +3,105 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-11 — develop-20261111T051900Z
+
+API-key account permissions, single-use WebSocket login nonces, timed SBE order requests, a version endpoint, pausable auto-withdraw rules, QuickSwap broker payouts and referrals, and the assistant and price alerts on devnet.
+
+- [2026-11-08T1229Z-ai-v1](changes/2026-11-08T1229Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-08T1609Z-auth-v1](changes/2026-11-08T1609Z-auth-v1.md): added `auth.v1.SocialVerificationService`.
+- [2026-11-08T1621Z-ai-v1](changes/2026-11-08T1621Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-08T2042Z-auth-v1](changes/2026-11-08T2042Z-auth-v1.md): added `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `auth.v1.SubaccountService`.
+- [2026-11-08T2050Z-alerts-v1](changes/2026-11-08T2050Z-alerts-v1.md): changed `alerts.v1.PriceAlertService`, `ai.v1.AssistantService`. **Breaking.**
+- [2026-11-08T2356Z-polyester-ratelimit-v1](changes/2026-11-08T2356Z-polyester-ratelimit-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-09T0500Z-alerts-v1](changes/2026-11-09T0500Z-alerts-v1.md): changed `alerts.v1.PriceAlertService`.
+- [2026-11-09T0920Z-ai-v1](changes/2026-11-09T0920Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T0955Z-ai-v1](changes/2026-11-09T0955Z-ai-v1.md): changed `ai.v1.AssistantService`, `auth.v1.ApiKeyService`. **Breaking.**
+- [2026-11-09T1120Z-ai-v1](changes/2026-11-09T1120Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1205Z-marketdata-v1](changes/2026-11-09T1205Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-09T1239Z-ai-v1](changes/2026-11-09T1239Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1242Z-ai-v1](changes/2026-11-09T1242Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-09T1411Z-ai-v1](changes/2026-11-09T1411Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1415Z-ai-v1](changes/2026-11-09T1415Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T1517Z-ai-v1](changes/2026-11-09T1517Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-09T2154Z-ai-v1](changes/2026-11-09T2154Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0036Z-auth-v1](changes/2026-11-10T0036Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `auth.v1.AddressBookService`, `chain.deposit.v1.DepositAddressService`, `chain.guard.v1.GuardSignerService`. **Breaking.**
+- [2026-11-10T0104Z-ai-v1](changes/2026-11-10T0104Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0127Z-system-v1](changes/2026-11-10T0127Z-system-v1.md): added `system.v1.SystemService`.
+- [2026-11-10T0209Z-auth-v1](changes/2026-11-10T0209Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-10T0328Z-ai-v1](changes/2026-11-10T0328Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-10T0423Z-ai-v1](changes/2026-11-10T0423Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T0426Z-swap-quickswap-v1](changes/2026-11-10T0426Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-10T0455Z-orders-v1](changes/2026-11-10T0455Z-orders-v1.md): added `orders.v1.OrdersService`.
+- [2026-11-10T0524Z-ai-v1](changes/2026-11-10T0524Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-10T0615Z-swap-quickswap-v1](changes/2026-11-10T0615Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T0651Z-swap-quickswap-v1](changes/2026-11-10T0651Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-10T0816Z-swap-quickswap-v1](changes/2026-11-10T0816Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T0915Z-chain-withdraw-v1](changes/2026-11-10T0915Z-chain-withdraw-v1.md): removed `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`. **Breaking.**
+- [2026-11-10T1157Z-swap-quickswap-v1](changes/2026-11-10T1157Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-10T1305Z-swap-quickswap-v1](changes/2026-11-10T1305Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T1402Z-chain-withdraw-v1](changes/2026-11-10T1402Z-chain-withdraw-v1.md): added `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1511Z-swap-quickswap-v1](changes/2026-11-10T1511Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`, `chain.lifecycle.v1.LifecycleReadService`.
+- [2026-11-10T1542Z-chain-withdraw-v1](changes/2026-11-10T1542Z-chain-withdraw-v1.md): added `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1744Z-ledger-v1](changes/2026-11-10T1744Z-ledger-v1.md): added `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`.
+- [2026-11-10T1824Z-swap-quickswap-v1](changes/2026-11-10T1824Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-10T1933Z-chain-lifecycle-v1](changes/2026-11-10T1933Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`.
+- [2026-11-10T1949Z-chain-withdraw-v1](changes/2026-11-10T1949Z-chain-withdraw-v1.md): changed `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`.
+- [2026-11-10T2232Z-orders-v1](changes/2026-11-10T2232Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-11T0411Z-swap-quickswap-v1](changes/2026-11-11T0411Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapReferralService`.
+
+## 2026-11-10 — develop-20261110T055512Z
+
+API keys read account data with granular permissions, internal transfer lookup with flow IDs, network memo requirements, broker vault balances, cross-device reward acknowledgements and path and body ID mismatch errors.
+
+- [2026-11-08T2129Z-orders-v1](changes/2026-11-08T2129Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-08T2135Z-transfer-v1](changes/2026-11-08T2135Z-transfer-v1.md): changed `transfer.v1.InternalTransferService`, `chain.withdraw.v1.WithdrawService`, `claims.v1.ClaimsService`, `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`, `auth.v1.PolicyService`.
+- [2026-11-08T2157Z-claims-v1](changes/2026-11-08T2157Z-claims-v1.md): changed `claims.v1.ClaimsService`.
+- [2026-11-08T2222Z-orders-v1](changes/2026-11-08T2222Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-08T2232Z-marketdata-v1](changes/2026-11-08T2232Z-marketdata-v1.md): changed `marketdata.v1.HeatmapService`.
+- [2026-11-08T2245Z-auth-v1](changes/2026-11-08T2245Z-auth-v1.md): changed `auth.v1.MFAService`, `auth.v1.SubaccountService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`. **Breaking.**
+- [2026-11-08T2305Z-auth-v1](changes/2026-11-08T2305Z-auth-v1.md): changed `auth.v1.PolicyService`.
+- [2026-11-09T0345Z-orders-v1](changes/2026-11-09T0345Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-09T0958Z-ledger-v1](changes/2026-11-09T0958Z-ledger-v1.md): changed `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-09T1438Z-rewards-v1](changes/2026-11-09T1438Z-rewards-v1.md): added `rewards.v1.RewardCampaignService`.
+- [2026-11-09T1448Z-auth-v1](changes/2026-11-09T1448Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `auth.v1.SubaccountRoleService`, `auth.v1.SocialVerificationService`, `vip.v1.VIPService`.
+- [2026-11-09T1454Z-transfer-v1](changes/2026-11-09T1454Z-transfer-v1.md): added `transfer.v1.InternalTransferService`.
+- [2026-11-09T1511Z-chain-zipper-v1](changes/2026-11-09T1511Z-chain-zipper-v1.md): added `chain.zipper.v1.ZipperService`, `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-09T1632Z-swap-quickswap-v1](changes/2026-11-09T1632Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-09T1817Z-auth-v1](changes/2026-11-09T1817Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.ResolveService`, `chain.withdraw.v1.WithdrawService`, `claims.v1.ClaimsService`, `checkpoints.v1.CheckpointService`, `rewards.v1.RewardCampaignService`. **Breaking.**
+- [2026-11-09T2102Z-rewards-v1](changes/2026-11-09T2102Z-rewards-v1.md): changed `rewards.v1.RewardCampaignService`. **Breaking.**
+- [2026-11-10T0200Z-swap-quickswap-v1](changes/2026-11-10T0200Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+
+## 2026-11-08 — develop-20261108T161328Z
+
+Received transfers in account flow lists, a trading WebSocket cancel-all-after command, per-request receive windows and per-key replay capacity.
+
+- [2026-11-07T1512Z-chain-lifecycle-v1](changes/2026-11-07T1512Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`. **Breaking.**
+- [2026-11-07T2151Z-tradews-v1](changes/2026-11-07T2151Z-tradews-v1.md): added `orders.v1.OrdersService`.
+- [2026-11-07T2154Z-orders-v1](changes/2026-11-07T2154Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.AuthService`.
+- [2026-11-08T0007Z-triggers-v1](changes/2026-11-08T0007Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`.
+- [2026-11-08T0338Z-auth-v1](changes/2026-11-08T0338Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `chain.guard.v1.GuardSignerService`, `swap.v1.SwapService`, `transfer.v1.InternalTransferService`.
+
+## 2026-11-07 — develop-20261107T200655Z
+
+Uniform request-size and rate-limit problems, editable changelog posts, QuickSwap small-amount outcomes and a wallet-already-linked sign-in error.
+
+- [2026-11-04T1214Z-chain-deposit-v1](changes/2026-11-04T1214Z-chain-deposit-v1.md): changed `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.guard.v1.GuardSignerService`, `swap.v1.SwapService`, `swap.quickswap.v1.QuickSwapService`, `transfer.v1.InternalTransferService`, `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`, `fees.v1.FeeService`, `checkpoints.v1.CheckpointService`. **Breaking.**
+- [2026-11-04T1630Z-ledger-read-v1](changes/2026-11-04T1630Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`. **Breaking.**
+- [2026-11-04T1633Z-triggers-v1](changes/2026-11-04T1633Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-05T1045Z-auth-v1](changes/2026-11-05T1045Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.AddressBookService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.SocialVerificationService`, `auth.v1.SubaccountService`. **Breaking.**
+- [2026-11-05T1248Z-chain-withdraw-v1](changes/2026-11-05T1248Z-chain-withdraw-v1.md): changed `chain.withdraw.v1.WithdrawService`, `transfer.v1.InternalTransferService`, `auth.v1.PolicyService`.
+- [2026-11-05T1252Z-auth-v1](changes/2026-11-05T1252Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.SubaccountRoleService`, `vip.v1.VIPService`, `ratelimit.v1.RateLimitService`, `changelog.v1.ChangelogService`. **Breaking.**
+- [2026-11-05T1327Z-orders-v1](changes/2026-11-05T1327Z-orders-v1.md): changed `orders.v1.OrdersReadService`, `orders.v1.OrdersService`.
+- [2026-11-05T1425Z-orders-v1](changes/2026-11-05T1425Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.AuthService`, `auth.v1.SubaccountRoleService`, `vip.v1.VIPService`, `ratelimit.v1.RateLimitService`, `changelog.v1.ChangelogService`. **Breaking.**
+- [2026-11-05T1442Z-swap-quickswap-v1](changes/2026-11-05T1442Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2125Z-swap-quickswap-v1](changes/2026-11-05T2125Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2145Z-marketoverview-v1](changes/2026-11-05T2145Z-marketoverview-v1.md): changed `marketoverview.v1.MarketOverviewService`.
+- [2026-11-05T2208Z-swap-quickswap-v1](changes/2026-11-05T2208Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-05T2224Z-changelog-v1](changes/2026-11-05T2224Z-changelog-v1.md): changed `changelog.v1.ChangelogService`.
+- [2026-11-05T2300Z-swap-quickswap-v1](changes/2026-11-05T2300Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-06T0002Z-triggers-v1](changes/2026-11-06T0002Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-07T1018Z-auth-v1](changes/2026-11-07T1018Z-auth-v1.md): changed `auth.v1.AuthService`.
+
 ## 2026-11-04 — develop-20261104T112923Z
 
 Fee reserve rates and breakdown, removal of the holds list, canonical REST problem types and stricter trigger checks.

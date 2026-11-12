@@ -57,10 +57,62 @@
           "KEY_EXPIRED",
           "KEY_DISABLED",
           "IP_NOT_ALLOWED",
-          "API_KEY_NOT_ACCEPTED"
+          "API_KEY_NOT_ACCEPTED",
+          "WALLET_ALREADY_LINKED",
+          "RECV_WINDOW_INVALID",
+          "REPLAY_CAPACITY_EXHAUSTED",
+          "PATH_BODY_ID_MISMATCH",
+          "ASSISTANT_KEY_ACTION_NOT_ALLOWED",
+          "ASSISTANT_KEY_PROOF_INVALID",
+          "ASSISTANT_KEY_REGISTRATION_EXPIRED",
+          "ASSISTANT_KEY_DEADLINE_TOO_FAR",
+          "REPLAY_DETECTED"
         ],
         "title": "AuthErrorCode",
         "type": "string"
+      },
+      "auth.v1.ConfirmSocialVerificationRequest": {
+        "additionalProperties": false,
+        "description": "ConfirmSocialVerificationRequest links the provider account that submitted\n the caller's challenge code.\nonly telegram linking needs a confirmation",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/auth.v1.SocialProvider",
+            "description": "Provider account to confirm. Only TELEGRAM is accepted.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "provider"
+          },
+          "providerUserId": {
+            "description": "Provider user ID the user confirms, as provider_user_id of the verification\n in AWAITING_CONFIRMATION. The request fails when it is not the\n account that submitted the code, so the user links exactly the account\n they were shown.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "title": "provider_user_id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "providerUserId"
+        ],
+        "title": "ConfirmSocialVerificationRequest",
+        "type": "object"
+      },
+      "auth.v1.ConfirmSocialVerificationResponse": {
+        "additionalProperties": false,
+        "description": "ConfirmSocialVerificationResponse returns the verification after the\n provider account was linked.",
+        "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/auth.v1.SocialVerification",
+            "description": "Current verification state, VERIFIED.",
+            "title": "verification"
+          }
+        },
+        "title": "ConfirmSocialVerificationResponse",
+        "type": "object"
       },
       "auth.v1.GetSocialVerificationResponse": {
         "additionalProperties": false,
@@ -80,7 +132,8 @@
         "enum": [
           "UNSPECIFIED",
           "TWITTER",
-          "DISCORD"
+          "DISCORD",
+          "TELEGRAM"
         ],
         "title": "SocialProvider",
         "type": "string"
@@ -96,13 +149,18 @@
             "type": "integer"
           },
           "challengeCode": {
-            "description": "Challenge code the user must submit according to the verification method.\n Discord codes are returned only when a challenge is issued. Codes expire\n after 15 minutes.",
+            "description": "Challenge code the user must submit according to the verification method.\n Discord and Telegram codes are returned only when a challenge is issued.\n Codes expire after 15 minutes.",
             "title": "challenge_code",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Provider display name of the account being verified, for showing it to the\n user. Telegram only: the account's name, set once the code is submitted.\n Empty for other providers.",
+            "title": "display_name",
             "type": "string"
           },
           "errorCode": {
             "$ref": "#/components/schemas/auth.v1.AuthErrorCode",
-            "description": "Stable machine-readable error code for the current failed verification.\n AUTH_UNSPECIFIED when no typed error applies.",
+            "description": "Stable machine-readable error code for the current failed verification.\n UNSPECIFIED when no typed error applies.",
             "title": "error_code"
           },
           "expiresAt": {
@@ -111,18 +169,15 @@
             "title": "expires_at"
           },
           "handle": {
-            "description": "Provider handle being verified. Handles are returned lowercase and without\n a leading \"@\".",
+            "description": "Provider handle being verified. Handles are returned lowercase and without\n a leading \"@\". For Telegram, the username of the account that submitted the\n code; empty when that account has no username.",
             "title": "handle",
             "type": "string"
           },
           "id": {
-            "description": "Verification identifier.",
-            "format": "int64",
+            "description": "Verification identifier.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
           },
           "lastError": {
             "description": "Last verification error, if the most recent check failed. Empty when there\n is no recorded error.",
@@ -140,7 +195,7 @@
             "title": "provider"
           },
           "providerUserId": {
-            "description": "Stable provider-side user identifier. Empty until verification succeeds.",
+            "description": "Stable provider-side user identifier. Empty until verification succeeds,\n except for Telegram: while the status is AWAITING_CONFIRMATION, it is\n the numeric user ID of the Telegram account that submitted the code, the\n value ConfirmSocialVerification takes.",
             "title": "provider_user_id",
             "type": "string"
           },
@@ -161,7 +216,7 @@
           },
           "verifiedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Time in UTC when verification succeeded. Empty until status is STATUS_VERIFIED.",
+            "description": "Time in UTC when verification succeeded. Empty until status is VERIFIED.",
             "title": "verified_at"
           }
         },
@@ -223,24 +278,25 @@
           "VERIFIED",
           "FAILED",
           "EXPIRED",
-          "CANCELLED"
+          "CANCELLED",
+          "AWAITING_CONFIRMATION"
         ],
         "title": "SocialVerificationStatus",
         "type": "string"
       },
       "auth.v1.StartSocialVerificationRequest": {
         "additionalProperties": false,
-        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
+        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntelegram linking uses the direct message method\ntelegram linking does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
         "properties": {
           "handle": {
-            "description": "Provider handle the user claims. Required for X/Twitter and omitted for\n Discord, where the authenticated bot supplies the provider identity.\n A leading \"@\" is accepted and removed from X/Twitter handles.\nhandle must not contain '\u003c' or '\u003e'",
+            "description": "Provider handle the user claims. Required for X/Twitter and omitted for\n Discord and Telegram, where the provider bot supplies the provider identity.\n A leading \"@\" is accepted and removed from X/Twitter handles.\nhandle must not contain '\u003c' or '\u003e'",
             "maxLength": 64,
             "title": "handle",
             "type": "string"
           },
           "method": {
             "$ref": "#/components/schemas/auth.v1.SocialVerificationMethod",
-            "description": "Verification method. If unspecified, profile verification is used for\n X/Twitter and channel verification is used for Discord.",
+            "description": "Verification method. If unspecified, profile verification is used for\n X/Twitter, channel verification for Discord and direct message\n verification for Telegram.",
             "title": "method"
           },
           "provider": {
@@ -264,6 +320,11 @@
         "additionalProperties": false,
         "description": "Response returned after starting social account verification.",
         "properties": {
+          "actionUrl": {
+            "description": "Link that completes the user action, when the provider has one. Telegram:\n opening it starts a chat with the Polyester bot that submits the code.\n Empty for other providers.",
+            "title": "action_url",
+            "type": "string"
+          },
           "challengeCode": {
             "description": "Newly issued challenge code the user must submit according to the\n verification method.",
             "title": "challenge_code",
@@ -281,6 +342,40 @@
           }
         },
         "title": "StartSocialVerificationResponse",
+        "type": "object"
+      },
+      "auth.v1.UnlinkSocialAccountRequest": {
+        "additionalProperties": false,
+        "description": "UnlinkSocialAccountRequest removes the caller's linked provider account, or\n cancels a link in progress.\nonly a telegram account can be unlinked",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/auth.v1.SocialProvider",
+            "description": "Provider account to unlink. Only TELEGRAM is accepted.",
+            "not": {
+              "enum": [
+                0
+              ]
+            },
+            "title": "provider"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "UnlinkSocialAccountRequest",
+        "type": "object"
+      },
+      "auth.v1.UnlinkSocialAccountResponse": {
+        "additionalProperties": false,
+        "description": "UnlinkSocialAccountResponse returns the verification after unlinking.",
+        "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/auth.v1.SocialVerification",
+            "description": "Current verification state, CANCELLED. Absent when no verification\n was ever started for the provider.",
+            "title": "verification"
+          }
+        },
+        "title": "UnlinkSocialAccountResponse",
         "type": "object"
       },
       "google.protobuf.Timestamp": {
@@ -315,7 +410,7 @@
   "paths": {
     "/v1/auth/social/verification": {
       "get": {
-        "description": "Retrieve current social verification status and any typed failure code for the caller.",
+        "description": "Retrieve current social verification status and any typed failure code for the caller. An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main account; it reads the status only: provider, method, handle, status, and verification time.",
         "operationId": "SocialVerificationService_GetSocialVerification",
         "parameters": [
           {
@@ -344,6 +439,7 @@
                   "verification": {
                     "attempts": 1,
                     "challengeCode": "POLY-VERIFY-7K2M",
+                    "displayName": "value",
                     "errorCode": "USERNAME_INVALID",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "handle": "polyester_trader",
@@ -371,7 +467,8 @@
           "Auth Service"
         ],
         "x-poly-authentication-methods": [
-          "session_token"
+          "session_token",
+          "api_key"
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "auth.v1",
@@ -380,9 +477,77 @@
         "x-poly-response-type": "auth.v1.GetSocialVerificationResponse"
       }
     },
+    "/v1/auth/social/verification:confirm": {
+      "post": {
+        "description": "Link the Telegram account that submitted the caller's challenge code, after the user confirmed it. Requires enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header. MFA_NOT_ENROLLED means enroll MFA first. SOCIAL_VERIFICATION_EXPIRED means start a new challenge. SOCIAL_VERIFICATION_INVALID_STATE means no matching account awaits confirmation. SOCIAL_ACCOUNT_ALREADY_LINKED means the account is linked to another Polyester account.",
+        "operationId": "SocialVerificationService_ConfirmSocialVerification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "provider": "TELEGRAM",
+                "providerUserId": "7654321098"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.ConfirmSocialVerificationRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.ConfirmSocialVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "verification": {
+                    "attempts": 1,
+                    "challengeCode": "POLY-VERIFY-7K2M",
+                    "displayName": "value",
+                    "errorCode": "USERNAME_INVALID",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "handle": "polyester_trader",
+                    "id": "6ibQM6ok8k",
+                    "lastError": "The profile could not be verified.",
+                    "method": "PROFILE",
+                    "provider": "TWITTER",
+                    "providerUserId": "123456789012345678",
+                    "requestedAt": "2025-01-01T00:00:00Z",
+                    "status": "PENDING_USER_ACTION",
+                    "updatedAt": "2025-01-01T00:00:00Z",
+                    "verifiedAt": "2025-01-01T00:00:00Z"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.ConfirmSocialVerificationResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Confirm Social Verification",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "fresh_step_up",
+        "x-poly-request-type": "auth.v1.ConfirmSocialVerificationRequest",
+        "x-poly-response-type": "auth.v1.ConfirmSocialVerificationResponse"
+      }
+    },
     "/v1/auth/social/verification:ready": {
       "post": {
-        "description": "Mark verification as ready and request a provider account check. AUTH_SOCIAL_VERIFICATION_EXPIRED means start a new challenge. AUTH_SOCIAL_VERIFICATION_INVALID_STATE means Ready is not valid in the current state; use GetSocialVerification for status.",
+        "description": "Mark verification as ready and request a provider account check. SOCIAL_VERIFICATION_EXPIRED means start a new challenge. SOCIAL_VERIFICATION_INVALID_STATE means Ready is not valid in the current state; use GetSocialVerification for status.",
         "operationId": "SocialVerificationService_SocialVerificationReady",
         "requestBody": {
           "content": {
@@ -410,6 +575,7 @@
                   "verification": {
                     "attempts": 1,
                     "challengeCode": "POLY-VERIFY-7K2M",
+                    "displayName": "value",
                     "errorCode": "USERNAME_INVALID",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "handle": "polyester_trader",
@@ -475,11 +641,13 @@
             "content": {
               "application/json": {
                 "example": {
+                  "actionUrl": "value",
                   "challengeCode": "POLY-VERIFY-7K2M",
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "verification": {
                     "attempts": 1,
                     "challengeCode": "POLY-VERIFY-7K2M",
+                    "displayName": "value",
                     "errorCode": "USERNAME_INVALID",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "handle": "polyester_trader",
@@ -514,6 +682,73 @@
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "auth.v1.StartSocialVerificationRequest",
         "x-poly-response-type": "auth.v1.StartSocialVerificationResponse"
+      }
+    },
+    "/v1/auth/social/verification:unlink": {
+      "post": {
+        "description": "Unlink the caller's Telegram account, or cancel a Telegram link in progress. Repeating it changes nothing.",
+        "operationId": "SocialVerificationService_UnlinkSocialAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "provider": "TELEGRAM"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.UnlinkSocialAccountRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.UnlinkSocialAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "verification": {
+                    "attempts": 1,
+                    "challengeCode": "POLY-VERIFY-7K2M",
+                    "displayName": "value",
+                    "errorCode": "USERNAME_INVALID",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "handle": "polyester_trader",
+                    "id": "6ibQM6ok8k",
+                    "lastError": "The profile could not be verified.",
+                    "method": "PROFILE",
+                    "provider": "TWITTER",
+                    "providerUserId": "123456789012345678",
+                    "requestedAt": "2025-01-01T00:00:00Z",
+                    "status": "PENDING_USER_ACTION",
+                    "updatedAt": "2025-01-01T00:00:00Z",
+                    "verifiedAt": "2025-01-01T00:00:00Z"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.UnlinkSocialAccountResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Unlink Social Account",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "auth.v1.UnlinkSocialAccountRequest",
+        "x-poly-response-type": "auth.v1.UnlinkSocialAccountResponse"
       }
     }
   },

@@ -3,6 +3,7 @@ syntax = "proto3";
 package swap.quickswap.v1;
 
 import "buf/validate/validate.proto";
+import "chain/withdraw/v1/auto_withdraw.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
@@ -13,7 +14,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "QuickSwap Broker"
-      description: "Self-service administration of a QuickSwap broker org: affiliate vaults, API keys and members, and reporting on its QuickSwaps and fees."
+      description: "Self-service administration of a QuickSwap broker org: affiliate vaults, API keys and members, reporting on its QuickSwaps and fees, and its vaults' payouts."
     }
   ]
 };
@@ -23,9 +24,12 @@ option (gnostic.openapi.v3.document) = {
 enum BrokerRole {
   // No role; rejected in requests and never returned.
   BROKER_ROLE_UNSPECIFIED = 0;
-  // Everything, including transferring ownership. Exactly one per broker.
+  // Everything, including withdrawals, payout settings and transferring
+  // ownership. Exactly one per broker.
   OWNER = 1;
-  // Everything except changing the Owner or transferring ownership.
+  // Everything except withdrawals, payout settings, changing the Owner and
+  // transferring ownership: only the Owner and Finance withdraw or change
+  // payout settings.
   ADMIN = 2;
   // Internal transfers, withdrawals and payout settings.
   FINANCE = 3;
@@ -412,11 +416,12 @@ message ListVaultsRequest {
   // Maximum number of vaults to return; 0 means 100, at most 200.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 200];
   // Opaque keyset cursor from a previous next_page_token, exclusive, bound to
-  // the broker and ordered by ascending account_id. Empty for the first page.
+  // the broker and the list order. Empty for the first page.
   string page_token = 3 [(buf.validate.field).string.max_len = 64];
 }
 
-// ListVaultsResponse lists vaults in ascending account_id order.
+// ListVaultsResponse lists vaults in a stable server-defined order, the
+// same on every page; it does not follow the public account_id values.
 message ListVaultsResponse {
   // The vaults.
   repeated AffiliateVault vaults = 1;
@@ -505,7 +510,8 @@ message ListQuickSwapsRequest {
   // Broker name. A broker API key may name only its own broker.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
   // Only QuickSwaps whose fees credit this vault: an affiliate vault they
-  // name, or the default vault when they set a broker fee. Zero for every
+  // name, or the default vault when they set a broker fee. A referral
+  // partner's commission credits no vault of the broker. Zero for every
   // QuickSwap.
   fixed64 vault_account_id = 2;
   // Only QuickSwaps in one of these statuses, at most 16; empty for every
@@ -528,15 +534,16 @@ message ListQuickSwapsRequest {
   // Maximum number of QuickSwaps to return; 0 means 100, at most 200.
   uint32 limit = 6 [(buf.validate.field).uint32.lte = 200];
   // Opaque keyset cursor from a previous next_page_token, exclusive, bound
-  // to the broker, the filters and the newest-first order by creation time,
-  // then swap_id. Reuse it with the same filters. Empty for the first page.
+  // to the broker, the filters and the list order. Reuse it with the same
+  // filters. Empty for the first page.
   string page_token = 7 [(buf.validate.field).string.max_len = 256];
 }
 
-// ListQuickSwapsResponse lists QuickSwaps newest first: by creation time,
-// then swap_id, both descending. A QuickSwap created after the first page
-// was read is not listed by later pages; every earlier one is listed exactly
-// once.
+// ListQuickSwapsResponse lists QuickSwaps newest first by creation time.
+// QuickSwaps created at the same time follow a stable server-defined order,
+// the same on every page; it does not follow swap_id. A QuickSwap created
+// after the first page was read is not listed by later pages; every earlier
+// one is listed exactly once.
 message ListQuickSwapsResponse {
   // The QuickSwaps.
   repeated QuickSwapSummary quick_swaps = 1;
@@ -557,7 +564,8 @@ enum FeeTotalsGrouping {
 }
 
 // GetFeeTotalsRequest totals the broker and affiliate fees charged to the
-// broker's QuickSwaps in a time window.
+// broker's QuickSwaps in a time window: the fees credited to the broker's
+// vaults, never a referral partner's commission.
 message GetFeeTotalsRequest {
   option (buf.validate.message).cel = {
     id: "get_fee_totals_request.window"
@@ -667,6 +675,9 @@ message FeeSplit {
   // Affiliate fees, credited to the broker's affiliate vaults, in base
   // units of 18 decimals.
   TokenAmount affiliate_fee = 4;
+  // Referral commissions, credited to referral partners rather than to a
+  // vault of the broker, in base units of 18 decimals.
+  TokenAmount referral_fee = 5;
 }
 
 // BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or
@@ -705,6 +716,470 @@ message GetBrokerStatsResponse {
   repeated BrokerStatsPeriod periods = 1;
 }
 
+// ListVaultBalancesRequest selects a broker's default and affiliate vaults.
+message ListVaultBalancesRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public vault subaccount ID. Omit to include every vault, including disabled
+  // affiliates. A root account or another broker's vault is NOT_FOUND.
+  fixed64 vault_account_id = 2;
+  // Maximum vaults, default 20, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque exclusive keyset cursor, bound to the broker and vault filter.
+  // Reuse with the same broker and vault_account_id; limit may change.
+  string page_token = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// VaultAssetBalance is the current posted balance in one asset.
+message VaultAssetBalance {
+  // Unified asset ID, including assets no longer enabled for new swaps.
+  uint32 asset_id = 1;
+  // Settled balance of the vault's Funding and Trading accounts, at 18 decimals.
+  // Pending credits are excluded. This is not a withdrawability guarantee.
+  TokenAmount amount = 2;
+  // Funds committed to pending outgoing transfers, at 18 decimals. amount
+  // still counts these funds and has NOT been reduced by pending_outgoing.
+  // amount minus pending_outgoing is the balance not yet committed to an
+  // outgoing transfer. This excludes order holds and is not a withdrawability guarantee.
+  TokenAmount pending_outgoing = 3;
+}
+
+// VaultBalance is one vault's current balance observation.
+message VaultBalance {
+  // Public vault subaccount ID.
+  fixed64 vault_account_id = 1;
+  // Asset balances in ascending asset_id order. Empty for an unfunded vault.
+  repeated VaultAssetBalance assets = 2;
+  // UTC time this vault's balance read completed. Vaults are read separately;
+  // this does not describe an atomic snapshot across vaults or pages.
+  google.protobuf.Timestamp as_of = 3;
+}
+
+// ListVaultBalancesResponse lists vaults in ascending account creation-ID
+// order, independent of their encoded public IDs. A failed balance read fails
+// the entire page; it is never represented as a zero balance.
+message ListVaultBalancesResponse {
+  // Default and affiliate vault balances, at most limit vaults.
+  repeated VaultBalance vaults = 1;
+  // Opaque exclusive keyset cursor. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// PayoutStatus is what one payout run of a broker vault came to, from the
+// run and the outcome of each of its assets.
+enum PayoutStatus {
+  // Never returned; rejected in filters.
+  PAYOUT_STATUS_UNSPECIFIED = 0;
+  // The run paid: every asset with a payable amount was withdrawn and its
+  // withdrawal completed on its destination network.
+  PAYOUT_PAID = 1;
+  // Some assets were paid and at least one failed; reason is the first
+  // failed asset's, and each step shows its own outcome.
+  PAYOUT_PARTIALLY_PAID = 2;
+  // The run is under way; stage says where.
+  PAYOUT_IN_PROGRESS = 3;
+  // Nothing was paid, and the balance stays in the vault for the next run.
+  // reason is nothing_to_pay (no asset reached its minimum), below_minimum
+  // (an amount was below the least a withdrawal on its network pays),
+  // price_unavailable (the rule has a USD minimum and no current price
+  // valued an asset) or destination_cooling_down (the destination was added
+  // to the vault's external withdraw whitelist less than 24 hours ago). Each
+  // step carries the balance evaluated, its value and the minimum it was
+  // held to.
+  PAYOUT_ROLLED_OVER = 4;
+  // Nothing was paid because the rule stopped paying, and the balance stays
+  // in the vault. reason is rule_superseded (the rule was paused, changed or
+  // replaced before the run paid), or destination_not_whitelisted,
+  // destination_invalid or authority_revoked, with which the rule paused
+  // itself (see VaultPayoutRule.pause); an Owner or Finance member resumes
+  // it.
+  PAYOUT_HELD = 5;
+  // Nothing was paid, and at least one asset's payout failed; reason is the
+  // first failure's: withdrawal_refused (refused before any funds left the
+  // vault), gateway_capacity_insufficient (the funds stay for a later run),
+  // withdrawal_released (released before it was sent; nothing left the
+  // vault) or withdrawal_failed (the withdrawal ended without paying, before
+  // or after it reached the destination network). Where the funds of a
+  // withdrawal_failed payout are now is not shown yet. The step's tx_hash,
+  // when set, is its destination-network transaction.
+  PAYOUT_FAILED = 6;
+}
+
+// PayoutStage is where an in-progress payout run stands.
+enum PayoutStage {
+  // Not in progress.
+  PAYOUT_STAGE_UNSPECIFIED = 0;
+  // Reading the vault's balances to size the payouts.
+  STAGE_PLANNING = 1;
+  // A payout is waiting to be requested or being requested.
+  STAGE_REQUESTING = 2;
+  // Every payout due was accepted; no destination-network transaction is
+  // known yet.
+  STAGE_PROCESSING = 3;
+  // A destination-network transaction is known (PayoutStep.tx_hash); the run
+  // waits for its withdrawals to complete.
+  STAGE_BROADCAST = 4;
+}
+
+// PayoutStepState is where one asset's payout in a run stands.
+enum PayoutStepState {
+  // Never returned.
+  PAYOUT_STEP_STATE_UNSPECIFIED = 0;
+  // Planned; not yet requested.
+  PAYOUT_STEP_PENDING = 1;
+  // Being requested.
+  PAYOUT_STEP_REQUESTING = 2;
+  // The withdrawal was accepted and waits to complete on its destination
+  // network.
+  PAYOUT_STEP_SUBMITTED = 3;
+  // The withdrawal completed on its destination network.
+  PAYOUT_STEP_COMPLETED = 4;
+  // The payout failed; reason says why (see PAYOUT_FAILED).
+  PAYOUT_STEP_FAILED = 5;
+  // Nothing was paid for this asset in this run; reason says why, and the
+  // balance stays in the vault.
+  PAYOUT_STEP_SKIPPED = 6;
+}
+
+// PayoutStep is one asset's payout in a run. Amounts are in base units of 18
+// decimals.
+message PayoutStep {
+  // Asset paid, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // Destination chain identifier.
+  uint64 destination_chain_id = 2;
+  // Canonical destination address.
+  string destination_address = 3;
+  // Where the payout stands.
+  PayoutStepState state = 4;
+  // Machine-readable reason of a skipped or failed step: below_minimum,
+  // price_unavailable, rule_superseded, destination_not_whitelisted,
+  // destination_cooling_down (the destination was added to the vault's
+  // external withdraw whitelist less than 24 hours ago; the balance stays
+  // for a later run), destination_invalid, authority_revoked,
+  // withdrawal_refused,
+  // gateway_capacity_insufficient, withdrawal_released (the withdrawal was
+  // released before it was sent; nothing left the vault) or
+  // withdrawal_failed (the withdrawal ended without paying; see
+  // PAYOUT_FAILED); empty otherwise.
+  string reason = 5;
+  // The vault's available balance of the asset when the run started.
+  TokenAmount available = 6;
+  // What the step pays: the available balance up to the rule's per-run
+  // ceiling, rounded down to whole units of the destination network. Zero
+  // when skipped. The network fee is taken out of it on the way.
+  TokenAmount amount = 7;
+  // The least amount the rule pays for the asset (the destination's minimum
+  // in the rule version the run executed). A withdrawal on the network may
+  // need more, as below_minimum says.
+  TokenAmount minimum = 8;
+  // USD value of the payable amount when the run started, checked against
+  // Payout.min_usd_value; unset when the rule has no USD minimum or no
+  // current price valued the asset.
+  TokenAmount value_usd = 9;
+  // Destination-network transaction hash, once known.
+  string tx_hash = 10;
+  // The network fee charged on the withdrawal. On a completed step it was
+  // taken out of amount, so the destination received amount minus this fee.
+  // On a failed step whose withdrawal the destination network's bridge
+  // rejected or failed to execute, it is the fee kept, which is not
+  // refunded. Unset until the step is final, on a skipped step or one that
+  // failed before reaching that bridge, and when the fee was not reported;
+  // never zero for unknown.
+  TokenAmount charged_network_fee = 11;
+}
+
+// Payout is one scheduled payout run of a broker vault's payout rule.
+message Payout {
+  // Public payout run ID.
+  fixed64 run_id = 1;
+  // Public sub-account ID of the vault paid out: the default vault or an
+  // affiliate vault.
+  fixed64 vault_account_id = 2;
+  // What the run came to.
+  PayoutStatus status = 3;
+  // Machine-readable reason of the status (see PayoutStatus); empty for
+  // PAYOUT_PAID and PAYOUT_IN_PROGRESS.
+  string reason = 4;
+  // Where an in-progress run stands; PAYOUT_STAGE_UNSPECIFIED otherwise.
+  PayoutStage stage = 5;
+  // The rule version the run executed.
+  uint32 rule_version = 6;
+  // The scheduled UTC slot the run belongs to.
+  google.protobuf.Timestamp scheduled_for = 7;
+  // When the run started.
+  google.protobuf.Timestamp started_at = 8;
+  // When the run ended; unset while it is in progress.
+  google.protobuf.Timestamp finished_at = 9;
+  // The rule's least USD value of one payout, in base units of 18 decimals;
+  // unset when the rule has no USD minimum.
+  TokenAmount min_usd_value = 10;
+  // One step per destination of the rule version, in asset_id order. Empty
+  // while the run is planning.
+  repeated PayoutStep steps = 11;
+}
+
+// ListPayoutsRequest lists the payout runs of the broker's vaults, newest
+// first. Every filter narrows the list.
+message ListPayoutsRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Only this vault's payouts: the default vault or an affiliate vault, as
+  // a public sub-account ID. Zero for every vault of the broker.
+  fixed64 vault_account_id = 2;
+  // Only payouts in one of these statuses, at most 6; empty for every
+  // status.
+  repeated PayoutStatus statuses = 3 [(buf.validate.field).repeated = {
+    max_items: 6
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Only runs scheduled at or after start_time; unset for no lower bound.
+  google.protobuf.Timestamp start_time = 4;
+  // Only runs scheduled before end_time (exclusive); unset for no upper
+  // bound.
+  google.protobuf.Timestamp end_time = 5;
+  // Maximum number of payouts to return; 0 means 50, at most 100.
+  uint32 limit = 6 [(buf.validate.field).uint32.lte = 100];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound
+  // to the broker, the filters and the list order. Reuse it with the same
+  // filters; limit may change. Empty for the first page.
+  string page_token = 7 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListPayoutsResponse lists payouts newest first by scheduled slot. Runs of
+// the same slot follow a stable server-defined order, the same on every
+// page; it does not follow run_id. Paging lists exactly once every run that
+// sorts after the previous page's last run when the next page is read,
+// including a run started meanwhile for an older slot. A run started
+// meanwhile for a newer slot sorts before the cursor and appears only in a
+// listing started again from the first page.
+message ListPayoutsResponse {
+  // The payouts.
+  repeated Payout payouts = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetPayoutRequest reads one payout run of the broker's vaults.
+message GetPayoutRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public payout run ID. A run of another broker's vault is
+  // indistinguishable from an unknown ID.
+  fixed64 run_id = 2 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetPayoutResponse carries the payout.
+message GetPayoutResponse {
+  // The payout run.
+  Payout payout = 1;
+}
+
+// UpcomingPayoutAsset is what a vault's next payout run would do with one
+// asset, sized from the vault's balance now. Amounts are in base units of 18
+// decimals.
+message UpcomingPayoutAsset {
+  // Asset, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // Destination chain identifier; zero when the rule has no destination for
+  // the asset.
+  uint64 destination_chain_id = 2;
+  // Canonical destination address; empty when the rule has no destination
+  // for the asset.
+  string destination_address = 3;
+  // The vault's available balance of the asset now.
+  TokenAmount available = 4;
+  // What the run would pay: the available balance up to the rule's per-run
+  // ceiling, rounded down to whole units of the destination network, or zero
+  // when it holds.
+  TokenAmount payable = 5;
+  // What would stay in the vault: available minus payable.
+  TokenAmount held_back = 6;
+  // Why held_back stays, or why nothing pays: below_minimum,
+  // price_unavailable, no_destination (the rule pays no destination for the
+  // asset), destination_cooling_down (the destination was added to the
+  // vault's external withdraw whitelist less than 24 hours ago; see
+  // payable_from), above_max (the balance above the per-run ceiling stays)
+  // or dust (less than one whole unit of the destination network stays);
+  // empty when the whole balance pays.
+  string hold_reason = 7;
+  // The least one payout of the asset pays: the destination's minimum, or
+  // the least a withdrawal on its network pays now when that is higher.
+  // Unset when the rule has no destination for the asset.
+  TokenAmount minimum = 8;
+  // USD value of what the asset would pay before its minimums, at the
+  // current price as of priced_at; unset when no current price values it or
+  // the rule has no destination for it.
+  TokenAmount value_usd = 9;
+  // When the price behind value_usd was observed; unset with it.
+  google.protobuf.Timestamp priced_at = 10;
+  // The network fee a payout to the destination is expected to be charged,
+  // from the network's latest sampled fee: an estimate, not the fee charged
+  // (PayoutStep.charged_network_fee). It is taken out of the payout. Unset
+  // when the rule has no destination for the asset or the fee is not known
+  // now.
+  TokenAmount estimated_network_fee = 11;
+  // When estimated_network_fee was sampled; unset with it.
+  google.protobuf.Timestamp estimated_network_fee_sampled_at = 12;
+  // Set only while the destination is cooling down (hold_reason
+  // destination_cooling_down): when it can be paid, 24 hours after it was
+  // added to the vault's external withdraw whitelist. Unset with that hold
+  // reason when the time is not known yet.
+  google.protobuf.Timestamp payable_from = 13;
+}
+
+// UpcomingPayout previews one vault's next payout run from its balances now.
+// It plans exactly as the run does; balances, prices and fees can change
+// before the run starts.
+message UpcomingPayout {
+  // Public sub-account ID of the vault.
+  fixed64 vault_account_id = 1;
+  // Whether the next run would pay.
+  chain.withdraw.v1.AutoWithdrawPreviewStatus status = 2;
+  // When the next run starts: its UTC slot, or, while a due slot waits to
+  // start, that slot. For an hourly rule, the next hourly check. Unset when
+  // the vault has no rule or the rule is paused.
+  google.protobuf.Timestamp next_run_at = 3;
+  // The rule's latest version; zero when the vault has no rule.
+  uint32 rule_version = 4;
+  // Set when the rule paused itself; a rule paused by a member has none.
+  chain.withdraw.v1.AutoWithdrawPause pause = 5;
+  // The rule's least USD value of one payout, in base units of 18 decimals;
+  // unset when the vault has no rule or the rule has no USD minimum.
+  TokenAmount min_usd_value = 6;
+  // One entry per destination of the rule, then per other asset with a
+  // positive balance, in asset_id order. Empty when the vault has no rule or
+  // the rule is paused.
+  repeated UpcomingPayoutAsset assets = 7;
+  // When the balances, prices and fees this preview used were read.
+  google.protobuf.Timestamp computed_at = 8;
+}
+
+// ListUpcomingPayoutsRequest previews the next payout run of the broker's
+// vaults.
+message ListUpcomingPayoutsRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public vault sub-account ID. Omit to include every vault, including
+  // disabled affiliates. A root account or another broker's vault is
+  // NOT_FOUND.
+  fixed64 vault_account_id = 2;
+  // Maximum vaults, default 20, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque exclusive keyset cursor, bound to the broker and vault filter.
+  // Reuse with the same broker and vault_account_id; limit may change.
+  string page_token = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// ListUpcomingPayoutsResponse lists vaults in ascending account creation-ID
+// order, as ListVaultBalances does. A vault whose preview cannot be read
+// fails the entire page; it is never shown as having nothing to pay.
+message ListUpcomingPayoutsResponse {
+  // One preview per vault, at most limit vaults, vaults without a rule
+  // included.
+  repeated UpcomingPayout upcoming_payouts = 1;
+  // Opaque exclusive keyset cursor. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// PayoutRuleDestination pays one asset of a vault, in kind, to one address.
+// Amounts are in base units of 18 decimals.
+message PayoutRuleDestination {
+  // Asset paid, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // Destination chain identifier.
+  uint64 destination_chain_id = 2;
+  // Canonical destination address.
+  string destination_address = 3;
+  // A run pays the asset only when the payable amount reaches this minimum.
+  TokenAmount min_amount = 4;
+  // The most one run pays the asset; the rest stays in the vault.
+  TokenAmount max_amount = 5;
+  // The least one payout to this destination can pay now: the network's
+  // withdrawal minimum, and more than its current network fee. It follows
+  // the network fee. Unset when the network or its fee is not known now.
+  TokenAmount min_floor = 6;
+  // The network fee a payout to this destination is expected to be charged,
+  // from the network's latest sampled fee: an estimate, not the fee charged
+  // (PayoutStep.charged_network_fee). Unset when it is not known now.
+  TokenAmount estimated_network_fee = 7;
+  // When estimated_network_fee was sampled; unset with it.
+  google.protobuf.Timestamp estimated_network_fee_sampled_at = 8;
+}
+
+// AssetWithoutDestination is an asset a vault holds or was ever credited
+// in, which its rule pays no destination for, so no run pays it out.
+message AssetWithoutDestination {
+  // Asset, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 1;
+  // The vault's settled balance of the asset now, as ListVaultBalances
+  // reports it, in base units of 18 decimals; zero when everything it was
+  // credited has left the vault.
+  TokenAmount balance = 2;
+}
+
+// VaultPayoutRule is one broker vault's payout rule and the assets it leaves
+// in the vault.
+message VaultPayoutRule {
+  // Public sub-account ID of the vault.
+  fixed64 vault_account_id = 1;
+  // The rule's latest version; zero when the vault has no rule, and every
+  // other rule field is then unset.
+  uint32 rule_version = 2;
+  // Whether the rule runs: it runs only while enabled and without a pause.
+  bool enabled = 3;
+  // When the rule runs.
+  chain.withdraw.v1.AutoWithdrawSchedule schedule = 4;
+  // One destination per paid asset, in asset_id order.
+  repeated PayoutRuleDestination destinations = 5;
+  // Set when the rule paused itself; an Owner or Finance member resumes it.
+  chain.withdraw.v1.AutoWithdrawPause pause = 6;
+  // Least USD value one payout of the rule pays, in base units of 18
+  // decimals; unset when the rule has no USD minimum.
+  TokenAmount min_usd_value = 7;
+  // When the rule's latest version was set.
+  google.protobuf.Timestamp updated_at = 8;
+  // Every asset the vault holds or was ever credited in that the rule pays
+  // no destination for, in asset_id order; every such asset when the vault
+  // has no rule.
+  repeated AssetWithoutDestination assets_without_destination = 9;
+}
+
+// ListVaultPayoutRulesRequest reads the payout rules of the broker's vaults.
+message ListVaultPayoutRulesRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public vault sub-account ID. Omit to include every vault, including
+  // disabled affiliates. A root account or another broker's vault is
+  // NOT_FOUND.
+  fixed64 vault_account_id = 2;
+  // Maximum vaults, default 20, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque exclusive keyset cursor, bound to the broker and vault filter.
+  // Reuse with the same broker and vault_account_id; limit may change.
+  string page_token = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// ListVaultPayoutRulesResponse lists vaults in ascending account
+// creation-ID order, as ListVaultBalances does. A failed read fails the
+// entire page.
+message ListVaultPayoutRulesResponse {
+  // One entry per vault, at most limit vaults, vaults without a rule
+  // included.
+  repeated VaultPayoutRule rules = 1;
+  // Opaque exclusive keyset cursor. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
 // QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.
 // Every request names its broker. The caller is either the broker's API key,
 // sent as a bearer token (see QuickSwapService), or a member's interactive
@@ -713,7 +1188,7 @@ message GetBrokerStatsResponse {
 //
 // | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |
 // | --- | --- | --- | --- | --- | --- | --- |
-// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |
+// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules) | yes | yes | yes | yes | yes | yes, except ListMembers |
 // | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |
 // | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |
 // | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |
@@ -742,6 +1217,20 @@ service QuickSwapBrokerService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker"
       description: "Get the broker, its limits and current usage, and the caller's role."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultBalances reads current balances for this broker's own vaults.
+  // All broker roles and the broker's API keys can read, without step-up.
+  // Errors: NOT_FOUND for an unknown broker or vault; UNAVAILABLE when a
+  // balance cannot be read. No partial page is returned on a read failure.
+  rpc ListVaultBalances(ListVaultBalancesRequest) returns (ListVaultBalancesResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault balances"
+      description: "Read current balances of a broker's default and affiliate vaults."
       tags: "QuickSwap Broker"
     };
   }
@@ -1038,8 +1527,8 @@ service QuickSwapBrokerService {
 
   // GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC
   // day or month: QuickSwaps created by status, deposits credited and
-  // payouts delivered per asset, and the service, broker and affiliate fees
-  // charged per asset.
+  // payouts delivered per asset, and the service, broker, affiliate and
+  // referral fees charged per asset.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND.
@@ -1051,6 +1540,85 @@ service QuickSwapBrokerService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker stats"
       description: "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per day or month."
+      tags: "QuickSwap Broker"
+    };
+  }
+  // ListPayouts lists the payout runs of the broker's vaults, newest first,
+  // filtered by vault, status and scheduled slot. Every broker role and the
+  // broker's API keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is
+  //   not the broker's.
+  // - INVALID_ARGUMENT: a page_token from another broker, other filters or
+  //   malformed.
+  // - UNAVAILABLE: the payouts cannot be read; retry the same request.
+  rpc ListPayouts(ListPayoutsRequest) returns (ListPayoutsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List payouts"
+      description: "List the payout runs of the broker's vaults, newest first, by vault, status and scheduled slot."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // GetPayout reads one payout run of the broker's vaults, for a detail view
+  // or a link from a ledger entry. Every broker role and the broker's API
+  // keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND, or PAYOUT_NOT_FOUND, including a run of
+  //   another broker's vault.
+  // - UNAVAILABLE: the payout cannot be read; retry the same request.
+  rpc GetPayout(GetPayoutRequest) returns (GetPayoutResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get payout"
+      description: "Read one payout run of the broker's vaults."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListUpcomingPayouts previews the next payout run of each of the
+  // broker's vaults from its balances now: when it starts, whether it would
+  // pay, and per asset what it would pay, what would stay and why, and the
+  // expected network fee. Every broker role and the broker's API keys can
+  // read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or vault filter, or
+  //   malformed.
+  // - UNAVAILABLE: a preview cannot be read; no partial page is returned.
+  rpc ListUpcomingPayouts(ListUpcomingPayoutsRequest) returns (ListUpcomingPayoutsResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List upcoming payouts"
+      description: "Preview the next payout run of each of the broker's vaults from its balances now."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultPayoutRules reads the payout rule of each of the broker's
+  // vaults, and the assets each vault holds or was credited in that its rule
+  // pays no destination for. Every broker role and the broker's API keys can
+  // read, without step-up; only Owner and Finance members change rules.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or vault filter, or
+  //   malformed.
+  // - UNAVAILABLE: a rule or balance cannot be read; no partial page is
+  //   returned.
+  rpc ListVaultPayoutRules(ListVaultPayoutRulesRequest) returns (ListVaultPayoutRulesResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault payout rules"
+      description: "Read the payout rule of each of the broker's vaults and the assets it pays no destination for."
       tags: "QuickSwap Broker"
     };
   }

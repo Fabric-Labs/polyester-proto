@@ -5,6 +5,7 @@ package chain.withdraw.v1;
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
 
@@ -134,12 +135,43 @@ enum ErrorCode {
   // amount_e18 down to a whole number of that token's smallest units before
   // signing.
   ERROR_CODE_AMOUNT_EXCEEDS_ROUTE_PRECISION = 44;
+  // An auto-withdraw destination address is not a valid withdrawal
+  // destination on its chain. ErrorDetail.field_path names the destination.
+  ERROR_CODE_DESTINATION_INVALID = 45;
+  // An auto-withdraw destination's min_amount_e18 is below the least amount
+  // a payout to it can pay. ErrorDetail.min_floor_e18 is that floor and
+  // ErrorDetail.field_path names the field.
+  ERROR_CODE_MIN_AMOUNT_BELOW_FLOOR = 46;
+  // No enabled withdrawal route pays an auto-withdraw destination's asset to
+  // its destination chain. ErrorDetail.field_path names the field.
+  ERROR_CODE_ROUTE_UNSUPPORTED = 47;
+  // expected_version is not the auto-withdraw rule's latest version: another
+  // change landed first. Read the rule again before retrying.
+  ERROR_CODE_VERSION_CONFLICT = 48;
+  // A broker vault pays an external destination only once it has been on the
+  // vault's external withdraw whitelist for 24 hours, and this one was added
+  // more recently. ErrorDetail.payable_from is when it can be paid; unset
+  // when that time is not known yet. Retry after it.
+  ERROR_CODE_EXTERNAL_DESTINATION_COOLING_DOWN = 49;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.
 message ErrorDetail {
   // Stable error code matching the REST problem+json code field.
   ErrorCode code = 1;
+  // Field the error is about, as a protobuf field path such as
+  // destinations[0].min_amount_e18; empty when the error concerns no single
+  // field. Usually a field of the request. A refused auto-withdraw resume
+  // names a field of the stored rule instead, such as
+  // destinations[1].destination_address of AutoWithdrawRule, which the
+  // request does not carry.
+  string field_path = 2;
+  // Set only with MIN_AMOUNT_BELOW_FLOOR: the least amount, in 18-decimal
+  // asset units, the destination's min_amount_e18 may be.
+  polyester.type.v1.U128 min_floor_e18 = 3;
+  // Set only with EXTERNAL_DESTINATION_COOLING_DOWN, when known: the time
+  // from which the destination can be paid.
+  google.protobuf.Timestamp payable_from = 4;
 }
 
 // TradingWithdrawAction identifies where funds should move from Trading.
@@ -274,12 +306,70 @@ message ValidateWithdrawDestinationResponse {
   string canonical_destination_address = 4;
 }
 
+// GetWalletBalancesRequest selects the account whose smart account wallet
+// to read.
+message GetWalletBalancesRequest {
+  // Public subaccount ID; omit for the root account.
+  fixed64 subaccount_id = 1;
+}
+
+// WalletBalance is one zToken the smart account wallet holds.
+message WalletBalance {
+  // Zipped asset of the zToken: the network-specific asset, as
+  // chain.lifecycle.v1.AssetIds.zipped_asset_id names it.
+  uint32 zipped_asset_id = 1;
+
+  // Unified asset the zToken stands for, as
+  // chain.lifecycle.v1.AssetIds.unified_asset_id names it.
+  uint32 unified_asset_id = 2;
+
+  // External network of the zipped asset, as the `chain_id` of a chain
+  // returned by `GetDepositWithdrawConfig`.
+  uint32 chain_id = 3;
+
+  // zToken contract address on Polyester Chain.
+  string ztoken_address = 4;
+
+  // Balance in 18-decimal units: every zToken has 18 decimals.
+  polyester.type.v1.U128 amount_e18 = 5;
+}
+
+// GetWalletBalancesResponse is the smart account wallet's zToken balances,
+// read from Polyester Chain at its latest block.
+message GetWalletBalancesResponse {
+  // Smart account wallet whose balances these are.
+  string smart_account_address = 1;
+
+  // Every zToken the wallet holds a nonzero balance of, ordered by
+  // zipped_asset_id. Empty when it holds none.
+  repeated WalletBalance balances = 2;
+}
+
 // WithdrawService manages authenticated chain-facing withdraw request intake.
 service WithdrawService {
   option (polyester.api.docs_group) = "chain";
 
+  // Read the zTokens the account's smart account wallet holds on Polyester
+  // Chain, such as a rejected withdrawal's refund, which stays there until
+  // the account moves it. Balances are read live from the chain. An API key
+  // needs READ_BALANCES within its scope.
+  rpc GetWalletBalances(GetWalletBalancesRequest) returns (GetWalletBalancesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/chain/wallet/balances"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Wallet Balances"
+      description:
+        "Read the zTokens the account's smart account wallet holds "
+        "on Polyester Chain, such as a rejected withdrawal's refund. "
+        "An API key needs READ_BALANCES within its scope."
+      tags: "Withdrawals"
+    };
+  }
+
   // Validate an external-chain withdraw destination for an authenticated
-  // caller without creating, signing, or reserving a withdraw.
+  // caller without creating, signing, or reserving a withdraw. An API key
+  // needs READ_WITHDRAW_VALIDATION within its scope.
   rpc ValidateWithdrawDestination(ValidateWithdrawDestinationRequest) returns (ValidateWithdrawDestinationResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -291,7 +381,8 @@ service WithdrawService {
       summary: "Validate Withdraw Destination"
       description:
         "Validate an external-chain withdraw destination for "
-        "an authenticated caller without creating a withdraw."
+        "an authenticated caller without creating a withdraw. "
+        "An API key needs READ_WITHDRAW_VALIDATION within its scope."
       tags: "Withdrawals"
     };
   }

@@ -82,9 +82,10 @@ enum SortDirection {
   SORT_DESC = 2;
 }
 
-// Change is one announced change. Published content never changes.
+// Change is one announced change. A republished post may reword or withdraw it.
 message Change {
-  // Stable opaque 64-bit identifier, identical across environments.
+  // Stable opaque 64-bit identifier, identical across environments and across
+  // revisions of a post.
   fixed64 id = 1;
   // Short title.
   string title = 2;
@@ -119,13 +120,14 @@ message Section {
 
 // PostSummary describes one published post without its changes.
 message PostSummary {
-  // Stable post identifier, unique within this environment.
+  // Stable post identifier, unique within this environment. It never changes
+  // when the post is republished.
   string slug = 1;
   // Title.
   string title = 2;
   // Introduction.
   string introduction = 3;
-  // Publication time.
+  // Time of first publication. It never changes when the post is republished.
   google.protobuf.Timestamp published_at = 4;
   // Exclusive upper bound of the period covered. Omitted when unknown.
   google.protobuf.Timestamp coverage_cutoff = 5;
@@ -141,9 +143,14 @@ message PostSummary {
   uint32 improvement_count = 10;
   // Exact number of BUG_FIX changes.
   uint32 bug_fix_count = 11;
+  // When the current revision was published; equals published_at for revision 1.
+  google.protobuf.Timestamp updated_at = 12;
+  // Published revision, starting at 1. Each republication of the post, for
+  // example to correct its copy or withdraw a change, increments it.
+  uint32 revision = 13;
 }
 
-// Post is one complete published post.
+// Post is one complete published post at its current revision.
 message Post {
   // Post summary.
   PostSummary summary = 1;
@@ -216,7 +223,10 @@ message ListChangesRequest {
   // Maximum changes to return. 0 means the default of 100; maximum 500.
   uint32 limit = 9 [(buf.validate.field).uint32.lte = 500];
   // Opaque, keyset-backed, exclusive cursor from a previous response. Reuse
-  // it only with the same filters, time bounds and sort.
+  // it only with the same filters, time bounds and sort. When the post it
+  // points into was republished since, paging restarts at the first change of
+  // that post's current revision, so changes of that post can appear again;
+  // match them by id.
   string page_token = 10 [(buf.validate.field).string.max_len = 512];
 }
 
@@ -226,7 +236,7 @@ message ChangeEntry {
   Change change = 1;
   // Slug of the announcing post.
   string post_slug = 2;
-  // Publication time of the announcing post.
+  // Time of first publication of the announcing post.
   google.protobuf.Timestamp published_at = 3;
   // Heading of the section containing the change.
   string section_heading = 4;
@@ -246,14 +256,15 @@ service ChangelogService {
   option (polyester.api.docs_group) = "changelog";
 
   // List published post summaries, newest first. Use limit 1 to poll for the
-  // latest post.
+  // latest post. To follow edits to published posts, compare each post's
+  // revision.
   rpc ListPosts(ListPostsRequest) returns (ListPostsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/changelog/posts"};
     option (gnostic.openapi.v3.operation) = {summary: "List Changelog Posts" tags: "Changelog Service" security: [{}]};
   }
-  // Get one complete published post by slug.
+  // Get one complete published post by slug, at its current revision.
   rpc GetPost(GetPostRequest) returns (GetPostResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.public) = true;

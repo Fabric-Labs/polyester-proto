@@ -648,11 +648,17 @@ enum ErrorCode {
   // The venue-wide admission rate that the account shares with other accounts is
   // exhausted. The account's own limit was not reached; retry shortly.
   ERROR_CODE_SYSTEM_RATE_LIMITED = 225;
-  // An earlier amend or replace of the order has not completed yet. Retry once it
-  // completes.
+  // An earlier amend or replace of the order has not completed yet. A batch
+  // replace answer means its items were admitted, not completed, so the next
+  // refresh of the same order can get this code. Retry after a short backoff.
+  // For a batch item, resend only that item in a new batch under a fresh request
+  // ID, because the rejected batch's request ID returns this rejection again.
   ERROR_CODE_ORDER_MODIFY_IN_PROGRESS = 226;
-  // The order, or the replace that created it, has not been placed on the book
-  // yet, so it cannot be modified. Retry shortly.
+  // The placement of the order, or of the replacement an earlier replace
+  // created, has not been confirmed yet, so it cannot be modified. It may already
+  // rest on the book. A refresh that names the replacement order ID from a batch
+  // whose replace has not been confirmed yet gets this code. Retry after a short
+  // backoff, as for ORDER_MODIFY_IN_PROGRESS.
   ERROR_CODE_ORDER_PLACEMENT_PENDING = 227;
   // The modify behavior is not a known behavior.
   ERROR_CODE_INVALID_MODIFY_BEHAVIOR = 228;
@@ -915,6 +921,15 @@ enum ErrorCode {
   // The trigger's child order did not match the order the trigger requested,
   // so the trigger failed and the child order was canceled.
   ERROR_CODE_CHILD_ORDER_INCONSISTENT = 94;
+  // A non-empty resource ID in the REST request body differs from the path ID.
+  // Nothing changed. Use the same ID in both places, or omit the body ID.
+  ERROR_CODE_PATH_BODY_ID_MISMATCH = 95;
+  // The request's receive window ended before it was sent on for admission:
+  // the request was not processed and changed nothing. The window is the
+  // request's timestamp plus its receive window: the X-API-RECV-WINDOW header
+  // of a signed request, or recv_window_ms of a WebSocket command. Send a new
+  // request with a fresh timestamp.
+  ERROR_CODE_REQUEST_DEADLINE_EXCEEDED = 308;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -1652,6 +1667,16 @@ message BatchReplaceAdmissionItem {
 // each item is amended in place or replaced as ModifyOrder decides by default.
 // Identical retries replay the admission result for 60 seconds from acceptance;
 // a different payload under the same key conflicts. Use a fresh key for a new batch.
+// Read the batch's status with GetBatchReplaceStatus within the same window;
+// after it, reconcile the individual orders and never resubmit an accepted batch.
+// The response answers admission, before an admitted item's change completes.
+// Until it completes, a later change of that order, an item of the next batch
+// included, is rejected with a retryable code: ORDER_MODIFY_IN_PROGRESS when it
+// names the order by client order ID, and ORDER_PLACEMENT_PENDING (or
+// ORDER_MODIFY_IN_PROGRESS) when it names the replacement_order_id returned
+// here. Resend only the rejected items, in a new batch under a fresh key, after
+// a short backoff: the rejected batch's key keeps replaying its rejection, and
+// admitted items must not be sent again.
 message BatchReplaceOrdersRequest {
   // Prevent duplicate order targets in the same batch.
   option (buf.validate.message).cel = {
@@ -1868,11 +1893,17 @@ service OrdersService {
       summary: "Cancel All Orders"
       description:
         "Cancel all matching open orders for an account. "
-        "Supports optional symbol and side filters plus dry-run preview. "
+        "Supports an optional list of symbols and a side filter plus dry-run preview. "
         "Returns up to 200 canceled order IDs, oldest first, with the total count. "
-        "Cancels orders only, including open orders placed by triggers, never the triggers: "
-        "armed stop-loss, take-profit and trailing stops and running TWAPs stay active and "
-        "can place new orders afterwards. Cancel them with Cancel Trigger."
+        "It cancels open orders, including those that triggers placed (TWAP slices, "
+        "ladder levels and exit orders), but not triggers. Standalone stop-loss, "
+        "take-profit and trailing triggers and TWAPs keep running and can place new "
+        "orders; a ladder stops once its levels are canceled. An attached stop-loss, "
+        "take-profit or trailing leg whose exit order is canceled ends, and so do the "
+        "parent's other legs when oco is set, so the position loses that protection. "
+        "Other attached legs keep protecting the parent's filled quantity; those of a "
+        "parent canceled before any fill end with it. Cancel triggers separately: list "
+        "them with List Triggers, then cancel each with Cancel Trigger."
       tags: "Orders Service"
     };
   }
@@ -1881,10 +1912,10 @@ service OrdersService {
   // Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.
   // When the switch fires, it cancels what CancelAllOrders with the same
   // symbol and side scope cancels: open orders, including those that
-  // triggers placed, and no trigger. Armed stop-loss, take-profit and
-  // trailing stops, running TWAPs and attached legs without a working exit
-  // stay active and can place new orders after it fires, exactly as after
-  // CancelAllOrders. The switch does not stop them: only
+  // triggers placed, and no trigger. Standalone stop-loss, take-profit and
+  // trailing stops and running TWAPs stay active and can place new orders
+  // after it fires, and attached legs end or keep protecting the position
+  // exactly as after CancelAllOrders. The switch does not stop them: only
   // TriggersService.CancelTrigger cancels a trigger.
   rpc CancelAllAfter(CancelAllAfterRequest) returns (CancelAllAfterResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1894,9 +1925,15 @@ service OrdersService {
       description:
         "Set or disable a dead-man switch timeout for automatic cancel-all. "
         "Supports optional symbol and side scope with idempotent heartbeat refresh. "
-        "On expiry it cancels open orders in scope, including orders placed by triggers, "
-        "but never the triggers: armed stop-loss, take-profit and trailing stops and "
-        "running TWAPs stay active and can place new orders. Cancel them with Cancel Trigger."
+        "On expiry it cancels open orders in scope, including those that triggers placed "
+        "(TWAP slices, ladder levels and exit orders), but not triggers. Standalone "
+        "stop-loss, take-profit and trailing triggers and TWAPs keep running and can place "
+        "new orders; a ladder stops once its levels are canceled. An attached stop-loss, "
+        "take-profit or trailing leg whose exit order is canceled ends, and so do the "
+        "parent's other legs when oco is set, so the position loses that protection. "
+        "Other attached legs keep protecting the parent's filled quantity; those of a "
+        "parent canceled before any fill end with it. Cancel triggers separately: list "
+        "them with List Triggers, then cancel each with Cancel Trigger."
       tags: "Orders Service"
     };
   }

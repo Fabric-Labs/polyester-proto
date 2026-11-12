@@ -13,6 +13,19 @@ message ClientFrame {
   uint64 seq = 1;
   // Client correlation token echoed in every server response.
   string correlation_id = 2;
+  // Optional client time the command was sent, in milliseconds since the Unix
+  // epoch. When set, the command is processed only until timestamp_ms plus
+  // recv_window_ms: a command that arrives, or waits to be sent on for
+  // admission, past then is rejected with REQUEST_DEADLINE_EXCEEDED and
+  // changes nothing, but it has taken its seq, so the next command uses the
+  // next seq. A timestamp more than 1 second ahead of the server clock is
+  // rejected with BAD_REQUEST, without taking the seq. Zero sets no
+  // deadline. Ping ignores it.
+  int64 timestamp_ms = 3;
+  // Optional receive window in milliseconds, from 1 to 60000, applied to
+  // timestamp_ms. Zero uses 5000. Setting it without timestamp_ms is
+  // rejected with BAD_REQUEST.
+  uint32 recv_window_ms = 4;
 
   oneof payload {
     // Liveness request that does not submit an order command.
@@ -41,6 +54,19 @@ message ClientFrame {
     // to 50 cancellations, each accepted or rejected on its own, under the
     // same request_id idempotency as the Orders API.
     orders.v1.BatchCancelOrdersRequest batch_cancel_orders = 17;
+    // Cancel-all-after command using the public Orders API request
+    // contract: arms, refreshes or disarms the account's dead-man switch,
+    // the same switch as the Orders API's CancelAllAfter, with the same
+    // symbol and side scope and the same timeout rule (0 disarms; 10 to 120
+    // seconds arms or refreshes). On expiry it cancels the account's open
+    // orders in scope, including orders that triggers placed, and no
+    // trigger. The switch belongs to the account, not to this connection:
+    // closing the connection neither disarms nor fires it. Refresh it well
+    // within the timeout, for example every 15 to 30 seconds with a
+    // 60-second timeout. Resending a request is safe: an arm restarts the
+    // timer from when it applies, and a disarm is idempotent. request_id is
+    // required, as on the Orders API; subaccount_id must be omitted.
+    orders.v1.CancelAllAfterRequest cancel_all_after = 18;
   }
 }
 
@@ -102,6 +128,9 @@ message AckResponse {
     // Batch cancel response with one result per requested cancellation, in
     // request order.
     orders.v1.BatchCancelOrdersResponse batch_cancel_orders = 7;
+    // Cancel-all-after response: the account's dead-man switch after the
+    // request applied, its deadline and its recorded scope.
+    orders.v1.CancelAllAfterResponse cancel_all_after = 8;
   }
 }
 

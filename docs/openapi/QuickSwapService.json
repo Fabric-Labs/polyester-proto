@@ -112,7 +112,7 @@
             "type": "string"
           },
           "destinationMemo": {
-            "description": "Destination tag or memo for destination_address. Required when the destination network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
+            "description": "Destination tag or memo for destination_address. Required when the destination network requires one, optional when supported, and empty when unsupported. See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.",
             "type": "string"
           },
           "idempotencyKey": {
@@ -124,7 +124,7 @@
             "type": "string"
           },
           "refundMemo": {
-            "description": "Destination tag or memo for refund_address. Required when the refund network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
+            "description": "Destination tag or memo for refund_address. Required when the refund network requires one, optional when supported, and empty when unsupported. See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.",
             "type": "string"
           },
           "refundZippedAssetId": {
@@ -137,7 +137,7 @@
             "type": "string"
           },
           "returnMemo": {
-            "description": "Destination tag or memo for return_address. Required when the source network needs one; must be empty otherwise. At most 128 UTF-8 bytes.",
+            "description": "Destination tag or memo for return_address. Required when the source network requires one, optional when supported, and empty when unsupported. See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.",
             "type": "string"
           },
           "sourceWallet": {
@@ -283,12 +283,12 @@
             "description": "The QuickSwap, normally AWAITING_DEPOSIT with deposit_instructions. A retry returns its current state with the original quote and address.",
             "properties": {
               "chargedFees": {
-                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is the requested rate applied to the actual execution, so it can differ from the quote's fee lines.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
@@ -322,7 +322,7 @@
                           "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
                         }
                       ],
-                      "description": "BROKER or AFFILIATE."
+                      "description": "BROKER, AFFILIATE or REFERRAL."
                     }
                   },
                   "required": [],
@@ -601,7 +601,7 @@
               },
               "fees": {
                 "additionalProperties": false,
-                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "description": "Broker and affiliate fees as requested, fixed at creation. With a referral (quote.referral), the broker fee charged is broker_bps less the referral's discount and commission.",
                 "properties": {
                   "affiliates": {
                     "description": "Affiliate fees, in ascending account_id order.",
@@ -646,7 +646,7 @@
               },
               "quote": {
                 "additionalProperties": false,
-                "description": "Quote and protection fixed at creation. Not refreshed on retries.",
+                "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
                 "properties": {
                   "depositAmount": {
                     "additionalProperties": false,
@@ -669,7 +669,7 @@
                   },
                   "expectedAmountOut": {
                     "additionalProperties": false,
-                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee.",
+                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee: the delivered amount follows the actual deposit, execution and fees, bounded below only by the protection.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -692,18 +692,18 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
+                    "description": "Estimated fee components for deposit_amount at quoted_at: each leg's service, broker and affiliate or referral fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged are each rate applied to the actual execution and can differ from these amounts; QuickSwap.charged_fees reports the broker and affiliate fees as charged.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
                         "accountId": {
-                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
                           "pattern": "^[0-9]+$",
                           "type": "string"
                         },
                         "amount": {
                           "additionalProperties": false,
-                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
+                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                           "properties": {
                             "baseUnits": {
                               "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -721,7 +721,7 @@
                           "type": "object"
                         },
                         "bps": {
-                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
                           "format": "int32",
                           "type": "integer"
                         },
@@ -1014,12 +1014,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "address": {
-                      "description": "Recipient address in the network's native text form.",
+                      "description": "Recipient address in the network's native text form. Empty on a COMPLIANCE_TRANSFER, whose recipient Polyester does not record.",
                       "type": "string"
                     },
                     "amount": {
                       "additionalProperties": false,
-                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at).",
+                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at). Unset on the RETURN of a deposit returned because its risk screen failed (SOURCE_SCREENING_FAILED): that return is sent from the deposit address and reports no delivered amount. Unset on a COMPLIANCE_TRANSFER too.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1047,7 +1047,7 @@
                       "type": "string"
                     },
                     "flowId": {
-                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units.",
+                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units. For the RETURN of a deposit returned because its risk screen failed, it is the deposit's flow (Deposit.flow_id), which ends REFUNDED with the return as its transaction. For a COMPLIANCE_TRANSFER, it is the deposit's flow too, which ends FAILED with reason ZIPPER_COMPLIANCE_TRANSFERRED and the transfer as its transaction.",
                       "type": "string"
                     },
                     "index": {
@@ -1056,12 +1056,12 @@
                       "type": "integer"
                     },
                     "memo": {
-                      "description": "Recipient destination tag or memo; empty when the network uses none.",
+                      "description": "Recipient destination tag or memo; empty when the network uses none, and on a COMPLIANCE_TRANSFER.",
                       "type": "string"
                     },
                     "networkFee": {
                       "additionalProperties": false,
-                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount.",
+                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount. Unset on the RETURN of a deposit returned because its risk screen failed, and on a COMPLIANCE_TRANSFER, like amount.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1153,12 +1153,12 @@
             "description": "Current state.",
             "properties": {
               "chargedFees": {
-                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is the requested rate applied to the actual execution, so it can differ from the quote's fee lines.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
@@ -1192,7 +1192,7 @@
                           "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
                         }
                       ],
-                      "description": "BROKER or AFFILIATE."
+                      "description": "BROKER, AFFILIATE or REFERRAL."
                     }
                   },
                   "required": [],
@@ -1471,7 +1471,7 @@
               },
               "fees": {
                 "additionalProperties": false,
-                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "description": "Broker and affiliate fees as requested, fixed at creation. With a referral (quote.referral), the broker fee charged is broker_bps less the referral's discount and commission.",
                 "properties": {
                   "affiliates": {
                     "description": "Affiliate fees, in ascending account_id order.",
@@ -1516,7 +1516,7 @@
               },
               "quote": {
                 "additionalProperties": false,
-                "description": "Quote and protection fixed at creation. Not refreshed on retries.",
+                "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
                 "properties": {
                   "depositAmount": {
                     "additionalProperties": false,
@@ -1539,7 +1539,7 @@
                   },
                   "expectedAmountOut": {
                     "additionalProperties": false,
-                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee.",
+                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee: the delivered amount follows the actual deposit, execution and fees, bounded below only by the protection.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1562,18 +1562,18 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
+                    "description": "Estimated fee components for deposit_amount at quoted_at: each leg's service, broker and affiliate or referral fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged are each rate applied to the actual execution and can differ from these amounts; QuickSwap.charged_fees reports the broker and affiliate fees as charged.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
                         "accountId": {
-                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
                           "pattern": "^[0-9]+$",
                           "type": "string"
                         },
                         "amount": {
                           "additionalProperties": false,
-                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
+                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                           "properties": {
                             "baseUnits": {
                               "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1591,7 +1591,7 @@
                           "type": "object"
                         },
                         "bps": {
-                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
                           "format": "int32",
                           "type": "integer"
                         },
@@ -1884,12 +1884,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "address": {
-                      "description": "Recipient address in the network's native text form.",
+                      "description": "Recipient address in the network's native text form. Empty on a COMPLIANCE_TRANSFER, whose recipient Polyester does not record.",
                       "type": "string"
                     },
                     "amount": {
                       "additionalProperties": false,
-                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at).",
+                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at). Unset on the RETURN of a deposit returned because its risk screen failed (SOURCE_SCREENING_FAILED): that return is sent from the deposit address and reports no delivered amount. Unset on a COMPLIANCE_TRANSFER too.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -1917,7 +1917,7 @@
                       "type": "string"
                     },
                     "flowId": {
-                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units.",
+                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units. For the RETURN of a deposit returned because its risk screen failed, it is the deposit's flow (Deposit.flow_id), which ends REFUNDED with the return as its transaction. For a COMPLIANCE_TRANSFER, it is the deposit's flow too, which ends FAILED with reason ZIPPER_COMPLIANCE_TRANSFERRED and the transfer as its transaction.",
                       "type": "string"
                     },
                     "index": {
@@ -1926,12 +1926,12 @@
                       "type": "integer"
                     },
                     "memo": {
-                      "description": "Recipient destination tag or memo; empty when the network uses none.",
+                      "description": "Recipient destination tag or memo; empty when the network uses none, and on a COMPLIANCE_TRANSFER.",
                       "type": "string"
                     },
                     "networkFee": {
                       "additionalProperties": false,
-                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount.",
+                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount. Unset on the RETURN of a deposit returned because its risk screen failed, and on a COMPLIANCE_TRANSFER, like amount.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2023,12 +2023,12 @@
             "description": "Current state.",
             "properties": {
               "chargedFees": {
-                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge.",
+                "description": "Broker and affiliate fees charged so far, as settled: one entry per fee kind, credited vault and asset, in kind, then account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is the requested rate applied to the actual execution, so it can differ from the quote's fee lines.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE.",
+                      "description": "Public sub-account ID of the credited vault: the default vault for BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
@@ -2062,7 +2062,7 @@
                           "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
                         }
                       ],
-                      "description": "BROKER or AFFILIATE."
+                      "description": "BROKER, AFFILIATE or REFERRAL."
                     }
                   },
                   "required": [],
@@ -2341,7 +2341,7 @@
               },
               "fees": {
                 "additionalProperties": false,
-                "description": "Broker and affiliate fees as requested, fixed at creation.",
+                "description": "Broker and affiliate fees as requested, fixed at creation. With a referral (quote.referral), the broker fee charged is broker_bps less the referral's discount and commission.",
                 "properties": {
                   "affiliates": {
                     "description": "Affiliate fees, in ascending account_id order.",
@@ -2386,7 +2386,7 @@
               },
               "quote": {
                 "additionalProperties": false,
-                "description": "Quote and protection fixed at creation. Not refreshed on retries.",
+                "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
                 "properties": {
                   "depositAmount": {
                     "additionalProperties": false,
@@ -2409,7 +2409,7 @@
                   },
                   "expectedAmountOut": {
                     "additionalProperties": false,
-                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee.",
+                    "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee: the delivered amount follows the actual deposit, execution and fees, bounded below only by the protection.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2432,18 +2432,18 @@
                     "type": "string"
                   },
                   "fees": {
-                    "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
+                    "description": "Estimated fee components for deposit_amount at quoted_at: each leg's service, broker and affiliate or referral fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged are each rate applied to the actual execution and can differ from these amounts; QuickSwap.charged_fees reports the broker and affiliate fees as charged.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
                         "accountId": {
-                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                          "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
                           "pattern": "^[0-9]+$",
                           "type": "string"
                         },
                         "amount": {
                           "additionalProperties": false,
-                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
+                          "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                           "properties": {
                             "baseUnits": {
                               "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2461,7 +2461,7 @@
                           "type": "object"
                         },
                         "bps": {
-                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                          "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
                           "format": "int32",
                           "type": "integer"
                         },
@@ -2754,12 +2754,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "address": {
-                      "description": "Recipient address in the network's native text form.",
+                      "description": "Recipient address in the network's native text form. Empty on a COMPLIANCE_TRANSFER, whose recipient Polyester does not record.",
                       "type": "string"
                     },
                     "amount": {
                       "additionalProperties": false,
-                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at).",
+                      "description": "Amount delivered to address after the network fee, in zipped_asset_id's token units; set once FINALIZED. Like tx_hash, it is the amount recorded for this withdrawal and can be corrected for up to 24 hours after the QuickSwap ends (terminal_at). Unset on the RETURN of a deposit returned because its risk screen failed (SOURCE_SCREENING_FAILED): that return is sent from the deposit address and reports no delivered amount. Unset on a COMPLIANCE_TRANSFER too.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -2787,7 +2787,7 @@
                       "type": "string"
                     },
                     "flowId": {
-                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units.",
+                      "description": "Public, URL-safe lifecycle flow identifier of this withdrawal, usable with GET /v1/chain/flows/{flow_id}; empty until the flow exists. The flow is the authoritative, latest state of the transfer, including a correction made after tx_hash, amount and network_fee stop being updated. Lifecycle flow amounts are 18-decimal unified units (amount_e18), not token base units. For the RETURN of a deposit returned because its risk screen failed, it is the deposit's flow (Deposit.flow_id), which ends REFUNDED with the return as its transaction. For a COMPLIANCE_TRANSFER, it is the deposit's flow too, which ends FAILED with reason ZIPPER_COMPLIANCE_TRANSFERRED and the transfer as its transaction.",
                       "type": "string"
                     },
                     "index": {
@@ -2796,12 +2796,12 @@
                       "type": "integer"
                     },
                     "memo": {
-                      "description": "Recipient destination tag or memo; empty when the network uses none.",
+                      "description": "Recipient destination tag or memo; empty when the network uses none, and on a COMPLIANCE_TRANSFER.",
                       "type": "string"
                     },
                     "networkFee": {
                       "additionalProperties": false,
-                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount.",
+                      "description": "Actual network fee withheld from this withdrawal, in the same units; set once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap ends, like amount. Unset on the RETURN of a deposit returned because its risk screen failed, and on a COMPLIANCE_TRANSFER, like amount.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -3050,7 +3050,7 @@
         "properties": {
           "quote": {
             "additionalProperties": false,
-            "description": "Indicative quote, including whether the route needs a refund address. Creating a QuickSwap prices the terms again.",
+            "description": "Indicative quote, including whether the route needs a refund address. Its amounts and fees are estimates. Creating a QuickSwap prices the terms again.",
             "properties": {
               "depositAmount": {
                 "additionalProperties": false,
@@ -3073,7 +3073,7 @@
               },
               "expectedAmountOut": {
                 "additionalProperties": false,
-                "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee.",
+                "description": "Expected destination amount for deposit_amount at quoted_at, after trading fees and both quoted network fees, in destination token units. An estimate, not a guarantee: the delivered amount follows the actual deposit, execution and fees, bounded below only by the protection.",
                 "properties": {
                   "baseUnits": {
                     "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -3096,18 +3096,18 @@
                 "type": "string"
               },
               "fees": {
-                "description": "Quoted fee components for deposit_amount: each leg's service, broker and affiliate fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted.",
+                "description": "Estimated fee components for deposit_amount at quoted_at: each leg's service, broker and affiliate or referral fees, in that order, legs in route order (a bridge has one set, charged at payout), then network fees. Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged are each rate applied to the actual execution and can differ from these amounts; QuickSwap.charged_fees reports the broker and affiliate fees as charged.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "accountId": {
-                      "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind.",
+                      "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
                     "amount": {
                       "additionalProperties": false,
-                      "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). Trading fees are rounded up, so the charged fee never exceeds the quoted one.",
+                      "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                       "properties": {
                         "baseUnits": {
                           "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -3125,7 +3125,7 @@
                       "type": "object"
                     },
                     "bps": {
-                      "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee.",
+                      "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -3253,7 +3253,7 @@
           "ELIGIBLE": "The eligible deposit that confirmed first. It consumed the QuickSwap and is the only deposit that can execute.",
           "EVALUATING": "Detected; eligibility is being evaluated. A deposit can already be credited (credited_at) while it is evaluated.",
           "MANUAL_RECOVERY": "Observed on an address that was already retired (DEPOSIT_ADDRESS_RETIRED). It never executes and is not returned automatically. It is handled only through support-assisted recovery, and it is potentially unrecoverable. The broker contacts Polyester broker support with the swap_id.",
-          "ON_HOLD": "Held for review; it neither executes nor returns until released.",
+          "ON_HOLD": "Held for review; it neither executes nor returns until released. A deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this disposition after Zipper's compliance team transferred its funds out (QuickSwap CLOSED).",
           "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit."
         }
       },
@@ -3263,13 +3263,15 @@
           "BROKER",
           "AFFILIATE",
           "DEPOSIT_NETWORK",
-          "WITHDRAWAL_NETWORK"
+          "WITHDRAWAL_NETWORK",
+          "REFERRAL"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "AFFILIATE": "Affiliate fee of one trading leg, one affiliate's bps of what the leg receives, credited to that affiliate vault. Each affiliate has one per leg; on a bridge one, on the credited amount, charged at payout.",
           "BROKER": "Broker fee of one trading leg, the request's broker_bps of what the leg receives, credited to the broker's default vault. A two-leg route has one per leg; a bridge has one, on the credited amount, charged at payout.",
-          "DEPOSIT_NETWORK": "Network fee withheld from the deposit before it is credited.",
+          "DEPOSIT_NETWORK": "Network fee withheld from the deposit before it is credited. A quote shows an estimate; the fee withheld is the network's fee when the deposit arrives.",
+          "REFERRAL": "Referral commission of one trading leg: the referral partner's commission_bps (ReferralPricing) of what the leg receives, credited to the partner. It comes out of the broker fee and adds nothing to what the end user pays. Only a request with a referral_code has one; it never appears with AFFILIATE fees. On a bridge one, on the credited amount, charged at payout.",
           "SERVICE": "Service fee of one trading leg: the leg's pair fee in basis points of what the leg receives. A two-leg route has one per leg. On a bridge, the one bridge fee in basis points of the credited amount, charged at payout.",
           "WITHDRAWAL_NETWORK": "Estimated network fee for a withdrawal. The actual fee is charged at withdrawal time and reported on the withdrawal."
         }
@@ -3293,25 +3295,27 @@
           "DEPOSIT_ADDRESS_ALREADY_USED",
           "DEPOSIT_ADDRESS_RETIRED",
           "DEPOSIT_ADDRESS_NOT_ISSUED",
-          "INTERMEDIATE_BELOW_MINIMUM"
+          "INTERMEDIATE_BELOW_MINIMUM",
+          "MARKET_CLOSED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "CAPACITY_UNAVAILABLE": "The deposit arrived and is safe, but processing capacity is temporarily unavailable. Processing resumes automatically when capacity frees up; no action is needed.",
-          "DEPOSIT_ABOVE_MAXIMUM": "The deposit is above max_deposit_amount; it is returned to return_address.",
+          "DEPOSIT_ABOVE_MAXIMUM": "The deposit is above max_deposit_amount, or above the largest order the route's market accepts. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason.",
           "DEPOSIT_ADDRESS_ALREADY_USED": "The address already accepted its one eligible deposit; this deposit is returned to return_address and never executes.",
           "DEPOSIT_ADDRESS_CONFLICT": "The QuickSwap could not be issued a deposit address and never gets one: it is EXPIRED without deposit_instructions, and nothing can be deposited to it. Create a new QuickSwap with a new idempotency key, and report the swap_id to Polyester broker support.",
           "DEPOSIT_ADDRESS_NOT_ISSUED": "The address had not been issued when this deposit was observed; it never executes.",
           "DEPOSIT_ADDRESS_RETIRED": "The address was retired when this deposit was observed. The deposit is MANUAL_RECOVERY: it never executes, is not returned automatically, and is potentially unrecoverable.",
-          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
+          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount, or its credit after the deposit network fee is below the smallest order the route's market accepts. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
           "EXECUTION_DEADLINE_REACHED": "The execution deadline passed before all input executed; untraded funds are refunded or returned. Shown while EXECUTING once the deadline ended trading, and on the payout statuses that follow.",
           "FUNDING_WINDOW_ENDED": "The funding window ended without an eligible deposit.",
           "INTERMEDIATE_BELOW_MINIMUM": "On a two-leg route, intermediate funds were below the smallest order the second leg's market accepts, so they could not be converted to the destination asset; they are refunded to refund_address. Shown on the payout statuses that follow.",
           "LATE_DEPOSIT": "The deposit was first seen after funding_expires_at.",
+          "MARKET_CLOSED": "A market on the route was halted, restricted or delisted when the deposit was credited and did not reopen within a bounded wait after the deposit was credited, the same for market and TWAP execution. Nothing was traded: the deposit is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason.",
           "OUTCOME_RECONCILING": "A processing step is being confirmed. Processing resumes automatically; no action is needed.",
-          "PROTECTION_NOT_MET": "Execution could not meet the protection. On a HELD QuickSwap nothing was traded and the funds are held for review; otherwise untraded funds are refunded or returned.",
+          "PROTECTION_NOT_MET": "Execution could not meet the protection; untraded funds are refunded or returned. When no protected order could be placed for the deposit, nothing is traded: the deposit is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason.",
           "REFUND_BELOW_MINIMUM": "Refund not possible: an amount left to refund or return was below the withdrawal minimum of its asset and network, so no withdrawal was made for it. Its withdrawal is NOT_SENT with the amount in unsent_amount. Other withdrawals are unaffected.",
-          "SOURCE_SCREENING_BLOCKED": "Polyester's deposit screening blocked the deposit. It is held for compliance review; it is never executed or returned automatically. The broker contacts Polyester broker support with the swap_id.",
+          "SOURCE_SCREENING_BLOCKED": "Polyester's deposit screening blocked the deposit. It is held for compliance review (HELD); it is never executed or returned automatically. The broker contacts Polyester broker support with the swap_id. If Zipper's compliance team later transfers the funds out to an address of its choosing, not necessarily the user's, the QuickSwap ends CLOSED with this reason; the funds were not returned to return_address.",
           "SOURCE_SCREENING_FAILED": "The deposit's risk screen failed with a return verdict; the deposit is not accepted and is returned to return_address.",
           "WITHDRAWAL_FAILED": "A withdrawal cannot be completed and is held for review. The broker contacts Polyester broker support with the swap_id.",
           "WRONG_ASSET": "The deposit is not the quoted source asset or network. It is not executed: it is returned to return_address on the network and in the asset it was received in, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned there, such as one received on a network where return_address is not valid, is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id."
@@ -3333,18 +3337,20 @@
           "COMPLETED",
           "REFUNDED",
           "RETURNED",
-          "EXPIRED"
+          "EXPIRED",
+          "CLOSED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "ALLOCATING": "The quote is fixed and the deposit address is being allocated. After ADDRESS_UNAVAILABLE, allocation continues automatically until an address frees up; the wait has no fixed bound.",
           "AWAITING_DEPOSIT": "Quote and deposit address allocated; waiting for the first eligible deposit before funding_expires_at.",
+          "CLOSED": "Terminal: the deposit was blocked by its risk screen (SOURCE_SCREENING_BLOCKED), and Zipper's compliance team transferred the funds out on the deposit's network to an address of its choosing, not necessarily the user's. Nothing was returned to return_address or refunded. Its one withdrawal is that COMPLIANCE_TRANSFER, FINALIZED.",
           "COMPLETED": "Terminal: every withdrawal is final (FINALIZED or NOT_SENT) and at least one is a DESTINATION withdrawal. A DESTINATION withdrawal is never NOT_SENT.",
           "CONFIRMING": "Waiting for source confirmations and deposit validation before credit.",
           "CREDITED": "The deposit is credited; execution is starting.",
           "EXECUTING": "The credited deposit is being traded.",
           "EXPIRED": "Terminal: the funding window ended without an eligible deposit (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address (DEPOSIT_ADDRESS_CONFLICT).",
-          "HELD": "Funds are held for review. Not terminal: review resumes the QuickSwap or returns the funds. reason says why when a specific reason applies, else it is REASON_UNSPECIFIED. The broker contacts Polyester broker support with the swap_id.",
+          "HELD": "Funds are held for review. Not terminal: review resumes the QuickSwap or returns the funds, or, for SOURCE_SCREENING_BLOCKED, the QuickSwap can end CLOSED. reason says why when a specific reason applies, else it is REASON_UNSPECIFIED. The broker contacts Polyester broker support with the swap_id.",
           "PAYING_OUT": "Execution finished with destination output; withdrawals, including any partial refund or return, are in progress.",
           "PREPARING_DEPOSIT": "The deposit is being prepared for credit. Retries keep this status.",
           "REFUNDED": "Terminal: every withdrawal is final, none is DESTINATION, and at least one is REFUND (FINALIZED or NOT_SENT).",
@@ -3369,10 +3375,12 @@
         "enum": [
           "DESTINATION",
           "REFUND",
-          "RETURN"
+          "RETURN",
+          "COMPLIANCE_TRANSFER"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
+          "COMPLIANCE_TRANSFER": "A deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) that Zipper's compliance team transferred out on the network it was received on, to an address of its choosing, not necessarily the user's. Not a return or a refund: Polyester records neither the recipient nor the amount, so address, memo, amount and network_fee are unset; tx_hash is the transfer, and flow_id the deposit's flow.",
           "DESTINATION": "Swap output to destination_address on the destination network.",
           "REFUND": "Untraded intermediate asset of a two-leg route, including a partial refund, to refund_address on the refund route's network.",
           "RETURN": "Source funds that were not accepted or not traded, to return_address on the network and in the asset they were received in: the source network, or for a wrong asset the network it was sent on."
@@ -4358,7 +4366,7 @@
     },
     "/v1/quickswaps:quote": {
       "post": {
-        "description": "Price QuickSwap terms without reserving a deposit address.",
+        "description": "Price QuickSwap terms, with estimated output and fees, without reserving a deposit address.",
         "operationId": "QuickSwapService_QuoteQuickSwap",
         "requestBody": {
           "content": {

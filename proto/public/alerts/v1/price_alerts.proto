@@ -1,0 +1,399 @@
+syntax = "proto3";
+
+package alerts.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/alerts/v1;alertsv1";
+// Document-level OpenAPI metadata for the Price Alert API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Price Alert Service"
+      description: "Durable price alerts: a notification when a market's price crosses a level the caller chose."
+    }
+  ]
+};
+
+// ErrorCode identifies a Price Alert API error.
+enum ErrorCode {
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // No alert of the caller has this ID. Another account's alert is reported
+  // the same way.
+  ALERT_NOT_FOUND = 1;
+  // The market is not listed.
+  UNKNOWN_SYMBOL = 2;
+  // The market has no current price of the requested price source, so the
+  // alert cannot record the price it starts from. Retry shortly.
+  PRICE_UNAVAILABLE = 3;
+  // The market has no index price; use LAST_PRICE.
+  PRICE_SOURCE_UNSUPPORTED = 4;
+  // The caller already has the maximum number of active alerts. Cancel one
+  // first.
+  ALERT_LIMIT_REACHED = 5;
+  // The alert changed after the caller read it: expected_revision is not its
+  // current revision. Read it again and retry.
+  REVISION_CONFLICT = 6;
+  // The alert was cancelled; it can no longer change.
+  ALERT_CANCELLED = 7;
+  // The alert already fired, so there is nothing to cancel. Update it to set
+  // it again.
+  ALERT_TRIGGERED = 8;
+  // The idempotency key was already used with a different request. The
+  // original alert, or the original update, stands.
+  IDEMPOTENCY_CONFLICT = 9;
+  // A required service is temporarily unavailable; retry the same request.
+  SERVICE_UNAVAILABLE = 10;
+  // The API key is scoped to a subaccount. Price alerts belong to the root
+  // account: use a session or an API key of the root account.
+  SUBACCOUNT_KEY_REFUSED = 11;
+  // The alert already holds the maximum number of update idempotency keys
+  // (1,000), so an update with a new key is refused. Updates without a key,
+  // and repeats of a stored key, still work; or create a new alert.
+  ALERT_UPDATE_LIMIT_REACHED = 12;
+}
+
+// ErrorDetail is attached to Price Alert API errors as an error detail of
+// type alerts.v1.ErrorDetail.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+}
+
+// AlertDirection is the price crossing an alert waits for. Both directions
+// include the alert price itself, as stop and take-profit triggers do.
+enum AlertDirection {
+  // Not set. Rejected in requests.
+  DIRECTION_UNSPECIFIED = 0;
+  // Fires when the price rises to or above the alert price.
+  ABOVE = 1;
+  // Fires when the price falls to or below the alert price.
+  BELOW = 2;
+}
+
+// AlertPriceSource is the price an alert watches.
+enum AlertPriceSource {
+  // Not set. In requests it means INDEX_PRICE on a market that has an index
+  // price, and LAST_PRICE otherwise. Never returned.
+  PRICE_SOURCE_UNSPECIFIED = 0;
+  // The market's last traded price.
+  LAST_PRICE = 1;
+  // The market's index price: a fair price computed from other venues.
+  // Available only on markets that have one.
+  INDEX_PRICE = 2;
+}
+
+// AlertStatus is the state of an alert.
+enum AlertStatus {
+  // Not set. Never returned.
+  STATUS_UNSPECIFIED = 0;
+  // Waiting for its price crossing.
+  ACTIVE = 1;
+  // Fired once and stopped. UpdateAlert sets it again.
+  TRIGGERED = 2;
+  // Cancelled. It never fires again.
+  CANCELLED = 3;
+}
+
+// UpdateOutcome is what an UpdateAlert call did, as decided in the
+// transaction that answered it.
+enum UpdateOutcome {
+  // Not set. Never returned.
+  UPDATE_OUTCOME_UNSPECIFIED = 0;
+  // This call changed the alert.
+  APPLIED = 1;
+  // This call was processed now and changed nothing: the alert already held
+  // the requested values.
+  UNCHANGED = 2;
+  // idempotency_key was already used for this request: nothing was applied
+  // now, and the alert is returned as it is now, which may have fired or
+  // changed since.
+  REPLAYED = 3;
+}
+
+// AlertChannel is where a fired alert is delivered.
+enum AlertChannel {
+  // Not set. Rejected in requests.
+  CHANNEL_UNSPECIFIED = 0;
+  // The notification inbox on the website and in the app.
+  IN_APP = 1;
+  // A direct message from the Polyester Telegram bot to the Telegram account
+  // linked to the caller's account.
+  TELEGRAM = 2;
+}
+
+// PriceAlert is one price alert of the caller.
+//
+// An alert fires only on a crossing it observes: it records the price when it
+// is created or set again (reference_price_ticks), and an alert whose
+// condition already holds at that price first waits for the price to move to
+// the other side of the alert price. A BELOW alert created while the price is
+// already below the alert price therefore fires only after the price rises
+// above it and falls back to it. An alert fires at most once; prices that
+// arrive late, or a feed that stops updating, never fire it.
+message PriceAlert {
+  // Public alert ID.
+  fixed64 alert_id = 1;
+  // Numeric spot market identifier; resolve its symbol with GetSpotConfig.
+  uint32 symbol_id = 2;
+  // Price crossing the alert waits for.
+  AlertDirection direction = 3;
+  // Price the alert watches.
+  AlertPriceSource price_source = 4;
+  // Alert price in quote units scaled by 1e9.
+  int64 price_ticks = 5;
+  // Price of price_source when the alert was created or last set again, in
+  // quote units scaled by 1e9.
+  int64 reference_price_ticks = 6;
+  // True once the price has been seen on the far side of the alert price, so
+  // the next crossing fires the alert. False while an alert created past its
+  // alert price waits for the price to move back.
+  bool armed = 7;
+  // Current state of the alert.
+  AlertStatus status = 8;
+  // Where the alert is delivered when it fires, in ascending enum order.
+  repeated AlertChannel channels = 9;
+  // Revision of the alert, starting at 1. It increases with every change the
+  // caller makes; pass it as expected_revision to UpdateAlert.
+  uint64 revision = 10;
+  // When the alert was created.
+  google.protobuf.Timestamp created_at = 11;
+  // When the caller last changed the alert.
+  google.protobuf.Timestamp updated_at = 12;
+  // When the alert fired. Omitted unless status is TRIGGERED.
+  google.protobuf.Timestamp triggered_at = 13;
+  // Price that fired the alert, in quote units scaled by 1e9. Zero unless
+  // status is TRIGGERED.
+  int64 triggered_price_ticks = 14;
+}
+
+// CreateAlertRequest creates a price alert for the caller.
+message CreateAlertRequest {
+  // Numeric spot market identifier; resolve it with GetSpotConfig.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Price crossing to wait for.
+  AlertDirection direction = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Price to watch. Unspecified means INDEX_PRICE on a market that has an
+  // index price, which is harder to move on a thin market, and LAST_PRICE
+  // otherwise; the returned alert states the price it watches.
+  AlertPriceSource price_source = 3 [(buf.validate.field).enum.defined_only = true];
+  // Alert price in quote units scaled by 1e9, for example 90000000000000 for
+  // 90,000.
+  int64 price_ticks = 4 [(buf.validate.field).int64.gt = 0];
+  // Where to deliver the alert when it fires: one to two distinct channels.
+  repeated AlertChannel channels = 5 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 2
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Optional client-chosen key, unique per caller, that makes creating
+  // idempotent: the same key and request return the alert the first request
+  // created, in its current state; another request with the same key is
+  // IDEMPOTENCY_CONFLICT. A create key is kept as long as its alert.
+  string idempotency_key = 6 [(buf.validate.field).string.pattern = "^([A-Za-z0-9._:-]{1,128})?$"];
+}
+
+// CreateAlertResponse returns the created alert.
+message CreateAlertResponse {
+  // The alert.
+  PriceAlert alert = 1;
+}
+
+// ListAlertsRequest lists the caller's alerts.
+message ListAlertsRequest {
+  // Return only alerts in these states. Empty returns every state.
+  repeated AlertStatus statuses = 1 [(buf.validate.field).repeated = {
+    max_items: 3
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Return only alerts on this market. Zero returns every market.
+  uint32 symbol_id = 2;
+  // Maximum number of alerts to return: default 50, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller, statuses and symbol_id; reuse
+  // it only with the same values.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListAlertsResponse returns one page of the caller's alerts.
+message ListAlertsResponse {
+  // Alerts, newest first.
+  repeated PriceAlert alerts = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// AlertUpdate holds the fields UpdateAlert can change.
+message AlertUpdate {
+  // New price crossing to wait for.
+  AlertDirection direction = 1;
+  // New alert price in quote units scaled by 1e9.
+  int64 price_ticks = 2;
+  // New delivery channels: one to two distinct channels. Replaces the whole
+  // list.
+  repeated AlertChannel channels = 3;
+}
+
+// UpdateAlertRequest changes an active or triggered alert of the caller.
+message UpdateAlertRequest {
+  // Public alert ID.
+  fixed64 alert_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // New values of the fields update_mask names.
+  AlertUpdate update = 2 [(buf.validate.field).required = true];
+  // Fields of update to apply, by name: direction, price_ticks and channels.
+  // Required. An empty mask changes no field: it sets a TRIGGERED alert again
+  // and changes nothing on an ACTIVE one.
+  google.protobuf.FieldMask update_mask = 3 [(buf.validate.field).required = true];
+  // The alert's current revision, from the last read.
+  uint64 expected_revision = 4 [(buf.validate.field).uint64.gt = 0];
+  // Optional client-chosen key, unique per caller, that makes the update
+  // idempotent: the same key and request (alert, update and update_mask;
+  // expected_revision aside) return the alert in its current state and apply
+  // nothing again, even after it fired or changed since; another request with
+  // the same key is IDEMPOTENCY_CONFLICT. A key is kept as long as its alert,
+  // so a repeat is recognized however late it comes. An alert keeps at most
+  // 1,000 keys: an update with a new key beyond that is
+  // ALERT_UPDATE_LIMIT_REACHED.
+  string idempotency_key = 5 [(buf.validate.field).string.pattern = "^([A-Za-z0-9._:-]{1,128})?$"];
+}
+
+// UpdateAlertResponse returns the alert after the update.
+message UpdateAlertResponse {
+  // The alert. For REPLAYED, the alert as it is now.
+  PriceAlert alert = 1;
+  // What this call did.
+  UpdateOutcome outcome = 2;
+}
+
+// CancelAlertRequest cancels an active alert of the caller.
+message CancelAlertRequest {
+  // Public alert ID.
+  fixed64 alert_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// CancelAlertResponse returns the cancelled alert.
+message CancelAlertResponse {
+  // The alert.
+  PriceAlert alert = 1;
+}
+
+// PriceAlertService manages the caller's price alerts. An alert belongs to
+// the caller's root account, the person, not to a trading account: a session
+// and the root account's API keys see the same alerts, and an API key scoped
+// to a subaccount is refused (PERMISSION_DENIED, SUBACCOUNT_KEY_REFUSED). No
+// call changes balances, orders or account settings.
+service PriceAlertService {
+  option (polyester.api.docs_group) = "account";
+
+  // CreateAlert creates an active alert and records the current price of its
+  // price source as its reference price. An alert whose condition already
+  // holds at that price waits for the price to cross back first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or UNKNOWN_SYMBOL.
+  // - FAILED_PRECONDITION: PRICE_SOURCE_UNSUPPORTED (INDEX_PRICE requested on
+  //   a market without one), or ALERT_LIMIT_REACHED.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original alert stands.
+  // - UNAVAILABLE: PRICE_UNAVAILABLE or SERVICE_UNAVAILABLE; retry the same
+  //   request.
+  // - PERMISSION_DENIED: SUBACCOUNT_KEY_REFUSED.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CreateAlert(CreateAlertRequest) returns (CreateAlertResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Alert"
+      description: "Create a price alert that fires once when the market's price crosses the alert price."
+      tags: "Price Alert Service"
+    };
+  }
+
+  // ListAlerts lists the caller's alerts, newest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: SUBACCOUNT_KEY_REFUSED.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListAlerts(ListAlertsRequest) returns (ListAlertsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Alerts"
+      description: "List the caller's price alerts, newest first."
+      tags: "Price Alert Service"
+    };
+  }
+
+  // UpdateAlert changes an alert's direction, price or channels. A change of
+  // direction or price records a new reference price, as creating does.
+  // Updating a TRIGGERED alert sets it again: it becomes ACTIVE with a new
+  // reference price, even when no field changes; an empty update_mask does
+  // only that. An update that changes nothing on an ACTIVE alert returns it
+  // unchanged. With an idempotency_key
+  // already used for the same request, it returns the alert as it is now and
+  // changes nothing: a retried or replayed update never sets the alert again.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or update_mask.
+  // - NOT_FOUND: ALERT_NOT_FOUND.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT.
+  // - ABORTED: REVISION_CONFLICT.
+  // - FAILED_PRECONDITION: ALERT_CANCELLED, PRICE_SOURCE_UNSUPPORTED,
+  //   ALERT_LIMIT_REACHED or ALERT_UPDATE_LIMIT_REACHED.
+  // - UNAVAILABLE: PRICE_UNAVAILABLE or SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: SUBACCOUNT_KEY_REFUSED.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc UpdateAlert(UpdateAlertRequest) returns (UpdateAlertResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update Alert"
+      description: "Change a price alert's direction, price or channels, or set a fired alert again."
+      tags: "Price Alert Service"
+    };
+  }
+
+  // CancelAlert cancels an active alert. Cancelling a cancelled alert returns
+  // it unchanged.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: ALERT_NOT_FOUND.
+  // - FAILED_PRECONDITION: ALERT_TRIGGERED; the alert already fired.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: SUBACCOUNT_KEY_REFUSED.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CancelAlert(CancelAlertRequest) returns (CancelAlertResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Alert"
+      description: "Cancel an active price alert."
+      tags: "Price Alert Service"
+    };
+  }
+}

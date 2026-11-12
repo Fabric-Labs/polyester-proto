@@ -25,6 +25,21 @@ enum ApiKeyStatus {
   DISABLED = 3;
 }
 
+// Purpose of an API key.
+enum ApiKeyPurpose {
+  // No purpose specified.
+  PURPOSE_UNSPECIFIED = 0;
+  // A key the account holder created for their own programs.
+  STANDARD = 1;
+  // A key the account holder created for the Polyester AI assistant through
+  // SetAssistantKeys. Its policy can never allow actions that move value out
+  // of the account or manage where it goes, such as external withdrawals or
+  // internal transfers. Only its creator's assistant uses it, so a sub-account
+  // assistant key is revoked when its creator loses the role that manages the
+  // sub-account's API keys or leaves the sub-account.
+  ASSISTANT = 2;
+}
+
 // ApiKey is public API key metadata. It never includes the private key or seed.
 message ApiKey {
   // Stable opaque identifier used to refer to this key, formatted as "ak_"
@@ -74,6 +89,9 @@ message ApiKey {
   google.protobuf.Timestamp updated_at = 25;
   // Monotonic resource revision used for conditional updates.
   uint64 revision = 26;
+  // What the key is for. ASSISTANT keys are managed with SetAssistantKeys and
+  // are otherwise listed, updated and revoked like any key.
+  ApiKeyPurpose purpose = 27;
 }
 
 // CreateApiKeyRequest creates a new API key. Clients generate the Ed25519 key
@@ -233,6 +251,75 @@ message UpdateApiKeyResponse {
   ApiKey api_key = 1;
 }
 
+// AssistantKeySpec is one account's key in the caller's assistant key set.
+message AssistantKeySpec {
+  // Sub-account the key acts for (opaque ID). Unset means the caller's main
+  // account. A key acts for exactly one account.
+  optional fixed64 subaccount_id = 1;
+  // Ed25519 public key bytes the Polyester AI assistant signs with. Must be
+  // exactly 32 bytes, and distinct within the set.
+  bytes public_key_ed25519 = 2 [
+    (buf.validate.field).bytes.len = 32,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // API policy that bounds the key (opaque ID). It must belong to the same
+  // main account as the key, and must not allow EXTERNAL_WITHDRAW,
+  // INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW.
+  fixed64 policy_id = 3 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Time until which the key may be registered, as the Polyester AI assistant
+  // issued it with the key (PrepareAssistantKeys), in whole milliseconds.
+  // Required for a new key: it must still be ahead, and at most 15 minutes
+  // ahead. Not needed when the account's current assistant key already has
+  // this public key.
+  google.protobuf.Timestamp registration_deadline = 4;
+  // The key's own Ed25519 signature over the caller's account, the key's
+  // account, its public key and registration_deadline, as the assistant
+  // issued it with the key (64 bytes). Required for a new key; not needed
+  // when the account's current assistant key already has this public key.
+  bytes registration_proof = 5;
+}
+
+// SetAssistantKeysRequest replaces the caller's assistant key set.
+message SetAssistantKeysRequest {
+  // The complete set, at most one key per account and at most 64 keys. An
+  // account left out loses its assistant key.
+  repeated AssistantKeySpec keys = 1 [
+    (buf.validate.field).repeated = {
+      min_items: 1
+      max_items: 64
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// SetAssistantKeysResponse returns the caller's assistant key set.
+message SetAssistantKeysResponse {
+  // The assistant keys now in the set, in request order.
+  repeated ApiKey api_keys = 1;
+}
+
+// ListAssistantKeysRequest lists the caller's assistant key set.
+message ListAssistantKeysRequest {}
+
+// ListAssistantKeysResponse contains the caller's assistant keys.
+message ListAssistantKeysResponse {
+  // Non-revoked assistant keys the caller set up, newest first.
+  repeated ApiKey api_keys = 1;
+}
+
+// DeleteAssistantKeysRequest revokes the caller's whole assistant key set.
+message DeleteAssistantKeysRequest {}
+
+// DeleteAssistantKeysResponse lists the keys that were revoked.
+message DeleteAssistantKeysResponse {
+  // Opaque identifiers of the keys revoked by this request. Empty when the set
+  // was already empty.
+  repeated string revoked_key_ids = 1;
+}
+
 // ApiKeyService manages API keys for authenticated callers.
 service ApiKeyService {
   option (polyester.api.docs_group) = "account";
@@ -255,24 +342,30 @@ service ApiKeyService {
     };
   }
 
-  // List non-revoked API keys visible to the caller, newest first.
+  // List non-revoked API keys visible to the caller, newest first. An API key
+  // needs READ_API_KEYS; a key scoped to a sub-account sees only that
+  // sub-account's keys.
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/api-keys"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List API Keys"
-      description: "List non-revoked API keys for the caller account, or for a sub-account the caller owns or administers, newest first."
+      description: "List non-revoked API keys for the caller account, or for a sub-account the caller owns or administers, newest first. An API key needs READ_API_KEYS; a key scoped to a sub-account sees only that sub-account's keys."
       tags: "Auth Service"
     };
   }
 
   // Get a single API key owned by the caller or scoped to a sub-account the caller administers.
+  // An API key needs READ_API_KEYS; a key scoped to a sub-account reads only
+  // that sub-account's keys.
   rpc GetApiKey(GetApiKeyRequest) returns (GetApiKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/api-keys/{key_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get API Key"
-      description: "Retrieve a single API key owned by the caller account or scoped to a sub-account the caller administers."
+      description: "Retrieve a single API key owned by the caller account or scoped to a sub-account the caller administers. An API key needs READ_API_KEYS; a key scoped to a sub-account reads only that sub-account's keys."
       tags: "Auth Service"
     };
   }
@@ -301,6 +394,63 @@ service ApiKeyService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Update API Key"
       description: "Update mutable API key fields, including label, status, whitelist, and expiry."
+      tags: "Auth Service"
+    };
+  }
+
+  // Create or replace the caller's Polyester AI assistant key set: one
+  // ASSISTANT key per enabled account, each bounded by its API policy. One
+  // fresh step-up proof covers the whole set, and the change is all or
+  // nothing. An entry whose account already has an assistant key with the same
+  // public key keeps that key, with its status, and takes the requested
+  // policy; any other entry replaces the account's key. Accounts left out of
+  // the set have their assistant key revoked. A sub-account entry needs the
+  // same access as CreateApiKey: owner, or a role that manages its API keys.
+  // The acting caller's root account must have accepted the current terms;
+  // otherwise FailedPrecondition with AUTH_TERMS_NOT_ACCEPTED is returned. A
+  // policy that allows a money-out action returns FailedPrecondition with
+  // AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED. A new key is registered only with
+  // the registration proof and deadline the assistant issued with it
+  // (PrepareAssistantKeys), before that deadline: a missing or failing proof
+  // returns InvalidArgument with AUTH_ASSISTANT_KEY_PROOF_INVALID, a passed
+  // deadline FailedPrecondition with AUTH_ASSISTANT_KEY_REGISTRATION_EXPIRED,
+  // and one more than 15 minutes ahead InvalidArgument with
+  // AUTH_ASSISTANT_KEY_DEADLINE_TOO_FAR.
+  rpc SetAssistantKeys(SetAssistantKeysRequest) returns (SetAssistantKeysResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (google.api.http) = {
+      put: "/v1/auth/assistant-keys"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set Assistant Keys"
+      description: "Create or replace the caller's Polyester AI assistant key set with one fresh step-up proof. All keys change or none do; accounts left out lose their assistant key."
+      tags: "Auth Service"
+    };
+  }
+
+  // List the caller's non-revoked Polyester AI assistant keys, newest first.
+  rpc ListAssistantKeys(ListAssistantKeysRequest) returns (ListAssistantKeysResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {get: "/v1/auth/assistant-keys"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Assistant Keys"
+      description: "List the caller's non-revoked Polyester AI assistant keys, newest first."
+      tags: "Auth Service"
+    };
+  }
+
+  // Revoke the caller's whole Polyester AI assistant key set. Revocation only
+  // removes access, so it needs no step-up proof. Revocation is permanent. As
+  // for DeleteApiKey, key management sees it at once, and requests signed with
+  // a revoked key are refused within a few seconds of the response.
+  rpc DeleteAssistantKeys(DeleteAssistantKeysRequest) returns (DeleteAssistantKeysResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {delete: "/v1/auth/assistant-keys"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete Assistant Keys"
+      description: "Revoke every Polyester AI assistant key the caller set up. Needs no step-up proof."
       tags: "Auth Service"
     };
   }

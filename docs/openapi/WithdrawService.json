@@ -17,12 +17,12 @@
                 "description": "Destination for funds leaving Trading."
               },
               "amount": {
-                "description": "Withdraw amount in canonical 18-decimal unified asset units. For example, 0.5 is encoded as 500000000000000000. For TO_EXTERNAL_CHAIN, it must be a whole number of the destination network token's smallest units: a multiple of 10^(18 - AssetChainVariant.source_decimals) when the token has fewer than 18 decimals. A finer amount is refused with ERROR_CODE_AMOUNT_EXCEEDS_ROUTE_PRECISION before any funds are reserved.",
+                "description": "Withdraw amount as a positive decimal string in whole units of the asset, for example '0.5' for half a unit. At most 18 decimal places; a nonzero digit beyond the 18th is refused. Send the amount itself, not a count of smaller units: '1' withdraws one whole unit. The signed authorization carries amount_e18, this amount times 10^18, so '0.5' is signed as 5 times 10^17. For TO_EXTERNAL_CHAIN, the amount has at most as many decimal places as the destination network token (AssetChainVariant.source_decimals); a finer amount is refused with AMOUNT_EXCEEDS_ROUTE_PRECISION before any funds are reserved.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
               "assetId": {
-                "description": "Unified asset identifier from Polyester asset metadata. amount_e18 is denominated in this asset at canonical 18-decimal scale.",
+                "description": "Unified asset identifier from Polyester asset metadata. amount is in whole units of this asset.",
                 "format": "int32",
                 "type": "integer"
               },
@@ -53,6 +53,7 @@
             "required": [
               "action",
               "amount",
+              "assetId",
               "deadlineTsSec",
               "nonce"
             ],
@@ -95,12 +96,12 @@
                 "description": "Destination for funds leaving Trading."
               },
               "amount": {
-                "description": "Withdraw amount in canonical 18-decimal unified asset units. For example, 0.5 is encoded as 500000000000000000. For TO_EXTERNAL_CHAIN, it must be a whole number of the destination network token's smallest units: a multiple of 10^(18 - AssetChainVariant.source_decimals) when the token has fewer than 18 decimals. A finer amount is refused with ERROR_CODE_AMOUNT_EXCEEDS_ROUTE_PRECISION before any funds are reserved.",
+                "description": "Withdraw amount as a positive decimal string in whole units of the asset, for example '0.5' for half a unit. At most 18 decimal places; a nonzero digit beyond the 18th is refused. Send the amount itself, not a count of smaller units: '1' withdraws one whole unit. The signed authorization carries amount_e18, this amount times 10^18, so '0.5' is signed as 5 times 10^17. For TO_EXTERNAL_CHAIN, the amount has at most as many decimal places as the destination network token (AssetChainVariant.source_decimals); a finer amount is refused with AMOUNT_EXCEEDS_ROUTE_PRECISION before any funds are reserved.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
               "assetId": {
-                "description": "Unified asset identifier from Polyester asset metadata. amount_e18 is denominated in this asset at canonical 18-decimal scale.",
+                "description": "Unified asset identifier from Polyester asset metadata. amount is in whole units of this asset.",
                 "format": "int32",
                 "type": "integer"
               },
@@ -131,6 +132,7 @@
             "required": [
               "action",
               "amount",
+              "assetId",
               "deadlineTsSec",
               "nonce"
             ],
@@ -145,7 +147,7 @@
             "type": "string"
           },
           "subaccountId": {
-            "description": "Optional public subaccount id. Omit to withdraw from the JWT root account.",
+            "description": "Optional public subaccount id. Omit to withdraw from the JWT root account.\n\nPublic ID, as a base58 string.",
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "type": "string"
           }
@@ -163,6 +165,61 @@
         },
         "required": [
           "intentId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.WithdrawService_GetWalletBalances.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "balances": {
+            "description": "Every zToken the wallet holds a nonzero balance of, ordered by zipped_asset_id. Empty when it holds none.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "amount": {
+                  "description": "Balance as a decimal string in whole units of the zToken, for example '0.5' for half a unit, with at most 18 decimal places.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "chainId": {
+                  "description": "External network of the zipped asset, the chainId of GetDepositWithdrawConfig.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "unifiedAssetId": {
+                  "description": "Unified asset the zToken stands for.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "zippedAssetId": {
+                  "description": "Zipped asset of the zToken: the network-specific asset, as chain.lifecycle.v1.AssetIds.zipped_asset_id names it.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "ztokenAddress": {
+                  "description": "zToken contract address on Polyester Chain.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "chainId",
+                "unifiedAssetId",
+                "zippedAssetId",
+                "ztokenAddress"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "smartAccountAddress": {
+            "description": "Smart account wallet whose balances these are.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "balances",
+          "smartAccountAddress"
         ],
         "type": "object"
       },
@@ -378,6 +435,64 @@
         "x-poly-mfa-requirement": "conditional",
         "x-poly-request-type": "chain.withdraw.v1.CreateWalletTradingWithdrawRequest",
         "x-poly-response-type": "chain.withdraw.v1.CreateWalletTradingWithdrawResponse",
+        "x-poly-rest": true,
+        "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
+      }
+    },
+    "/v1/chain/wallet/balances": {
+      "get": {
+        "description": "Read the zTokens the account's smart account wallet holds on Polyester Chain, such as a rejected withdrawal's refund, live from the chain. An API key needs READ_BALANCES within its scope.",
+        "operationId": "WithdrawService_GetWalletBalances",
+        "parameters": [
+          {
+            "description": "Public subaccount ID; omit for the caller's root account.\n\nPublic ID, as a base58 string.",
+            "in": "query",
+            "name": "subaccountId",
+            "required": false,
+            "schema": {
+              "example": "45LUmqjT",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "balances": [
+                    {
+                      "amount": "18.446744073709551617",
+                      "chainId": 1,
+                      "unifiedAssetId": 100,
+                      "zippedAssetId": 100,
+                      "ztokenAddress": "0x6666666666666666666666666666666666666666"
+                    }
+                  ],
+                  "smartAccountAddress": "0x2222222222222222222222222222222222222222"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.WithdrawService_GetWalletBalances.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Get Wallet Balances",
+        "tags": [
+          "Withdrawals"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "polyester.rest.WithdrawService_GetWalletBalances",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "chain.withdraw.v1.GetWalletBalancesRequest",
+        "x-poly-response-type": "chain.withdraw.v1.GetWalletBalancesResponse",
         "x-poly-rest": true,
         "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
       }

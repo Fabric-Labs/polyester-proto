@@ -2,7 +2,7 @@
   "services": [
     {
       "name": "swap.quickswap.v1.QuickSwapBrokerService",
-      "doc": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n\n A member managing keys or members must also send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
+      "doc": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n\n A member managing keys or members must also send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
       "methods": [
         {
           "name": "CreateAffiliateVault",
@@ -130,7 +130,7 @@
           "requestType": "swap.quickswap.v1.GetBrokerStatsRequest",
           "responseType": "swap.quickswap.v1.GetBrokerStatsResponse",
           "summary": "GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC",
-          "doc": "GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC\n day or month: QuickSwaps created by status, deposits credited and\n payouts delivered per asset, and the service, broker and affiliate fees\n charged per asset.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INTERNAL: STATS_INCOMPLETE, with the swap_id of a QuickSwap whose\n   records the stats cannot read.",
+          "doc": "GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC\n day or month: QuickSwaps created by status, deposits credited and\n payouts delivered per asset, and the service, broker, affiliate and\n referral fees charged per asset.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INTERNAL: STATS_INCOMPLETE, with the swap_id of a QuickSwap whose\n   records the stats cannot read.",
           "tags": [
             "quickswap"
           ],
@@ -180,6 +180,10 @@
                       },
                       "assetId": 100,
                       "brokerFee": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "referralFee": {
                         "baseUnits": "value",
                         "decimals": 36
                       },
@@ -241,6 +245,79 @@
                   "vaultAccountId": "7563897446546"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "GetPayout",
+          "path": "swap.quickswap.v1.QuickSwapBrokerService/GetPayout",
+          "requestType": "swap.quickswap.v1.GetPayoutRequest",
+          "responseType": "swap.quickswap.v1.GetPayoutResponse",
+          "summary": "GetPayout reads one payout run of the broker's vaults, for a detail view",
+          "doc": "GetPayout reads one payout run of the broker's vaults, for a detail view\n or a link from a ledger entry. Every broker role and the broker's API\n keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or PAYOUT_NOT_FOUND, including a run of\n   another broker's vault.\n - UNAVAILABLE: the payout cannot be read; retry the same request.",
+          "tags": [
+            "quickswap"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "broker_api_key",
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "swap.quickswap.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "broker": "value",
+              "runId": "1"
+            },
+            "response": {
+              "payout": {
+                "finishedAt": "2025-01-01T00:00:00Z",
+                "minUsdValue": {
+                  "baseUnits": "value",
+                  "decimals": 36
+                },
+                "reason": "value",
+                "ruleVersion": 1,
+                "runId": "1",
+                "scheduledFor": "2025-01-01T00:00:00Z",
+                "stage": "STAGE_PLANNING",
+                "startedAt": "2025-01-01T00:00:00Z",
+                "status": "PAYOUT_PAID",
+                "steps": [
+                  {
+                    "amount": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "assetId": 100,
+                    "available": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "chargedNetworkFee": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "destinationAddress": "0x3333333333333333333333333333333333333333",
+                    "destinationChainId": "1",
+                    "minimum": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    },
+                    "reason": "value",
+                    "state": "PAYOUT_STEP_PENDING",
+                    "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                    "valueUsd": {
+                      "baseUnits": "value",
+                      "decimals": 36
+                    }
+                  }
+                ],
+                "vaultAccountId": "7563897446546"
+              }
             }
           }
         },
@@ -385,7 +462,12 @@
                     "decimals": 36
                   },
                   "minRate": "value",
-                  "quotedAt": "2025-01-01T00:00:00Z"
+                  "quotedAt": "2025-01-01T00:00:00Z",
+                  "referral": {
+                    "baseBrokerBps": 1,
+                    "commissionBps": 1,
+                    "discountBps": 1
+                  }
                 },
                 "reason": "SOURCE_SCREENING_FAILED",
                 "refundAddress": "value",
@@ -648,6 +730,89 @@
           }
         },
         {
+          "name": "ListPayouts",
+          "path": "swap.quickswap.v1.QuickSwapBrokerService/ListPayouts",
+          "requestType": "swap.quickswap.v1.ListPayoutsRequest",
+          "responseType": "swap.quickswap.v1.ListPayoutsResponse",
+          "summary": "ListPayouts lists the payout runs of the broker's vaults, newest first,",
+          "doc": "ListPayouts lists the payout runs of the broker's vaults, newest first,\n filtered by vault, status and scheduled slot. Every broker role and the\n broker's API keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is\n   not the broker's.\n - INVALID_ARGUMENT: a page_token from another broker, other filters or\n   malformed.\n - UNAVAILABLE: the payouts cannot be read; retry the same request.",
+          "tags": [
+            "quickswap"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "broker_api_key",
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "swap.quickswap.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "broker": "value",
+              "endTime": "2025-01-01T00:00:00Z",
+              "limit": 100,
+              "pageToken": "eyJvZmZzZXQiOjEwMH0",
+              "startTime": "2025-01-01T00:00:00Z",
+              "statuses": [
+                "PAYOUT_PAID"
+              ],
+              "vaultAccountId": "7563897446546"
+            },
+            "response": {
+              "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
+              "payouts": [
+                {
+                  "finishedAt": "2025-01-01T00:00:00Z",
+                  "minUsdValue": {
+                    "baseUnits": "value",
+                    "decimals": 36
+                  },
+                  "reason": "value",
+                  "ruleVersion": 1,
+                  "runId": "1",
+                  "scheduledFor": "2025-01-01T00:00:00Z",
+                  "stage": "STAGE_PLANNING",
+                  "startedAt": "2025-01-01T00:00:00Z",
+                  "status": "PAYOUT_PAID",
+                  "steps": [
+                    {
+                      "amount": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "assetId": 100,
+                      "available": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "chargedNetworkFee": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "destinationChainId": "1",
+                      "minimum": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "reason": "value",
+                      "state": "PAYOUT_STEP_PENDING",
+                      "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                      "valueUsd": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      }
+                    }
+                  ],
+                  "vaultAccountId": "7563897446546"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "ListQuickSwaps",
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListQuickSwaps",
           "requestType": "swap.quickswap.v1.ListQuickSwapsRequest",
@@ -724,6 +889,229 @@
                     "sourceZippedAssetId": 100
                   },
                   "updatedAt": "2025-01-01T00:00:00Z"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ListUpcomingPayouts",
+          "path": "swap.quickswap.v1.QuickSwapBrokerService/ListUpcomingPayouts",
+          "requestType": "swap.quickswap.v1.ListUpcomingPayoutsRequest",
+          "responseType": "swap.quickswap.v1.ListUpcomingPayoutsResponse",
+          "summary": "ListUpcomingPayouts previews the next payout run of each of the",
+          "doc": "ListUpcomingPayouts previews the next payout run of each of the\n broker's vaults from its balances now: when it starts, whether it would\n pay, and per asset what it would pay, what would stay and why, and the\n expected network fee. Every broker role and the broker's API keys can\n read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault filter, or\n   malformed.\n - UNAVAILABLE: a preview cannot be read; no partial page is returned.",
+          "tags": [
+            "quickswap"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "broker_api_key",
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "swap.quickswap.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "broker": "value",
+              "limit": 100,
+              "pageToken": "eyJvZmZzZXQiOjEwMH0",
+              "vaultAccountId": "7563897446546"
+            },
+            "response": {
+              "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
+              "upcomingPayouts": [
+                {
+                  "assets": [
+                    {
+                      "assetId": 100,
+                      "available": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "destinationChainId": "1",
+                      "estimatedNetworkFee": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "estimatedNetworkFeeSampledAt": "2025-01-01T00:00:00Z",
+                      "heldBack": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "holdReason": "value",
+                      "minimum": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "payable": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "payableFrom": "2025-01-01T00:00:00Z",
+                      "pricedAt": "2025-01-01T00:00:00Z",
+                      "valueUsd": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      }
+                    }
+                  ],
+                  "computedAt": "2025-01-01T00:00:00Z",
+                  "minUsdValue": {
+                    "baseUnits": "value",
+                    "decimals": 36
+                  },
+                  "nextRunAt": "2025-01-01T00:00:00Z",
+                  "pause": {
+                    "assetId": 100,
+                    "pausedAt": "2025-01-01T00:00:00Z",
+                    "reason": "value"
+                  },
+                  "ruleVersion": 1,
+                  "status": "WILL_PAY",
+                  "vaultAccountId": "7563897446546"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ListVaultBalances",
+          "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultBalances",
+          "requestType": "swap.quickswap.v1.ListVaultBalancesRequest",
+          "responseType": "swap.quickswap.v1.ListVaultBalancesResponse",
+          "summary": "ListVaultBalances reads current balances for this broker's own vaults.",
+          "doc": "ListVaultBalances reads current balances for this broker's own vaults.\n All broker roles and the broker's API keys can read, without step-up.\n Errors: NOT_FOUND for an unknown broker or vault; UNAVAILABLE when a\n balance cannot be read. No partial page is returned on a read failure.",
+          "tags": [
+            "quickswap"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "broker_api_key",
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "swap.quickswap.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "broker": "value",
+              "limit": 100,
+              "pageToken": "eyJvZmZzZXQiOjEwMH0",
+              "vaultAccountId": "7563897446546"
+            },
+            "response": {
+              "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
+              "vaults": [
+                {
+                  "asOf": "2025-01-01T00:00:00Z",
+                  "assets": [
+                    {
+                      "amount": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "assetId": 100,
+                      "pendingOutgoing": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      }
+                    }
+                  ],
+                  "vaultAccountId": "7563897446546"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ListVaultPayoutRules",
+          "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultPayoutRules",
+          "requestType": "swap.quickswap.v1.ListVaultPayoutRulesRequest",
+          "responseType": "swap.quickswap.v1.ListVaultPayoutRulesResponse",
+          "summary": "ListVaultPayoutRules reads the payout rule of each of the broker's",
+          "doc": "ListVaultPayoutRules reads the payout rule of each of the broker's\n vaults, and the assets each vault holds or was credited in that its rule\n pays no destination for. Every broker role and the broker's API keys can\n read, without step-up; only Owner and Finance members change rules.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault filter, or\n   malformed.\n - UNAVAILABLE: a rule or balance cannot be read; no partial page is\n   returned.",
+          "tags": [
+            "quickswap"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "broker_api_key",
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "swap.quickswap.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "broker": "value",
+              "limit": 100,
+              "pageToken": "eyJvZmZzZXQiOjEwMH0",
+              "vaultAccountId": "7563897446546"
+            },
+            "response": {
+              "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
+              "rules": [
+                {
+                  "assetsWithoutDestination": [
+                    {
+                      "assetId": 100,
+                      "balance": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      }
+                    }
+                  ],
+                  "destinations": [
+                    {
+                      "assetId": 100,
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "destinationChainId": "1",
+                      "estimatedNetworkFee": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "estimatedNetworkFeeSampledAt": "2025-01-01T00:00:00Z",
+                      "maxAmount": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "minAmount": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      },
+                      "minFloor": {
+                        "baseUnits": "value",
+                        "decimals": 36
+                      }
+                    }
+                  ],
+                  "enabled": false,
+                  "minUsdValue": {
+                    "baseUnits": "value",
+                    "decimals": 36
+                  },
+                  "pause": {
+                    "assetId": 100,
+                    "pausedAt": "2025-01-01T00:00:00Z",
+                    "reason": "value"
+                  },
+                  "ruleVersion": 1,
+                  "schedule": {
+                    "anchorDate": "",
+                    "cadence": "DAILY",
+                    "dayOfMonth": 0,
+                    "minuteOfDay": 840,
+                    "minuteOfHour": 0,
+                    "weekday": "MONDAY"
+                  },
+                  "updatedAt": "2025-01-01T00:00:00Z",
+                  "vaultAccountId": "7563897446546"
                 }
               ]
             }

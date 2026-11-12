@@ -62,20 +62,22 @@
             "title": "last_used_at"
           },
           "policyId": {
-            "description": "Optional API policy attached to this key (opaque ID).\n Empty means no policy is attached and the key has no permissions.",
-            "format": "int64",
+            "description": "Optional API policy attached to this key (opaque ID).\n Empty means no policy is attached and the key has no permissions.\n\nPublic ID, as a base58 string.",
             "nullable": true,
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "policy_id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
           },
           "publicKeyEd25519": {
             "description": "Ed25519 public key bytes associated with this API key. The private key or\n seed is never returned by the API.",
             "format": "byte",
             "title": "public_key_ed25519",
             "type": "string"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/auth.v1.ApiKeyPurpose",
+            "description": "What the key is for. ASSISTANT keys are managed with SetAssistantKeys and\n are otherwise listed, updated and revoked like any key.",
+            "title": "purpose"
           },
           "revision": {
             "description": "Monotonic resource revision used for conditional updates.",
@@ -92,14 +94,11 @@
             "title": "status"
           },
           "subaccountId": {
-            "description": "Optional sub-account this key is scoped to (opaque ID; empty = root-level).",
-            "format": "int64",
+            "description": "Optional sub-account this key is scoped to (opaque ID; empty = root-level).\n\nPublic ID, as a base58 string.",
             "nullable": true,
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "subaccount_id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
           },
           "updatedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -109,6 +108,16 @@
         },
         "title": "ApiKey",
         "type": "object"
+      },
+      "auth.v1.ApiKeyPurpose": {
+        "description": "Purpose of an API key.",
+        "enum": [
+          "PURPOSE_UNSPECIFIED",
+          "STANDARD",
+          "ASSISTANT"
+        ],
+        "title": "ApiKeyPurpose",
+        "type": "string"
       },
       "auth.v1.ApiKeyStatus": {
         "description": "Status of an API key.",
@@ -120,6 +129,50 @@
         ],
         "title": "ApiKeyStatus",
         "type": "string"
+      },
+      "auth.v1.AssistantKeySpec": {
+        "additionalProperties": false,
+        "description": "AssistantKeySpec is one account's key in the caller's assistant key set.",
+        "properties": {
+          "policyId": {
+            "description": "API policy that bounds the key (opaque ID). It must belong to the same\n main account as the key, and must not allow EXTERNAL_WITHDRAW,\n INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "title": "policy_id",
+            "type": "string"
+          },
+          "publicKeyEd25519": {
+            "description": "Ed25519 public key bytes the Polyester AI assistant signs with. Must be\n exactly 32 bytes, and distinct within the set.",
+            "format": "byte",
+            "maxLength": 32,
+            "minLength": 32,
+            "title": "public_key_ed25519",
+            "type": "string"
+          },
+          "registrationDeadline": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time until which the key may be registered, as the Polyester AI assistant\n issued it with the key (PrepareAssistantKeys), in whole milliseconds.\n Required for a new key: it must still be ahead, and at most 15 minutes\n ahead. Not needed when the account's current assistant key already has\n this public key.",
+            "title": "registration_deadline"
+          },
+          "registrationProof": {
+            "description": "The key's own Ed25519 signature over the caller's account, the key's\n account, its public key and registration_deadline, as the assistant\n issued it with the key (64 bytes). Required for a new key; not needed\n when the account's current assistant key already has this public key.",
+            "format": "byte",
+            "title": "registration_proof",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Sub-account the key acts for (opaque ID). Unset means the caller's main\n account. A key acts for exactly one account.\n\nPublic ID, as a base58 string.",
+            "nullable": true,
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "title": "subaccount_id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKeyEd25519",
+          "policyId"
+        ],
+        "title": "AssistantKeySpec",
+        "type": "object"
       },
       "auth.v1.CreateApiKeyRequest": {
         "additionalProperties": false,
@@ -166,14 +219,11 @@
             "type": "string"
           },
           "subaccountId": {
-            "description": "Optional sub-account to scope this key to (opaque ID). If unset, the key is\n root-level.",
-            "format": "int64",
+            "description": "Optional sub-account to scope this key to (opaque ID). If unset, the key is\n root-level.\n\nPublic ID, as a base58 string.",
             "nullable": true,
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "subaccount_id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
           }
         },
         "required": [
@@ -200,6 +250,22 @@
         "additionalProperties": false,
         "description": "DeleteApiKeyResponse is empty when revocation succeeds.",
         "title": "DeleteApiKeyResponse",
+        "type": "object"
+      },
+      "auth.v1.DeleteAssistantKeysResponse": {
+        "additionalProperties": false,
+        "description": "DeleteAssistantKeysResponse lists the keys that were revoked.",
+        "properties": {
+          "revokedKeyIds": {
+            "description": "Opaque identifiers of the keys revoked by this request. Empty when the set\n was already empty.",
+            "items": {
+              "type": "string"
+            },
+            "title": "revoked_key_ids",
+            "type": "array"
+          }
+        },
+        "title": "DeleteAssistantKeysResponse",
         "type": "object"
       },
       "auth.v1.GetApiKeyResponse": {
@@ -229,6 +295,59 @@
           }
         },
         "title": "ListApiKeysResponse",
+        "type": "object"
+      },
+      "auth.v1.ListAssistantKeysResponse": {
+        "additionalProperties": false,
+        "description": "ListAssistantKeysResponse contains the caller's assistant keys.",
+        "properties": {
+          "apiKeys": {
+            "description": "Non-revoked assistant keys the caller set up, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.ApiKey"
+            },
+            "title": "api_keys",
+            "type": "array"
+          }
+        },
+        "title": "ListAssistantKeysResponse",
+        "type": "object"
+      },
+      "auth.v1.SetAssistantKeysRequest": {
+        "additionalProperties": false,
+        "description": "SetAssistantKeysRequest replaces the caller's assistant key set.",
+        "properties": {
+          "keys": {
+            "description": "The complete set, at most one key per account and at most 64 keys. An\n account left out loses its assistant key.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.AssistantKeySpec"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "SetAssistantKeysRequest",
+        "type": "object"
+      },
+      "auth.v1.SetAssistantKeysResponse": {
+        "additionalProperties": false,
+        "description": "SetAssistantKeysResponse returns the caller's assistant key set.",
+        "properties": {
+          "apiKeys": {
+            "description": "The assistant keys now in the set, in request order.",
+            "items": {
+              "$ref": "#/components/schemas/auth.v1.ApiKey"
+            },
+            "title": "api_keys",
+            "type": "array"
+          }
+        },
+        "title": "SetAssistantKeysResponse",
         "type": "object"
       },
       "google.protobuf.Timestamp": {
@@ -276,22 +395,19 @@
   "paths": {
     "/v1/auth/api-keys": {
       "get": {
-        "description": "List non-revoked API keys for the caller account, or for a sub-account the caller owns or administers, newest first.",
+        "description": "List non-revoked API keys for the caller account, or for a sub-account the caller owns or administers, newest first. An API key needs READ_API_KEYS; a key scoped to a sub-account sees only that sub-account's keys.",
         "operationId": "ApiKeyService_ListApiKeys",
         "parameters": [
           {
-            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.",
+            "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.\n\nPublic ID, as a base58 string.",
             "in": "query",
             "name": "subaccountId",
             "schema": {
               "description": "Optional filter: only keys scoped to this sub-account (opaque ID). The\n caller must own or administer the sub-account. If unset, only non-revoked\n keys owned by the caller are returned.",
               "example": "45LUmqjT",
-              "format": "int64",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "title": "subaccount_id",
-              "type": [
-                "integer",
-                "string"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -315,6 +431,7 @@
                       "lastUsedAt": "2025-01-01T00:00:00Z",
                       "policyId": "3Gxbxht1EK",
                       "publicKeyEd25519": "AA==",
+                      "purpose": "STANDARD",
                       "revision": "1",
                       "status": "ACTIVE",
                       "subaccountId": "37E2o5r2qHk",
@@ -335,7 +452,8 @@
           "Auth Service"
         ],
         "x-poly-authentication-methods": [
-          "session_token"
+          "session_token",
+          "api_key"
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "auth.v1",
@@ -390,6 +508,7 @@
                     "lastUsedAt": "2025-01-01T00:00:00Z",
                     "policyId": "ADVPd9FYi2",
                     "publicKeyEd25519": "AA==",
+                    "purpose": "STANDARD",
                     "revision": "1",
                     "status": "ACTIVE",
                     "subaccountId": "39HwgZg2gCw",
@@ -465,7 +584,7 @@
         "x-poly-response-type": "auth.v1.DeleteApiKeyResponse"
       },
       "get": {
-        "description": "Retrieve a single API key owned by the caller account or scoped to a sub-account the caller administers.",
+        "description": "Retrieve a single API key owned by the caller account or scoped to a sub-account the caller administers. An API key needs READ_API_KEYS; a key scoped to a sub-account reads only that sub-account's keys.",
         "operationId": "ApiKeyService_GetApiKey",
         "parameters": [
           {
@@ -502,6 +621,7 @@
                     "lastUsedAt": "2025-01-01T00:00:00Z",
                     "policyId": "ADVPd9FYi2",
                     "publicKeyEd25519": "AA==",
+                    "purpose": "STANDARD",
                     "revision": "1",
                     "status": "ACTIVE",
                     "subaccountId": "39HwgZg2gCw",
@@ -521,7 +641,8 @@
           "Auth Service"
         ],
         "x-poly-authentication-methods": [
-          "session_token"
+          "session_token",
+          "api_key"
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "auth.v1",
@@ -626,6 +747,173 @@
           "session_token"
         ],
         "x-poly-rest": true
+      }
+    },
+    "/v1/auth/assistant-keys": {
+      "delete": {
+        "description": "Revoke every Polyester AI assistant key the caller set up. Needs no step-up proof.",
+        "operationId": "ApiKeyService_DeleteAssistantKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "revokedKeyIds": [
+                    "ak_1a3c6de8153d5a5b04cd2a6529779542"
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.DeleteAssistantKeysResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete Assistant Keys",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "auth.v1.DeleteAssistantKeysRequest",
+        "x-poly-response-type": "auth.v1.DeleteAssistantKeysResponse"
+      },
+      "get": {
+        "description": "List the caller's non-revoked Polyester AI assistant keys, newest first.",
+        "operationId": "ApiKeyService_ListAssistantKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "apiKeys": [
+                    {
+                      "color": "#7C3AED",
+                      "createdAt": "2025-01-01T00:00:00Z",
+                      "createdByActor": "dashboard",
+                      "expiresAt": "2025-01-01T00:00:00Z",
+                      "icon": "💰",
+                      "ipWhitelist": [
+                        "203.0.113.0/24"
+                      ],
+                      "keyId": "ak_1a3c6de8153d5a5b04cd2a6529779542",
+                      "label": "Trading Bot",
+                      "lastUsedAt": "2025-01-01T00:00:00Z",
+                      "policyId": "3Gxbxht1EK",
+                      "publicKeyEd25519": "AA==",
+                      "purpose": "STANDARD",
+                      "revision": "1",
+                      "status": "ACTIVE",
+                      "subaccountId": "37E2o5r2qHk",
+                      "updatedAt": "2025-01-01T00:00:00Z"
+                    }
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.ListAssistantKeysResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List Assistant Keys",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "auth.v1.ListAssistantKeysRequest",
+        "x-poly-response-type": "auth.v1.ListAssistantKeysResponse"
+      },
+      "put": {
+        "description": "Create or replace the caller's Polyester AI assistant key set with one fresh step-up proof. All keys change or none do; accounts left out lose their assistant key.",
+        "operationId": "ApiKeyService_SetAssistantKeys",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "keys": [
+                  {
+                    "policyId": "2",
+                    "publicKeyEd25519": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+                  },
+                  {
+                    "policyId": "2",
+                    "publicKeyEd25519": "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=",
+                    "subaccountId": "45LUmqjT"
+                  }
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.SetAssistantKeysRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.v1.SetAssistantKeysRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "apiKeys": [
+                    {
+                      "color": "#7C3AED",
+                      "createdAt": "2025-01-01T00:00:00Z",
+                      "createdByActor": "dashboard",
+                      "expiresAt": "2025-01-01T00:00:00Z",
+                      "icon": "💰",
+                      "ipWhitelist": [
+                        "203.0.113.0/24"
+                      ],
+                      "keyId": "ak_1a3c6de8153d5a5b04cd2a6529779542",
+                      "label": "Trading Bot",
+                      "lastUsedAt": "2025-01-01T00:00:00Z",
+                      "policyId": "3Gxbxht1EK",
+                      "publicKeyEd25519": "AA==",
+                      "purpose": "STANDARD",
+                      "revision": "1",
+                      "status": "ACTIVE",
+                      "subaccountId": "37E2o5r2qHk",
+                      "updatedAt": "2025-01-01T00:00:00Z"
+                    }
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/auth.v1.SetAssistantKeysResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Set Assistant Keys",
+        "tags": [
+          "Auth Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "auth.v1",
+        "x-poly-mfa-requirement": "fresh_step_up",
+        "x-poly-request-type": "auth.v1.SetAssistantKeysRequest",
+        "x-poly-response-type": "auth.v1.SetAssistantKeysResponse"
       }
     }
   },

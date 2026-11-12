@@ -181,19 +181,35 @@ enum FeeKind {
   // receives, credited to that affiliate vault. Each affiliate has one per
   // leg; on a bridge one, on the credited amount, charged at payout.
   AFFILIATE = 3;
-  // Network fee withheld from the deposit before it is credited.
+  // Network fee withheld from the deposit before it is credited. A quote
+  // shows an estimate; the fee withheld is the network's fee when the
+  // deposit arrives.
   DEPOSIT_NETWORK = 4;
   // Estimated network fee for a withdrawal. The actual fee is charged at
   // withdrawal time and reported on the withdrawal.
   WITHDRAWAL_NETWORK = 5;
+  // Referral commission of one trading leg: the referral partner's
+  // commission_bps (ReferralPricing) of what the leg receives, credited to
+  // the partner. It comes out of the broker fee and adds nothing to what the
+  // end user pays. Only a request with a referral_code has one; it never
+  // appears with AFFILIATE fees. On a bridge one, on the credited amount,
+  // charged at payout.
+  REFERRAL = 6;
 }
 
-// QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER
-// and AFFILIATE) are charged when each leg settles, in the asset that leg
+// QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER,
+// AFFILIATE and REFERRAL) are charged when each leg settles, in the asset that leg
 // receives: the base asset on a buy, the quote asset on a sell. Each is
 // computed on its own from what the leg receives and rounded down when
 // charged. A bridge has no settlement; its fees are charged at payout, in
 // the destination asset.
+//
+// A quoted fee is an estimate, not a fixed amount. What is fixed is the
+// rate (bps): each trading fee charged is that rate applied to what the leg
+// actually receives once the deposit is credited, which can be hours or days
+// after the quote. The quoted amount is not a cap: the fee charged and the
+// output follow the actual deposit, execution prices and rounding, so they
+// can be higher or lower than quoted.
 message QuoteFee {
   // Fee component.
   FeeKind kind = 1;
@@ -203,19 +219,41 @@ message QuoteFee {
   uint32 zipped_asset_id = 2;
   // Fee in zipped_asset_id's token units; for a fee charged in the
   // intermediate asset, in the intermediate asset at its trading precision
-  // (amount.decimals). Trading fees are rounded up, so the charged fee never
-  // exceeds the quoted one.
+  // (amount.decimals). An estimate for deposit_amount at the quoted prices,
+  // with trading fees rounded up; the fee charged can be higher or lower.
   TokenAmount amount = 3;
   // Rate of a trading fee in basis points of what the leg receives; zero for
-  // a network fee.
+  // a network fee. The rate, not amount, is what is charged: bps of what the
+  // leg actually receives.
   uint32 bps = 4;
   // AFFILIATE only: public sub-account ID of the affiliate vault credited
-  // with the fee; zero for every other kind.
+  // with the fee; zero for every other kind, REFERRAL included.
   fixed64 account_id = 5;
 }
 
-// QuickSwapQuote is the priced view of a QuickSwap's terms. Price fields are
-// estimates at quoted_at; only the protection fields are guarantees.
+// ReferralPricing is the referral applied to a QuickSwap, in whole basis
+// points of what each leg receives. The end user pays the service fee plus
+// base_broker_bps less discount_bps; the broker fee charged is
+// base_broker_bps less discount_bps and commission_bps, and the partner is
+// credited commission_bps (FeeKind REFERRAL). The service fee is unchanged.
+// The rates depend on the route: bridging when nothing is traded,
+// stablecoin when every leg trades two stablecoins, normal otherwise.
+message ReferralPricing {
+  // Broker fee without the referral: the request's broker_bps.
+  uint32 base_broker_bps = 1;
+  // Discount off the end user's fee.
+  uint32 discount_bps = 2;
+  // Commission credited to the referral partner.
+  uint32 commission_bps = 3;
+}
+
+// QuickSwapQuote is the priced view of a QuickSwap's terms. Prices, amounts
+// and fees are estimates at quoted_at; only the protection fields are
+// guarantees. A QuickSwap is priced when its deposit is credited, which can
+// be hours or days after the quote: the deposit must be detected before
+// DepositInstructions.funding_expires_at, and its confirmation, credit and
+// execution can finish later. Its actual output and fees can therefore
+// differ from the quote.
 //
 // The end user may deposit any amount from min_deposit_amount to
 // max_deposit_amount. min_amount_out applies only to a deposit of exactly
@@ -230,7 +268,8 @@ message QuickSwapQuote {
   TokenAmount deposit_amount = 1;
   // Expected destination amount for deposit_amount at quoted_at, after
   // trading fees and both quoted network fees, in destination token units. An
-  // estimate, not a guarantee.
+  // estimate, not a guarantee: the delivered amount follows the actual
+  // deposit, execution and fees, bounded below only by the protection.
   TokenAmount expected_amount_out = 2;
   // Guaranteed minimum delivered amount, in destination token units, at the
   // quoted network fees, for a deposit of exactly deposit_amount that fully
@@ -273,10 +312,13 @@ message QuickSwapQuote {
   // bridge. When non-zero, CreateQuickSwap requires a refund address for that
   // asset. The route is fixed at creation.
   uint32 intermediate_asset_id = 7;
-  // Quoted fee components for deposit_amount: each leg's service, broker and
-  // affiliate fees, in that order, legs in route order (a bridge has one set,
-  // charged at payout), then network fees. Affiliates are in ascending
-  // account_id order. Zero fees are omitted.
+  // Estimated fee components for deposit_amount at quoted_at: each leg's
+  // service, broker and affiliate or referral fees, in that order, legs in
+  // route order (a bridge has one set, charged at payout), then network fees.
+  // Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged
+  // are each rate applied to the actual execution and can differ from these
+  // amounts; QuickSwap.charged_fees reports the broker and affiliate fees as
+  // charged.
   repeated QuoteFee fees = 8;
   // When the quote was priced.
   google.protobuf.Timestamp quoted_at = 9;
@@ -286,6 +328,10 @@ message QuickSwapQuote {
   // fields are stale; the protection of a created QuickSwap still applies.
   // Independent of the funding window and the execution deadline.
   google.protobuf.Timestamp expires_at = 10;
+  // The referral applied; set only when the request carried a
+  // referral_code. A QuickSwap's quote keeps the referral fixed at creation:
+  // later changes to the referral program or partner never change it.
+  ReferralPricing referral = 11;
 }
 
 // Screening is the risk screening of a QuickSwap. Deposits are screened on
@@ -372,7 +418,10 @@ enum DepositDisposition {
   // asset or network (WRONG_ASSET), keeps credited_at and is returned from its
   // credit.
   RETURN_ONLY = 3;
-  // Held for review; it neither executes nor returns until released.
+  // Held for review; it neither executes nor returns until released. A
+  // deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this
+  // disposition after Zipper's compliance team transferred its funds out
+  // (QuickSwap CLOSED).
   ON_HOLD = 4;
   // Observed on an address that was already retired (DEPOSIT_ADDRESS_RETIRED).
   // It never executes and is not returned automatically. It is handled only
@@ -394,9 +443,10 @@ enum QuickSwapReason {
   // unavailable. Processing resumes automatically when capacity frees up; no
   // action is needed.
   CAPACITY_UNAVAILABLE = 4;
-  // Execution could not meet the protection. On a HELD QuickSwap nothing was
-  // traded and the funds are held for review; otherwise untraded funds are
-  // refunded or returned.
+  // Execution could not meet the protection; untraded funds are refunded or
+  // returned. When no protected order could be placed for the deposit, nothing
+  // is traded: the deposit is returned to return_address, and the QuickSwap
+  // shows RETURNING and RETURNED with this reason.
   PROTECTION_NOT_MET = 7;
   // The execution deadline passed before all input executed; untraded funds
   // are refunded or returned. Shown while EXECUTING once the deadline ended
@@ -404,14 +454,18 @@ enum QuickSwapReason {
   EXECUTION_DEADLINE_REACHED = 8;
   // The deposit was first seen after funding_expires_at.
   LATE_DEPOSIT = 9;
-  // The deposit is below the published min_deposit_amount. It is not
-  // executed: it is returned to return_address, and the QuickSwap shows
-  // RETURNING and RETURNED with this reason. A deposit that cannot be returned
-  // on the network it was received on is held (HELD with this reason); the
-  // broker contacts Polyester broker support with the swap_id.
+  // The deposit is below the published min_deposit_amount, or its credit after
+  // the deposit network fee is below the smallest order the route's market
+  // accepts. It is not executed: it is returned to return_address, and the
+  // QuickSwap shows RETURNING and RETURNED with this reason. A deposit that
+  // cannot be returned on the network it was received on is held (HELD with
+  // this reason); the broker contacts Polyester broker support with the
+  // swap_id.
   DEPOSIT_BELOW_MINIMUM = 11;
-  // The deposit is above max_deposit_amount; it is returned to
-  // return_address.
+  // The deposit is above max_deposit_amount, or above the largest order the
+  // route's market accepts. It is not executed: it is returned to
+  // return_address, and the QuickSwap shows RETURNING and RETURNED with this
+  // reason.
   DEPOSIT_ABOVE_MAXIMUM = 12;
   // The deposit is not the quoted source asset or network. It is not
   // executed: it is returned to return_address on the network and in the
@@ -430,8 +484,11 @@ enum QuickSwapReason {
   // action is needed.
   OUTCOME_RECONCILING = 17;
   // Polyester's deposit screening blocked the deposit. It is held for
-  // compliance review; it is never executed or returned automatically. The
-  // broker contacts Polyester broker support with the swap_id.
+  // compliance review (HELD); it is never executed or returned automatically.
+  // The broker contacts Polyester broker support with the swap_id. If
+  // Zipper's compliance team later transfers the funds out to an address of
+  // its choosing, not necessarily the user's, the QuickSwap ends CLOSED with
+  // this reason; the funds were not returned to return_address.
   SOURCE_SCREENING_BLOCKED = 20;
   // Refund not possible: an amount left to refund or return was below the
   // withdrawal minimum of its asset and network, so no withdrawal was made
@@ -457,6 +514,12 @@ enum QuickSwapReason {
   // destination asset; they are refunded to refund_address. Shown on the
   // payout statuses that follow.
   INTERMEDIATE_BELOW_MINIMUM = 26;
+  // A market on the route was halted, restricted or delisted when the deposit
+  // was credited and did not reopen within a bounded wait after the deposit
+  // was credited, the same for market and TWAP execution. Nothing was traded:
+  // the deposit is returned to return_address, and the QuickSwap shows
+  // RETURNING and RETURNED with this reason.
+  MARKET_CLOSED = 27;
 }
 
 // Deposit is one deposit detected on the QuickSwap's deposit address.
@@ -546,6 +609,13 @@ enum WithdrawalRole {
   // the network and in the asset they were received in: the source network,
   // or for a wrong asset the network it was sent on.
   RETURN = 3;
+  // A deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) that
+  // Zipper's compliance team transferred out on the network it was received
+  // on, to an address of its choosing, not necessarily the user's. Not a
+  // return or a refund: Polyester records neither the recipient nor the
+  // amount, so address, memo, amount and network_fee are unset; tx_hash is
+  // the transfer, and flow_id the deposit's flow.
+  COMPLIANCE_TRANSFER = 4;
 }
 
 // WithdrawalState is the progress of one withdrawal. FINALIZED and NOT_SENT
@@ -584,18 +654,24 @@ message Withdrawal {
   uint32 deposit_index = 3;
   // Asset and network paid, as a zipped_asset_id.
   uint32 zipped_asset_id = 4;
-  // Recipient address in the network's native text form.
+  // Recipient address in the network's native text form. Empty on a
+  // COMPLIANCE_TRANSFER, whose recipient Polyester does not record.
   string address = 5;
-  // Recipient destination tag or memo; empty when the network uses none.
+  // Recipient destination tag or memo; empty when the network uses none,
+  // and on a COMPLIANCE_TRANSFER.
   string memo = 6;
   // Amount delivered to address after the network fee, in zipped_asset_id's
   // token units; set once FINALIZED. Like tx_hash, it is the amount recorded
   // for this withdrawal and can be corrected for up to 24 hours after the
-  // QuickSwap ends (terminal_at).
+  // QuickSwap ends (terminal_at). Unset on the RETURN of a deposit returned
+  // because its risk screen failed (SOURCE_SCREENING_FAILED): that return is
+  // sent from the deposit address and reports no delivered amount. Unset on
+  // a COMPLIANCE_TRANSFER too.
   TokenAmount amount = 7;
   // Actual network fee withheld from this withdrawal, in the same units; set
   // once FINALIZED. Can be corrected for up to 24 hours after the QuickSwap
-  // ends, like amount.
+  // ends, like amount. Unset on the RETURN of a deposit returned because its
+  // risk screen failed, and on a COMPLIANCE_TRANSFER, like amount.
   TokenAmount network_fee = 8;
   // Withdrawal progress.
   WithdrawalState state = 9;
@@ -614,7 +690,11 @@ message Withdrawal {
   // the authoritative, latest state of the transfer, including a correction
   // made after tx_hash, amount and network_fee stop being updated. Lifecycle
   // flow amounts are 18-decimal unified units (amount_e18), not token base
-  // units.
+  // units. For the RETURN of a deposit returned because its risk screen
+  // failed, it is the deposit's flow (Deposit.flow_id), which ends REFUNDED
+  // with the return as its transaction. For a COMPLIANCE_TRANSFER, it is the
+  // deposit's flow too, which ends FAILED with reason
+  // ZIPPER_COMPLIANCE_TRANSFERRED and the transfer as its transaction.
   string flow_id = 13;
   // Set only when state is NOT_SENT: the amount for which no withdrawal was
   // made because it was below the withdrawal minimum of its asset and
@@ -632,8 +712,9 @@ message Withdrawal {
 // bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A
 // QuickSwap that cannot be issued a deposit address goes from ALLOCATING
 // straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from
-// any non-terminal status and is not terminal. The terminal statuses are
-// COMPLETED, REFUNDED, RETURNED and EXPIRED; a terminal status never
+// any non-terminal status and is not terminal; a QuickSwap HELD with
+// SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are
+// COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never
 // changes. Accept status values added later; is_terminal is authoritative.
 enum QuickSwapStatus {
   // No status; never returned.
@@ -667,7 +748,8 @@ enum QuickSwapStatus {
   // being returned to return_address.
   RETURNING = 11;
   // Funds are held for review. Not terminal: review resumes the QuickSwap or
-  // returns the funds. reason says why when a specific reason applies, else
+  // returns the funds, or, for SOURCE_SCREENING_BLOCKED, the QuickSwap can
+  // end CLOSED. reason says why when a specific reason applies, else
   // it is REASON_UNSPECIFIED. The broker contacts Polyester broker support
   // with the swap_id.
   HELD = 12;
@@ -685,6 +767,12 @@ enum QuickSwapStatus {
   // (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address
   // (DEPOSIT_ADDRESS_CONFLICT).
   EXPIRED = 16;
+  // Terminal: the deposit was blocked by its risk screen
+  // (SOURCE_SCREENING_BLOCKED), and Zipper's compliance team transferred the
+  // funds out on the deposit's network to an address of its choosing, not
+  // necessarily the user's. Nothing was returned to return_address or
+  // refunded. Its one withdrawal is that COMPLIANCE_TRANSFER, FINALIZED.
+  CLOSED = 17;
 }
 
 // QuickSwap is one broker-owned swap of an external deposit into external
@@ -734,7 +822,10 @@ message QuickSwap {
   string refund_address = 12;
   // Destination tag or memo for refund_address; empty when none.
   string refund_memo = 13;
-  // Quote and protection fixed at creation. Not refreshed on retries.
+  // Quote and protection fixed at creation. Not refreshed on retries. Its
+  // amounts and fees stay estimates: the QuickSwap is priced when its deposit
+  // is credited, and execution, withdrawals and charged_fees report the
+  // actual output and fees.
   QuickSwapQuote quote = 14;
   // Where and until when to deposit; absent while ALLOCATING and on a
   // QuickSwap that never got an address (EXPIRED with
@@ -768,11 +859,15 @@ message QuickSwap {
   // of this QuickSwap is charged that version's service fees, whatever later
   // versions change.
   uint64 fee_schedule_version = 28;
-  // Broker and affiliate fees as requested, fixed at creation.
+  // Broker and affiliate fees as requested, fixed at creation. With a
+  // referral (quote.referral), the broker fee charged is broker_bps less the
+  // referral's discount and commission.
   RequestedFees fees = 29;
   // Broker and affiliate fees charged so far, as settled: one entry per fee
   // kind, credited vault and asset, in kind, then account_id, then asset_id
-  // order. Grows while the QuickSwap executes or pays out a bridge.
+  // order. Grows while the QuickSwap executes or pays out a bridge. Each is
+  // the requested rate applied to the actual execution, so it can differ
+  // from the quote's fee lines.
   repeated ChargedFee charged_fees = 30;
 }
 
@@ -789,10 +884,10 @@ message RequestedFees {
 // ChargedFee is what one vault has been credited with for a QuickSwap in
 // one asset, from settled fills and bridge payouts.
 message ChargedFee {
-  // BROKER or AFFILIATE.
+  // BROKER, AFFILIATE or REFERRAL.
   FeeKind kind = 1;
   // Public sub-account ID of the credited vault: the default vault for
-  // BROKER, the affiliate vault for AFFILIATE.
+  // BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.
   fixed64 account_id = 2;
   // Asset credited, as an AssetConfig.ledger_id from
   // GET /v1/chain/deposit-withdraw/config.
@@ -814,12 +909,16 @@ message QuoteQuickSwapRequest {
   // Affiliate fees, each charged on top and credited to its affiliate vault:
   // at most three distinct vaults.
   repeated AffiliateShare affiliates = 3;
+  // Optional referral partner code, as CreateQuickSwapRequest.referral_code:
+  // at most 64 bytes.
+  string referral_code = 4 [(buf.validate.field).string.max_bytes = 64];
 }
 
 // QuoteQuickSwapResponse is an indicative quote.
 message QuoteQuickSwapResponse {
   // Indicative quote, including whether the route needs a refund address.
-  // Creating a QuickSwap prices the terms again.
+  // Its amounts and fees are estimates. Creating a QuickSwap prices the terms
+  // again.
   QuickSwapQuote quote = 1;
 }
 
@@ -862,8 +961,8 @@ message CreateQuickSwapRequest {
     max_bytes: 256
   }];
   // Destination tag or memo for destination_address. Required when the
-  // destination network needs one; must be empty otherwise. At most 128 UTF-8
-  // bytes.
+  // destination network requires one, optional when supported, and empty when
+  // unsupported. See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.
   string destination_memo = 4 [(buf.validate.field).string.max_bytes = 128];
   // Recipient of returned source funds on the source network, in its native
   // text form without memo: 1-256 UTF-8 bytes. Deposits that are not
@@ -874,7 +973,8 @@ message CreateQuickSwapRequest {
     max_bytes: 256
   }];
   // Destination tag or memo for return_address. Required when the source
-  // network needs one; must be empty otherwise. At most 128 UTF-8 bytes.
+  // network requires one, optional when supported, and empty when unsupported.
+  // See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.
   string return_memo = 6 [(buf.validate.field).string.max_bytes = 128];
   // Refund route for the intermediate asset of a two-leg route: an
   // AssetChainVariant.zipped_asset_id of the asset whose AssetConfig.ledger_id
@@ -887,7 +987,8 @@ message CreateQuickSwapRequest {
   // in its native text form without memo. At most 256 UTF-8 bytes.
   string refund_address = 8 [(buf.validate.field).string.max_bytes = 256];
   // Destination tag or memo for refund_address. Required when the refund
-  // network needs one; must be empty otherwise. At most 128 UTF-8 bytes.
+  // network requires one, optional when supported, and empty when unsupported.
+  // See ChainConfig.memo_requirement. At most 128 UTF-8 bytes.
   string refund_memo = 9 [(buf.validate.field).string.max_bytes = 128];
   // Optional source wallet the end user will deposit from, for brokers that
   // know it in advance. It must be a valid address on the source network, at
@@ -901,6 +1002,16 @@ message CreateQuickSwapRequest {
   // broker_bps and the affiliates' bps total at most 300. Fees outside these
   // rules fail with FEES_INVALID.
   uint32 broker_bps = 12;
+  // Optional referral partner code from a referral link, case-insensitive,
+  // at most 64 bytes; empty for none. Only a broker with a referral program may send one
+  // (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates (FEES_INVALID).
+  // It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's
+  // current code (REFERRAL_CODE_UNKNOWN), and the partner must be active
+  // (REFERRAL_PARTNER_INACTIVE). The program's rates
+  // for the route are applied (quote.referral) and fixed at creation. It is
+  // part of the request: the same idempotency_key with another code, or with
+  // and without one, is IDEMPOTENCY_CONFLICT.
+  string referral_code = 13 [(buf.validate.field).string.max_bytes = 64];
 }
 
 // CreateQuickSwapResponse returns the QuickSwap bound to the idempotency key.
@@ -967,7 +1078,8 @@ enum ErrorCode {
   ADDRESS_UNAVAILABLE = 13;
   // The idempotency key was already used with a different request.
   IDEMPOTENCY_CONFLICT = 14;
-  // No QuickSwap of this broker matches the selector.
+  // No QuickSwap of this broker matches the selector; on
+  // QuickSwapReferralService, no QuickSwap the caller referred.
   SWAP_NOT_FOUND = 15;
   // The broker is disabled: quotes and creates are refused. Reads and
   // QuickSwaps already created continue.
@@ -1024,6 +1136,40 @@ enum ErrorCode {
   // reason DEPOSIT_ADDRESS_CONFLICT. Create a new QuickSwap with a new
   // idempotency key, and report the swap_id to Polyester broker support.
   ADDRESS_CONFLICT = 34;
+  // The referral code is another partner's current code.
+  REFERRAL_CODE_TAKEN = 35;
+  // The referral code is reserved: a brand or broker name, or a code a
+  // partner used before. Codes are never reused.
+  REFERRAL_CODE_RESERVED = 36;
+  // The referral code is not 4 to 16 letters, digits and hyphens, starting
+  // and ending with a letter or digit, without two hyphens in a row.
+  REFERRAL_CODE_INVALID = 37;
+  // The caller has not enrolled as a referral partner.
+  REFERRAL_PARTNER_NOT_FOUND = 38;
+  // The caller is already a referral partner with another earnings
+  // sub-account or display name.
+  REFERRAL_PARTNER_EXISTS = 39;
+  // The earnings sub-account is not an active sub-account of the caller, or
+  // another referral partner already uses it.
+  EARNINGS_ACCOUNT_INVALID = 40;
+  // The referral partner is disabled; its code cannot be changed.
+  REFERRAL_PARTNER_DISABLED = 41;
+  // The referral partner has used all its referral codes: a partner holds at
+  // most 10 codes over its lifetime, the one it enrolled with included, and
+  // each change retires a code for good. Its current code stays.
+  REFERRAL_CODE_LIMIT = 42;
+  // The request has a referral_code, but the broker has no referral program.
+  // Repeat it without the code.
+  REFERRAL_NOT_SUPPORTED = 43;
+  // The referral_code is not a referral partner's current code: unknown, or
+  // replaced by the partner. Repeat the request without the code.
+  REFERRAL_CODE_UNKNOWN = 44;
+  // The referral_code's partner is not active: not yet approved, disabled, or
+  // without an account its commission can be credited to. Repeat the
+  // request without the code.
+  REFERRAL_PARTNER_INACTIVE = 45;
+  // No payout run of the broker's vaults has this ID.
+  PAYOUT_NOT_FOUND = 46;
 }
 
 // ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it
@@ -1078,7 +1224,9 @@ service QuickSwapService {
   option (polyester.api.docs_group) = "quickswap";
 
   // QuoteQuickSwap prices terms without creating a QuickSwap or reserving a
-  // deposit address. The quote states whether the route needs a refund
+  // deposit address. The quote's output and fees are estimates: the fees
+  // charged are their rates applied to the actual execution once the
+  // deposit is credited. The quote states whether the route needs a refund
   // address.
   //
   // Errors:
@@ -1094,7 +1242,7 @@ service QuickSwapService {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Quote QuickSwap"
-      description: "Price QuickSwap terms without reserving a deposit address."
+      description: "Price QuickSwap terms, with estimated output and fees, without reserving a deposit address."
       tags: "QuickSwap"
       security: {
         additional_properties: {

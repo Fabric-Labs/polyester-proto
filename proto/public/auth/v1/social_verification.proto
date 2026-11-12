@@ -20,6 +20,9 @@ enum SocialProvider {
   TWITTER = 1;
   // Discord account verification.
   DISCORD = 2;
+  // Telegram account linking. The user sends the challenge code to the Polyester
+  // Telegram bot, then confirms the Telegram account that sent it.
+  TELEGRAM = 3;
 }
 
 // Current state of a social account verification attempt.
@@ -38,8 +41,11 @@ enum SocialVerificationStatus {
   STATUS_FAILED = 5;
   // Challenge code expired before verification completed.
   STATUS_EXPIRED = 6;
-  // Verification was cancelled.
+  // Verification was cancelled, or the linked account was unlinked.
   STATUS_CANCELLED = 7;
+  // A provider account submitted the challenge code. The user must confirm that
+  // account with ConfirmSocialVerification before it is linked. Telegram only.
+  STATUS_AWAITING_CONFIRMATION = 8;
 }
 
 // How the user proves control of the provider account.
@@ -65,13 +71,21 @@ message SocialVerification {
   // provider default is used.
   SocialVerificationMethod method = 11;
   // Provider handle being verified. Handles are returned lowercase and without
-  // a leading "@".
+  // a leading "@". For Telegram, the username of the account that submitted the
+  // code; empty when that account has no username.
   string handle = 2;
-  // Stable provider-side user identifier. Empty until verification succeeds.
+  // Stable provider-side user identifier. Empty until verification succeeds,
+  // except for Telegram: while the status is STATUS_AWAITING_CONFIRMATION, it is
+  // the numeric user ID of the Telegram account that submitted the code, the
+  // value ConfirmSocialVerification takes.
   string provider_user_id = 3;
+  // Provider display name of the account being verified, for showing it to the
+  // user. Telegram only: the account's name, set once the code is submitted.
+  // Empty for other providers.
+  string display_name = 17;
   // Challenge code the user must submit according to the verification method.
-  // Discord codes are returned only when a challenge is issued. Codes expire
-  // after 15 minutes.
+  // Discord and Telegram codes are returned only when a challenge is issued.
+  // Codes expire after 15 minutes.
   string challenge_code = 13;
   // Current verification status.
   SocialVerificationStatus status = 4;
@@ -111,6 +125,16 @@ message StartSocialVerificationRequest {
     message: "discord verification uses the channel method"
     expression: "this.provider != 2 ? true : this.method == 0 || this.method == 2"
   };
+  option (buf.validate.message).cel = {
+    id: "telegram_handle_omitted"
+    message: "telegram linking does not accept a handle"
+    expression: "this.provider != 3 ? true : this.handle == ''"
+  };
+  option (buf.validate.message).cel = {
+    id: "telegram_dm_method"
+    message: "telegram linking uses the direct message method"
+    expression: "this.provider != 3 ? true : this.method == 0 || this.method == 3"
+  };
 
   // Provider account to verify.
   SocialProvider provider = 1 [
@@ -121,14 +145,15 @@ message StartSocialVerificationRequest {
     (google.api.field_behavior) = REQUIRED
   ];
   // Verification method. If unspecified, profile verification is used for
-  // X/Twitter and channel verification is used for Discord.
+  // X/Twitter, channel verification for Discord and direct message
+  // verification for Telegram.
   SocialVerificationMethod method = 3 [
     // Allow METHOD_UNSPECIFIED so the provider default can apply, but reject
     // unknown numeric values.
     (buf.validate.field).enum = {defined_only: true}
   ];
   // Provider handle the user claims. Required for X/Twitter and omitted for
-  // Discord, where the authenticated bot supplies the provider identity.
+  // Discord and Telegram, where the provider bot supplies the provider identity.
   // A leading "@" is accepted and removed from X/Twitter handles.
   string handle = 2 [
     (buf.validate.field).string = {
@@ -152,6 +177,10 @@ message StartSocialVerificationResponse {
   google.protobuf.Timestamp expires_at = 2;
   // Current verification state after issuing the challenge.
   SocialVerification verification = 3;
+  // Link that completes the user action, when the provider has one. Telegram:
+  // opening it starts a chat with the Polyester bot that submits the code.
+  // Empty for other providers.
+  string action_url = 4;
 }
 
 // SocialVerificationReadyRequest tells the API that the challenge code has been
@@ -196,11 +225,78 @@ message GetSocialVerificationResponse {
   SocialVerification verification = 1;
 }
 
+// ConfirmSocialVerificationRequest links the provider account that submitted
+// the caller's challenge code.
+message ConfirmSocialVerificationRequest {
+  option (buf.validate.message).cel = {
+    id: "confirm_telegram_only"
+    message: "only telegram linking needs a confirmation"
+    expression: "this.provider == 3"
+  };
+
+  // Provider account to confirm. Only TELEGRAM is accepted.
+  SocialProvider provider = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Provider user ID the user confirms, as provider_user_id of the verification
+  // in STATUS_AWAITING_CONFIRMATION. The request fails when it is not the
+  // account that submitted the code, so the user links exactly the account
+  // they were shown.
+  string provider_user_id = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 20
+      pattern: "^[1-9][0-9]*$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// ConfirmSocialVerificationResponse returns the verification after the
+// provider account was linked.
+message ConfirmSocialVerificationResponse {
+  // Current verification state, STATUS_VERIFIED.
+  SocialVerification verification = 1;
+}
+
+// UnlinkSocialAccountRequest removes the caller's linked provider account, or
+// cancels a link in progress.
+message UnlinkSocialAccountRequest {
+  option (buf.validate.message).cel = {
+    id: "unlink_telegram_only"
+    message: "only a telegram account can be unlinked"
+    expression: "this.provider == 3"
+  };
+
+  // Provider account to unlink. Only TELEGRAM is accepted.
+  SocialProvider provider = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// UnlinkSocialAccountResponse returns the verification after unlinking.
+message UnlinkSocialAccountResponse {
+  // Current verification state, STATUS_CANCELLED. Absent when no verification
+  // was ever started for the provider.
+  SocialVerification verification = 1;
+}
+
 // SocialVerificationService verifies ownership of external social accounts.
 service SocialVerificationService {
   option (polyester.api.docs_group) = "account";
 
   // Start or restart social verification by issuing a new challenge code.
+  // For Telegram, open action_url to send the code to the Polyester bot, then
+  // confirm the account with ConfirmSocialVerification.
+  // AUTH_SOCIAL_VERIFICATION_INVALID_STATE for Telegram means a Telegram account is already linked; unlink it first.
   rpc StartSocialVerification(StartSocialVerificationRequest) returns (StartSocialVerificationResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (google.api.http) = {
@@ -218,6 +314,7 @@ service SocialVerificationService {
   // AUTH_RESOURCE_NOT_FOUND means no verification exists; start one first.
   // AUTH_SOCIAL_VERIFICATION_EXPIRED means the challenge window passed; start a new verification, then mark it ready again.
   // AUTH_SOCIAL_VERIFICATION_INVALID_STATE means Ready is not valid in the current state; call GetSocialVerification for the current status.
+  // Telegram linking does not use Ready and always answers AUTH_SOCIAL_VERIFICATION_INVALID_STATE.
   rpc SocialVerificationReady(SocialVerificationReadyRequest) returns (SocialVerificationReadyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (google.api.http) = {
@@ -231,14 +328,59 @@ service SocialVerificationService {
     };
   }
 
+  // Link the Telegram account that submitted the caller's challenge code. A
+  // linked Telegram account becomes a channel to the account, so the caller
+  // needs enrolled MFA and a fresh, single-use step-up proof in the
+  // X-Auth-Step-Up header, obtained by completing an MFA challenge for fresh
+  // step-up. The link consumes the proof; a retried confirmation of an existing
+  // link needs no new proof.
+  // AUTH_RESOURCE_NOT_FOUND means no verification exists; start one first.
+  // AUTH_SOCIAL_VERIFICATION_EXPIRED means the challenge window passed; start a new verification.
+  // AUTH_SOCIAL_VERIFICATION_INVALID_STATE means no submitted account awaits confirmation, or provider_user_id is not the account that submitted the code.
+  // AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED means that Telegram account is linked to another Polyester account; the verification fails.
+  // AUTH_MFA_NOT_ENROLLED means enroll MFA first; AUTH_STEP_UP_REQUIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean complete a new fresh step-up and retry.
+  rpc ConfirmSocialVerification(ConfirmSocialVerificationRequest) returns (ConfirmSocialVerificationResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (google.api.http) = {
+      post: "/v1/auth/social/verification:confirm"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Confirm Social Verification"
+      description: "Link the Telegram account that submitted the caller's challenge code, after the user confirmed it. Requires enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header. AUTH_MFA_NOT_ENROLLED means enroll MFA first. AUTH_SOCIAL_VERIFICATION_EXPIRED means start a new challenge. AUTH_SOCIAL_VERIFICATION_INVALID_STATE means no matching account awaits confirmation. AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED means the account is linked to another Polyester account."
+      tags: "Auth Service"
+    };
+  }
+
+  // Unlink the caller's Telegram account, or cancel a Telegram link in progress.
+  // Unlinking again succeeds and changes nothing. To link again, start a new
+  // verification.
+  rpc UnlinkSocialAccount(UnlinkSocialAccountRequest) returns (UnlinkSocialAccountResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (google.api.http) = {
+      post: "/v1/auth/social/verification:unlink"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Unlink Social Account"
+      description: "Unlink the caller's Telegram account, or cancel a Telegram link in progress. Repeating it changes nothing."
+      tags: "Auth Service"
+    };
+  }
+
   // Get current verification status for the caller.
   // A failed verification uses error_code for its machine-readable outcome.
+  // An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main
+  // account. It reads the status only: provider, method, handle, status, and
+  // verification time, with every other field left empty.
   rpc GetSocialVerification(GetSocialVerificationRequest) returns (GetSocialVerificationResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (google.api.http) = {get: "/v1/auth/social/verification"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Social Verification"
-      description: "Retrieve current social verification status and any typed failure code for the caller."
+      description: "Retrieve current social verification status and any typed failure code for the caller. An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main account; it reads the status only: provider, method, handle, status, and verification time."
       tags: "Auth Service"
     };
   }

@@ -69,6 +69,16 @@
         "title": "FlowKind",
         "type": "string"
       },
+      "chain.lifecycle.v1.FlowParticipation": {
+        "description": "FlowParticipation says how an account takes part in a lifecycle flow.",
+        "enum": [
+          "UNSPECIFIED",
+          "OWNER",
+          "RECIPIENT"
+        ],
+        "title": "FlowParticipation",
+        "type": "string"
+      },
       "chain.lifecycle.v1.FlowState": {
         "description": "FlowState is the latest lifecycle state after folding normalized facts.",
         "enum": [
@@ -285,6 +295,11 @@
             "title": "polyester_chain_id",
             "type": "integer"
           },
+          "refundAddress": {
+            "description": "Polyester Chain smart account the step refunded, set only on\n `REFUNDED` of a withdrawal: Zipper rejected the withdrawal and\n returned `amount_e18`, the amount net of the request fee it kept, as\n zTokens to the smart account that sent it. The zTokens stay in that\n smart account; nothing moves them back to Funding or Trading.",
+            "title": "refund_address",
+            "type": "string"
+          },
           "rejectCount": {
             "description": "Current rejection count when validation applies.",
             "title": "reject_count",
@@ -493,13 +508,15 @@
             "title": "lifecycle_reason"
           },
           "ownerAccountId": {
-            "description": "Public account identifier for the root account or subaccount the flow belongs to.",
-            "format": "int64",
+            "description": "Public account identifier for the root account or subaccount the flow belongs to.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "owner_account_id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
+          },
+          "participation": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
+            "description": "How the account selected by a ListFlows request takes part in this flow:\n `OWNER` for a flow it owns, including a transfer it sent, or\n `RECIPIENT` for a transfer it received from another account.\n Each flow appears once with one participation. Unspecified when the\n response is not scoped to an account, such as ListFlows without an account\n selector, flow detail, and realtime updates.",
+            "title": "participation"
           },
           "polyesterChainId": {
             "description": "Polyester Chain id associated with this flow when known.",
@@ -696,13 +713,10 @@
             "title": "lifecycle_reason"
           },
           "ownerAccountId": {
-            "description": "Public account or subaccount identifier that owns this flow.",
-            "format": "int64",
+            "description": "Public account or subaccount identifier that owns this flow.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "owner_account_id",
-            "type": [
-              "integer",
-              "string"
-            ]
+            "type": "string"
           },
           "polyesterChainId": {
             "description": "Polyester Chain id associated with this flow.",
@@ -768,6 +782,7 @@
           "ZIPPER_EXECUTION_REJECTED",
           "ZIPPER_WITHDRAW_EXECUTION_FAILED",
           "ZIPPER_DEPOSIT_REFUND_FAILED",
+          "ZIPPER_COMPLIANCE_TRANSFERRED",
           "LEDGER_MIRROR_REJECTED",
           "LEDGER_MIRROR_TRANSFER_EXCEEDS_CREDITS",
           "LEDGER_MIRROR_TRANSFER_EXISTS",
@@ -897,7 +912,8 @@
         "enum": [
           "UNSPECIFIED",
           "LOCKED",
-          "SETTLED"
+          "SETTLED",
+          "KEPT"
         ],
         "title": "RequestFeeStatus",
         "type": "string"
@@ -1109,30 +1125,37 @@
             }
           },
           {
-            "description": "Public account identifier for a main account or subaccount.",
+            "description": "Public account identifier for a main account or subaccount.\n\nPublic ID, as a base58 string.",
             "in": "query",
             "name": "ownerAccountId",
             "schema": {
               "description": "Public account identifier for a main account or subaccount.",
               "example": "4Rh4iXdT",
-              "exclusiveMinimum": 0,
-              "format": "int64",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "title": "owner_account_id",
-              "type": [
-                "integer",
-                "string"
-              ]
+              "type": "string"
             }
           },
           {
-            "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the caller, filters, account selector, sort\n direction, and ordering timestamp.",
+            "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the request it was returned for: the account\n selector, participation, every filter including scope, sort direction,\n and ordering timestamp. Send it with that same request; only `limit` may\n change. A cursor sent with any other request is rejected as invalid.",
             "in": "query",
             "name": "pageToken",
             "schema": {
-              "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the caller, filters, account selector, sort\n direction, and ordering timestamp.",
+              "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the request it was returned for: the account\n selector, participation, every filter including scope, sort direction,\n and ordering timestamp. Send it with that same request; only `limit` may\n change. A cursor sent with any other request is rejected as invalid.",
               "maxLength": 512,
               "title": "page_token",
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+            "in": "query",
+            "name": "participation",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
+              "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+              "example": "OWNER",
+              "title": "participation"
             }
           },
           {
@@ -1283,6 +1306,7 @@
                       "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
                       "ownerAccountId": "3CoG5WFgvKE",
+                      "participation": "OWNER",
                       "polyesterChainId": 1,
                       "progressTimeline": [
                         {
@@ -1532,6 +1556,7 @@
                         "milestoneTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                         "occurredAtUnixMs": "1",
                         "polyesterChainId": 1,
+                        "refundAddress": "value",
                         "rejectCount": 1,
                         "requestFee": {
                           "amountE18": {
@@ -1593,6 +1618,7 @@
                       "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
                       "ownerAccountId": "3Lp9vhxH2NP",
+                      "participation": "OWNER",
                       "polyesterChainId": 1,
                       "progressTimeline": [
                         {
