@@ -573,8 +573,9 @@ message PairConfig {
   // Maximum per-order notional as a decimal string in quote-asset units.
   // Base-sized orders are checked using quantity times limit price, or market
   // protection price, without rounding. For quote-sized buys, the entire all-in
-  // maximum quote debit must also fit this maximum. Exceeding it returns
-  // MAX_NOTIONAL. Absent when no maximum is configured.
+  // maximum quote debit must also fit this maximum, and for quote-sized sells
+  // the entire quote proceeds target. Exceeding it returns MAX_NOTIONAL.
+  // Absent when no maximum is configured.
   optional string max_order_notional_quote = 22;
 
   // The venue's default limit on resting orders a typical account may hold on
@@ -590,9 +591,39 @@ message PairConfig {
   // quote-asset units. Base-sized market orders are valued at the buy protection
   // price or the sell reference price before slippage, without rounding. For
   // quote-sized market buys, the entire all-in maximum quote debit must also fit
-  // this maximum. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is
+  // this maximum, and for quote-sized market sells the entire quote proceeds
+  // target. Exceeding it returns MAX_NOTIONAL. Absent when no maximum is
   // configured.
   optional string max_market_notional_quote = 24;
+
+  // The pair's price band. Absent when the pair has none.
+  PriceBand price_band = 25;
+}
+
+// PriceBand limits how far from the market an order may be priced or trade.
+// Its reference price follows the pair's last trade, updated at most once
+// per reference window, and moves to the pair's index price when the two
+// diverge by more than the band. A buy limit order priced above the upper
+// limit, or a sell limit order priced below the lower limit, is rejected with
+// PRICE_BAND_VIOLATION. A market order, or another order whose price the
+// exchange sets, trades only up to the limit; its unfilled remainder is
+// canceled with CANCEL_REASON_PRICE_BAND. A resting order is never canceled
+// by the band, and a limit order priced away from the market on the passive
+// side is accepted.
+message PriceBand {
+  // How far below the reference price a sell may be priced or trade, in
+  // basis points (1 bp = 0.01%). The lower limit is the reference price times
+  // (1 - lower_bps / 10000), rounded up to the tick size.
+  uint32 lower_bps = 1;
+
+  // How far above the reference price a buy may be priced or trade, in basis
+  // points. The upper limit is the reference price times
+  // (1 + upper_bps / 10000), rounded down to the tick size.
+  uint32 upper_bps = 2;
+
+  // How long the reference price stays fixed before it can move to a newer
+  // trade, in milliseconds. Zero moves it with every order.
+  uint32 reference_window_ms = 3;
 }
 
 // GetSpotConfigRequest has no parameters.

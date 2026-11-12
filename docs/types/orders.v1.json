@@ -424,6 +424,15 @@
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "submitted_quote_proceeds_scaled",
+            "jsonName": "submittedQuoteProceedsScaled",
+            "number": 7,
+            "doc": "Submitted quote proceeds target, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }
@@ -1503,12 +1512,12 @@
           {
             "name": "CANCEL_REASON_IOC_REMAINDER",
             "number": 2,
-            "doc": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a\n quote amount (max_quote_debit_scaled) that spends that amount ends\n FILLED instead."
+            "doc": "The unfilled remainder of an immediate-or-cancel order. A buy sized by a\n quote amount (max_quote_debit_scaled) that spends that amount, or a sell\n sized by a quote proceeds target (quote_proceeds_scaled) that receives\n it, ends FILLED instead."
           },
           {
             "name": "CANCEL_REASON_MARKET_REMAINDER",
             "number": 3,
-            "doc": "The unfilled remainder of a market order: the book ran out, the next\n price was past the order's protection price, or the order reached the\n market's maximum order quantity. A market buy sized by a quote amount\n (max_quote_debit_scaled) that spends that amount, so that what is left\n buys no further quantity step, ends FILLED instead."
+            "doc": "The unfilled remainder of a market order: the book ran out, the next\n price was past the order's protection price, or the order reached the\n market's maximum order quantity. A market buy sized by a quote amount\n (max_quote_debit_scaled) that spends that amount, so that what is left\n buys no further quantity step, ends FILLED instead, as does a market sell\n sized by a quote proceeds target (quote_proceeds_scaled) once what is\n left of the target sells no further quantity step."
           },
           {
             "name": "CANCEL_REASON_STP_EXPIRE_MAKER",
@@ -1584,6 +1593,21 @@
             "name": "CANCEL_REASON_ATTACHED_EXIT_FIRED",
             "number": 18,
             "doc": "The order's attached take-profit, stop-loss or trailing stop fired while\n the order still rested: the exchange canceled the order's unfilled\n remainder before placing the attached order, so the two never trade with\n each other. Fills before the cancel stand."
+          },
+          {
+            "name": "CANCEL_REASON_STP_DECREMENT",
+            "number": 19,
+            "doc": "Self-trade prevention mode DECREMENT reduced this order to its filled\n quantity: an incoming order met a resting order belonging to the same\n root account, including another subaccount of that root, both were\n reduced by the quantity that would have traded, with no trade, and this\n order had no quantity left. Fills before the cancel stand."
+          },
+          {
+            "name": "CANCEL_REASON_PRICE_BAND",
+            "number": 20,
+            "doc": "The market's price band stopped the order: it filled up to the band's\n limit price, and its unfilled remainder was canceled rather than trade\n beyond the band. Fills before the cancel stand."
+          },
+          {
+            "name": "CANCEL_REASON_CANCEL_ON_DISCONNECT",
+            "number": 21,
+            "doc": "Cancel-on-disconnect canceled the order: the trading WebSocket\n connections of the account that opted in to cancel-on-disconnect all\n closed, and no session of the account opted in again before each one's\n grace period passed. An order the account's own cancel-all-after timer\n canceled reads CANCEL_REASON_CANCEL_ALL_AFTER instead. Fills before the\n cancel stand."
           }
         ]
       }
@@ -1697,6 +1721,15 @@
             "jsonName": "submittedMaxQuoteDebitScaled",
             "number": 6,
             "doc": "Submitted hard all-in quote debit limit, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "submitted_quote_proceeds_scaled",
+            "jsonName": "submittedQuoteProceedsScaled",
+            "number": 7,
+            "doc": "Submitted quote proceeds target, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -1889,7 +1922,7 @@
           {
             "name": "ERROR_CODE_POLICY_SPOT_TRADE_DENY",
             "number": 23,
-            "doc": "Sub-account policy does not allow spot trading (action mask)."
+            "doc": "The sub-account's policy does not allow spot trading: enable TRADE_SPOT\n (Spot Trading Write) on the sub-account's policy. A sub-account without a\n policy is read-only. When the API key's policy lacks it instead, the\n refusal is ERROR_CODE_API_KEY_SPOT_TRADE_DENY."
           },
           {
             "name": "ERROR_CODE_API_KEY_ROOT_SCOPE_ONLY",
@@ -1909,7 +1942,7 @@
           {
             "name": "ERROR_CODE_API_KEY_POLICY_REQUIRED",
             "number": 27,
-            "doc": "API key must have an attached policy before it can be used for trading."
+            "doc": "The API key has no policy, so it has no permissions: attach a policy to\n the API key that grants what it needs."
           },
           {
             "name": "ERROR_CODE_API_KEY_UNKNOWN",
@@ -1920,6 +1953,11 @@
             "name": "ERROR_CODE_API_KEY_MARKET_DENY",
             "number": 29,
             "doc": "API key policy does not allow trading this market, even though the\n sub-account policy does."
+          },
+          {
+            "name": "ERROR_CODE_API_KEY_SPOT_TRADE_DENY",
+            "number": 78,
+            "doc": "The API key's policy does not allow spot trading: enable TRADE_SPOT\n (Spot Trading Write) on the API key's policy. When both the key's and the\n sub-account's policies lack it, the key is named first."
           },
           {
             "name": "ERROR_CODE_PRICE_TICK_SIZE",
@@ -2092,9 +2130,9 @@
             "doc": "The account already has its maximum order requests in flight; nothing was\n admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns\n HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after\n one of the outstanding requests completes."
           },
           {
-            "name": "ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL",
+            "name": "ERROR_CODE_QUOTE_SIZE_TOO_SMALL",
             "number": 68,
-            "doc": "The all-in quote budget cannot resolve one valid step-aligned base quantity."
+            "doc": "The quote amount cannot resolve one valid step-aligned base quantity: an\n all-in quote budget at the order's highest price, or a quote proceeds\n target at its lowest price."
           },
           {
             "name": "ERROR_CODE_RATE_LIMIT_EXCEEDED",
@@ -2154,7 +2192,7 @@
           {
             "name": "ERROR_CODE_ATTACHED_RISK_NOT_SUPPORTED",
             "number": 82,
-            "doc": "Attached take-profit, stop-loss or trailing legs can't be applied here:\n this market takes none, an attached trailing stop isn't offered yet, or\n the modify changes them together with the order's price, quantity, client\n order ID or a replace. Nothing changed."
+            "doc": "Attached take-profit, stop-loss or trailing legs can't be applied here:\n this market takes none, an attached trailing stop isn't offered yet, the\n modify changes them together with the order's price, quantity, client\n order ID or a replace, or the order was placed by a triggered take-profit,\n stop-loss or trailing-stop leg, which can't carry legs of its own. Nothing\n changed."
           },
           {
             "name": "ERROR_CODE_SETTLEMENT_BACKLOGGED",
@@ -2679,7 +2717,7 @@
           {
             "name": "ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
             "number": 302,
-            "doc": "The change would act on the trigger at once. The new trigger price of a\n stop-loss or take-profit, or the trigger price a new trailing distance\n gives an activated trailing stop, is already reached by the price the\n trigger watches (at or past it), so the trigger would fire at once and send\n its order; or the new activation price of a trailing stop not yet\n activated is already reached by that price, so it would activate at once.\n Nothing changed; the trigger keeps its previous settings. Returned by\n ModifyTrigger, and by an order modify that moves an attached take-profit,\n stop-loss or trailing stop of an order with a fill. Choose a price the\n market has not reached."
+            "doc": "The change would act on the trigger at once. The new trigger price of a\n stop-loss or take-profit, or the trigger price a new trailing distance\n gives an activated trailing stop, is already reached by the price the\n trigger watches (at or past it), so the trigger would fire at once and send\n its order; or the new activation price of a trailing stop not yet\n activated is already reached by that price, so it would activate at once.\n Nothing changed; the trigger keeps its previous settings. Returned by\n ModifyTrigger, and by an order modify that moves an attached take-profit,\n stop-loss or trailing stop of an order with a fill. Also returned when a\n market order is created or previewed with an attached take-profit or\n stop-loss on the last price that its own fill would trigger, at or past\n the best price the order takes (the best ask for a buy, the best bid for\n a sell); the order is not placed. A market order with an attached\n take-profit or stop-loss on the index price that the index has already\n reached is accepted, then rejected with this reason before it trades,\n and so is one whose last-price leg the market reaches before the order\n reaches the book; nothing is placed. Choose a price the market has not\n reached."
           },
           {
             "name": "ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN",
@@ -2689,7 +2727,7 @@
           {
             "name": "ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN",
             "number": 304,
-            "doc": "The trigger was sent but not confirmed in time. Its outcome is unknown and\n it may have been created; read the triggers for its client trigger ID\n before retrying."
+            "doc": "The trigger was sent but not confirmed in time. Its outcome is unknown and\n it may have been created; read the triggers for its client trigger ID,\n or an OCO's for its client list ID, before retrying."
           },
           {
             "name": "ERROR_CODE_TRIGGER_SYMBOL_MISMATCH",
@@ -2760,6 +2798,36 @@
             "name": "ERROR_CODE_REQUEST_DEADLINE_EXCEEDED",
             "number": 308,
             "doc": "The request's receive window ended before it was sent on for admission:\n the request was not processed and changed nothing. The window is the\n request's timestamp plus its receive window: the X-API-RECV-WINDOW header\n of a signed request, or recv_window_ms of a WebSocket command. Send a new\n request with a fresh timestamp."
+          },
+          {
+            "name": "ERROR_CODE_ICEBERG_NOT_ALLOWED",
+            "number": 309,
+            "doc": "A display quantity was set on an order that cannot be an iceberg order.\n Only good-till-cancelled and good-till-date limit orders without attached\n take-profit, stop-loss or trailing stop orders can be iceberg orders.\n Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_ICEBERG_DISPLAY_TOO_SMALL",
+            "number": 310,
+            "doc": "The iceberg display quantity is below the pair's minimum order quantity,\n or splits the order's quantity into more than 100 parts: it must be at\n least the order's quantity divided by 100, rounded up. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_ICEBERG_DISPLAY_INVALID",
+            "number": 311,
+            "doc": "The iceberg display quantity is not below the order's quantity, or is not\n a multiple of the pair's quantity step. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_PEG_LIMIT_VIOLATION",
+            "number": 312,
+            "doc": "Resolved peg exceeds its buy cap or falls below its sell floor."
+          },
+          {
+            "name": "ERROR_CODE_PEG_REFERENCE_UNAVAILABLE",
+            "number": 313,
+            "doc": "Selected entry-peg book side has no live quote."
+          },
+          {
+            "name": "ERROR_CODE_INVALID_PEG",
+            "number": 314,
+            "doc": "Entry peg has an invalid reference or unsupported combination."
           }
         ]
       }
@@ -3728,6 +3796,20 @@
             "doc": "Reject the order instead of taking liquidity. Post-only is available only\n on this resting limit-order variant.",
             "protoScalar": "bool",
             "jsonType": "boolean"
+          },
+          {
+            "name": "display_qty_scaled",
+            "jsonName": "displayQtyScaled",
+            "number": 3,
+            "doc": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps\n it.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
           }
         ]
       }
@@ -3780,6 +3862,20 @@
               "timestamp": {
                 "lte": "2262-04-11T23:47:16.854775807Z",
                 "gtNow": true
+              }
+            }
+          },
+          {
+            "name": "display_qty_scaled",
+            "jsonName": "displayQtyScaled",
+            "number": 4,
+            "doc": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps\n it.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
               }
             }
           }
@@ -4288,6 +4384,24 @@
             "format": "int64"
           },
           {
+            "name": "display_qty_scaled",
+            "jsonName": "displayQtyScaled",
+            "number": 39,
+            "doc": "Iceberg display quantity the order was placed with, scaled by the pair's\n base_quantity_scale from GetSpotConfig for symbol_id: the most of the\n order the order book shows at once. Zero for a plain order. A replace\n keeps it.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "hidden_qty_scaled",
+            "jsonName": "hiddenQtyScaled",
+            "number": 40,
+            "doc": "Part of leaves_qty_scaled an iceberg order keeps hidden from the order\n book, scaled by the pair's base_quantity_scale from GetSpotConfig for\n symbol_id. The order book shows leaves_qty_scaled minus this quantity.\n Zero for a plain order and for terminal orders.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
             "name": "avg_price_ticks",
             "jsonName": "avgPriceTicks",
             "number": 14,
@@ -4307,7 +4421,7 @@
             "name": "cum_notional",
             "jsonName": "cumNotional",
             "number": 37,
-            "doc": "Exact quote amount of the fills across the lineage through this\n generation, before fees: the sum over the fills of their quantity,\n scaled as cum_qty_scaled, times their price in quote units scaled by\n 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with\n the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST\n shows it in quote units. avg_price_e18 is this amount over\n cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down\n to 18 decimal places, which is this amount exactly unless\n base_quantity_scale is above 9.\n\n For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),\n the quote the order used is this amount plus fee_total's amount_e18\n when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,\n since a rebate is credited; it is this amount alone when fee_asset is\n BASE, whose fee is taken from the base received. What it left unspent is\n submitted_max_quote_debit_scaled less the quote it used.",
+            "doc": "Exact quote amount of the fills across the lineage through this\n generation, before fees: the sum over the fills of their quantity,\n scaled as cum_qty_scaled, times their price in quote units scaled by\n 1e9. It is in quote units scaled by 10^(9 + base_quantity_scale), with\n the pair's base_quantity_scale from GetSpotConfig for symbol_id; REST\n shows it in quote units. avg_price_e18 is this amount over\n cum_qty_scaled. Unset if no fills. A fill settles its quote rounded down\n to 18 decimal places, which is this amount exactly unless\n base_quantity_scale is above 9.\n\n For a BUY sized by a quote amount (submitted_max_quote_debit_scaled),\n the quote the order used is this amount plus fee_total's amount_e18\n when fee_asset is QUOTE, or minus it when fee_total's is_rebate is true,\n since a rebate is credited; it is this amount alone when fee_asset is\n BASE, whose fee is taken from the base received. What it left unspent is\n submitted_max_quote_debit_scaled less the quote it used.\n\n For a SELL sized by a quote proceeds target\n (submitted_quote_proceeds_scaled), this amount is the proceeds it\n received before fees, never above the target; the quote it was credited\n is this amount less fee_total's amount_e18, or plus it when fee_total's\n is_rebate is true. What it did not receive is\n submitted_quote_proceeds_scaled less this amount.",
             "protoRef": "polyester.type.v1.U128"
           },
           {
@@ -4433,6 +4547,15 @@
             "format": "int64"
           },
           {
+            "name": "submitted_quote_proceeds_scaled",
+            "jsonName": "submittedQuoteProceedsScaled",
+            "number": 41,
+            "doc": "Submitted quote proceeds target, scaled by the pair's\n quote_quantity_scale from GetSpotConfig. Present only when that sizing\n method was submitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
             "name": "lineage",
             "jsonName": "lineage",
             "number": 31,
@@ -4496,6 +4619,11 @@
             "expression": "!has(this.max_quote_debit_scaled) || (this.side == 1 \u0026\u0026 (has(this.market_ioc) || has(this.limit_ioc)))"
           },
           {
+            "id": "order_intent.quote_proceeds_eligibility",
+            "message": "quote_proceeds_scaled is valid only for SELL market IOC or SELL limit IOC orders",
+            "expression": "!has(this.quote_proceeds_scaled) || (this.side == 2 \u0026\u0026 (has(this.market_ioc) || has(this.limit_ioc)))"
+          },
+          {
             "id": "order_intent.sell_fee_asset",
             "message": "SELL orders must use the QUOTE fee asset",
             "expression": "this.side != 2 || this.fee_asset == 0 || this.fee_asset == 1"
@@ -4507,7 +4635,8 @@
             "required": true,
             "fields": [
               "base_qty_scaled",
-              "max_quote_debit_scaled"
+              "max_quote_debit_scaled",
+              "quote_proceeds_scaled"
             ]
           },
           {
@@ -4572,6 +4701,21 @@
             "jsonName": "maxQuoteDebitScaled",
             "number": 4,
             "doc": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled. It can carry\n attached_risk: the legs protect the quantity it actually buys.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            },
+            "oneof": "sizing"
+          },
+          {
+            "name": "quote_proceeds_scaled",
+            "jsonName": "quoteProceedsScaled",
+            "number": 5,
+            "doc": "Quote proceeds target scaled by the pair's quote_quantity_scale from\n GetSpotConfig. Valid only for SELL market IOC and SELL limit IOC. The\n order sells whole quantity steps until its proceeds, the sum of each\n fill's price times quantity before fees, reach this amount, and never\n receives more. The fee is charged in quote on those proceeds. The order\n holds the base this amount sells at its limit price, or a market\n order's maximum slippage price, and is rejected INSUFFICIENT_FUNDS when\n that base is not available. Once what is left sells no further quantity\n step, it ends FILLED; if the book or its price limit stops it first,\n its remainder is canceled. It cannot carry attached_risk.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -4666,6 +4810,13 @@
             "number": 30,
             "doc": "Optional attached risk controls that arm after the parent order fills.",
             "protoRef": "orders.v1.RiskPolicy"
+          },
+          {
+            "name": "peg",
+            "jsonName": "peg",
+            "number": 31,
+            "doc": "Optional static peg. The selected limit execution still requires its price\n bound. Quote sizing, market execution and attached risk are invalid.",
+            "protoRef": "orders.v1.StaticPeg"
           }
         ]
       }
@@ -4820,7 +4971,7 @@
           {
             "name": "FILLED",
             "number": 4,
-            "doc": "Fully filled (no remaining quantity). A buy sized by a quote amount\n (max_quote_debit_scaled) is fully filled once it has spent that amount:\n what is left of it buys no further quantity step at the next price the\n order could fill at. Its quantity is then what it bought."
+            "doc": "Fully filled (no remaining quantity). A buy sized by a quote amount\n (max_quote_debit_scaled) is fully filled once it has spent that amount:\n what is left of it buys no further quantity step at the next price the\n order could fill at. Its quantity is then what it bought. A sell sized by\n a quote proceeds target (quote_proceeds_scaled) is fully filled once\n what is left of that target sells no further quantity step at the next\n price the order could fill at. Its quantity is then what it sold."
           },
           {
             "name": "CANCELED",
@@ -4966,6 +5117,25 @@
             "name": "MARKET",
             "number": 2,
             "doc": "Market order executed against available liquidity."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.PegReference",
+      "kind": "enum",
+      "doc": "The displayed book side used for a static entry peg.",
+      "enum": {
+        "values": [
+          {
+            "name": "BEST_BID",
+            "number": 1,
+            "doc": "Highest live bid at entry."
+          },
+          {
+            "name": "BEST_ASK",
+            "number": 2,
+            "doc": "Lowest live ask at entry."
           }
         ]
       }
@@ -5118,7 +5288,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n Each leg's exit must be able to meet the pair's minimum quantity, step size\n and minimum notional for the parent's whole quantity, valued where it would\n execute: a buy-back at its maximum price (a market exit's slippage bound\n above its trigger price, a limit exit's limit price, a trailing stop's limit\n price), a market sell exit at its slippage bound below its trigger price, a\n limit sell exit at its limit price, and a trailing sell exit by its quantity\n alone. An order, or a ModifyOrder, whose leg could never meet them is\n rejected with that check's code (ERROR_CODE_MIN_QTY,\n ERROR_CODE_QTY_STEP_SIZE or ERROR_CODE_MIN_NOTIONAL), as for the order\n itself, and its ErrorDetail names the leg with a field violation on its\n attached-risk field (take_profit, stop_loss or trailing_stop) whose rule is\n that code. Nothing is placed or changed.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
       "message": {
         "cel": [
           {
@@ -5174,7 +5344,7 @@
     {
       "name": "orders.v1.SelfTradePreventionMode",
       "kind": "enum",
-      "doc": "SelfTradePreventionMode controls which orders expire when an order would\n trade against another order of the same root account, including all its\n subaccounts: two subaccounts of one root never trade with each other. The\n incoming order's mode decides which orders expire.",
+      "doc": "SelfTradePreventionMode controls what happens when an order would trade\n against another order of the same root account, including all its\n subaccounts: two subaccounts of one root never trade with each other. The\n incoming order's mode decides which orders expire or are reduced.",
       "enum": {
         "values": [
           {
@@ -5191,6 +5361,11 @@
             "name": "EXPIRE_BOTH",
             "number": 3,
             "doc": "Cancel both maker and taker orders on self-trade."
+          },
+          {
+            "name": "DECREMENT",
+            "number": 4,
+            "doc": "Reduce both orders by the quantity that would have traded, with no\n trade. The order left with no quantity is canceled with\n CANCEL_REASON_STP_DECREMENT, both when their quantities are equal; a\n resting order that keeps a quantity keeps its place in the queue, and an\n incoming order that keeps one goes on matching and may rest. A reduced\n order's quantity is its original quantity less what self-trade\n prevention removed. A fill-or-kill order that would meet such an order\n before it is completely filled is rejected instead of reduced. Applies\n to attached protective exits and trigger children too. Prevention does\n not count as a fill of the parent position. A fully prevented attached\n exit re-arms its unexecuted exposure and waits while the surviving self\n maker heads the opposite book; it can fire again once that maker stops\n leading."
           }
         ]
       }
@@ -5210,6 +5385,39 @@
             "name": "SELL",
             "number": 2,
             "doc": "Sell base asset for quote asset."
+          }
+        ]
+      }
+    },
+    {
+      "name": "orders.v1.StaticPeg",
+      "kind": "message",
+      "doc": "Derives a limit price once at entry. Available only with base quantity and\n limit execution, without attached risk. The limit execution's price_ticks is\n required: a BUY maximum price or SELL minimum price. A derived price beyond\n that bound is rejected. The order never follows later book changes.",
+      "message": {
+        "fields": [
+          {
+            "name": "reference",
+            "jsonName": "reference",
+            "number": 1,
+            "doc": "Required public book side. An empty selected side rejects the order.",
+            "protoRef": "orders.v1.PegReference",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "offset_ticks",
+            "jsonName": "offsetTicks",
+            "number": 2,
+            "doc": "Signed number of configured price increments added to the reference.\n One increment is the pair’s configured price increment in quote units; this count\n is not Q9 and does not select occupied price levels. Defaults to zero.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }

@@ -30,7 +30,10 @@ enum OrderStatus {
   // Fully filled (no remaining quantity). A buy sized by a quote amount
   // (max_quote_debit_scaled) is fully filled once it has spent that amount:
   // what is left of it buys no further quantity step at the next price the
-  // order could fill at. Its quantity is then what it bought.
+  // order could fill at. Its quantity is then what it bought. A sell sized by
+  // a quote proceeds target (quote_proceeds_scaled) is fully filled once
+  // what is left of that target sells no further quantity step at the next
+  // price the order could fill at. Its quantity is then what it sold.
   FILLED = 4;
   // Canceled and no longer working.
   CANCELED = 5;
@@ -48,14 +51,17 @@ enum CancelReason {
   // A cancel the account sent: a cancel, a batch cancel or a cancel-all.
   CANCEL_REASON_USER_REQUEST = 1;
   // The unfilled remainder of an immediate-or-cancel order. A buy sized by a
-  // quote amount (max_quote_debit_scaled) that spends that amount ends
-  // FILLED instead.
+  // quote amount (max_quote_debit_scaled) that spends that amount, or a sell
+  // sized by a quote proceeds target (quote_proceeds_scaled) that receives
+  // it, ends FILLED instead.
   CANCEL_REASON_IOC_REMAINDER = 2;
   // The unfilled remainder of a market order: the book ran out, the next
   // price was past the order's protection price, or the order reached the
   // market's maximum order quantity. A market buy sized by a quote amount
   // (max_quote_debit_scaled) that spends that amount, so that what is left
-  // buys no further quantity step, ends FILLED instead.
+  // buys no further quantity step, ends FILLED instead, as does a market sell
+  // sized by a quote proceeds target (quote_proceeds_scaled) once what is
+  // left of the target sells no further quantity step.
   CANCEL_REASON_MARKET_REMAINDER = 3;
   // Self-trade prevention canceled this resting order when an incoming order
   // belonging to the same root account, including another subaccount of that
@@ -106,6 +112,23 @@ enum CancelReason {
   // remainder before placing the attached order, so the two never trade with
   // each other. Fills before the cancel stand.
   CANCEL_REASON_ATTACHED_EXIT_FIRED = 18;
+  // Self-trade prevention mode DECREMENT reduced this order to its filled
+  // quantity: an incoming order met a resting order belonging to the same
+  // root account, including another subaccount of that root, both were
+  // reduced by the quantity that would have traded, with no trade, and this
+  // order had no quantity left. Fills before the cancel stand.
+  CANCEL_REASON_STP_DECREMENT = 19;
+  // The market's price band stopped the order: it filled up to the band's
+  // limit price, and its unfilled remainder was canceled rather than trade
+  // beyond the band. Fills before the cancel stand.
+  CANCEL_REASON_PRICE_BAND = 20;
+  // Cancel-on-disconnect canceled the order: the trading WebSocket
+  // connections of the account that opted in to cancel-on-disconnect all
+  // closed, and no session of the account opted in again before each one's
+  // grace period passed. An order the account's own cancel-all-after timer
+  // canceled reads CANCEL_REASON_CANCEL_ALL_AFTER instead. Fills before the
+  // cancel stand.
+  CANCEL_REASON_CANCEL_ON_DISCONNECT = 21;
 }
 
 // BatchReplacePhase is the recoverable execution phase for one replacement.
@@ -323,6 +346,16 @@ message Order {
   // Remaining working quantity scaled by the pair's base_quantity_scale from
   // GetSpotConfig for symbol_id. Zero for terminal orders.
   int64 leaves_qty_scaled = 20;
+  // Iceberg display quantity the order was placed with, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig for symbol_id: the most of the
+  // order the order book shows at once. Zero for a plain order. A replace
+  // keeps it.
+  int64 display_qty_scaled = 39;
+  // Part of leaves_qty_scaled an iceberg order keeps hidden from the order
+  // book, scaled by the pair's base_quantity_scale from GetSpotConfig for
+  // symbol_id. The order book shows leaves_qty_scaled minus this quantity.
+  // Zero for a plain order and for terminal orders.
+  int64 hidden_qty_scaled = 40;
   // Average execution price across the lineage through this generation,
   // in quote units scaled by 1e9, rounded down. Zero if no fills.
   // avg_price_e18 carries the exact average.
@@ -348,6 +381,13 @@ message Order {
   // since a rebate is credited; it is this amount alone when fee_asset is
   // BASE, whose fee is taken from the base received. What it left unspent is
   // submitted_max_quote_debit_scaled less the quote it used.
+  //
+  // For a SELL sized by a quote proceeds target
+  // (submitted_quote_proceeds_scaled), this amount is the proceeds it
+  // received before fees, never above the target; the quote it was credited
+  // is this amount less fee_total's amount_e18, or plus it when fee_total's
+  // is_rebate is true. What it did not receive is
+  // submitted_quote_proceeds_scaled less this amount.
   polyester.type.v1.U128 cum_notional = 37;
   // Total fee of the fills across the lineage through this generation, net
   // of rebates, in the order's fee asset. Order history reads and
@@ -401,6 +441,10 @@ message Order {
   // quote_quantity_scale from GetSpotConfig. Present only when that sizing
   // method was submitted.
   optional int64 submitted_max_quote_debit_scaled = 28;
+  // Submitted quote proceeds target, scaled by the pair's
+  // quote_quantity_scale from GetSpotConfig. Present only when that sizing
+  // method was submitted.
+  optional int64 submitted_quote_proceeds_scaled = 41;
   // Logical-order identity and requested generation. Always populated by order reads.
   OrderLineage lineage = 31;
   // Exact UTC expiry time for GTD orders, within the supported signed

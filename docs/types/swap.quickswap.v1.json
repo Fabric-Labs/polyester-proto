@@ -79,6 +79,83 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.AllowlistAction",
+      "kind": "enum",
+      "doc": "AllowlistAction is what a payout address allowlist change does.",
+      "enum": {
+        "values": [
+          {
+            "name": "ADD_DESTINATION",
+            "number": 1,
+            "doc": "Adds the destination to the vault's allowlist."
+          },
+          {
+            "name": "REMOVE_DESTINATION",
+            "number": 2,
+            "doc": "Removes the destination from the vault's allowlist."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.AllowlistChangeFailure",
+      "kind": "enum",
+      "doc": "AllowlistChangeFailure is why a change ended NOT_APPLIED.",
+      "enum": {
+        "values": [
+          {
+            "name": "TIMED_OUT",
+            "number": 1,
+            "doc": "The change could not be applied before its expires_at."
+          },
+          {
+            "name": "NOT_LISTED_ON_CHAIN",
+            "number": 2,
+            "doc": "REMOVE_DESTINATION only: the destination was no longer on the\n allowlist when the change was applied."
+          },
+          {
+            "name": "LIMIT_REACHED",
+            "number": 3,
+            "doc": "ADD_DESTINATION only: the allowlist already held 50 destinations on the\n destination's network when the change was applied."
+          },
+          {
+            "name": "REQUESTER_NO_LONGER_ALLOWED",
+            "number": 4,
+            "doc": "The requesting member no longer held the Owner or Finance role, under\n the same grant, when the change was applied."
+          },
+          {
+            "name": "REFUSED",
+            "number": 5,
+            "doc": "The change was refused for another reason."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.AllowlistChangeStatus",
+      "kind": "enum",
+      "doc": "AllowlistChangeStatus is where a payout address allowlist change stands.",
+      "enum": {
+        "values": [
+          {
+            "name": "PENDING",
+            "number": 1,
+            "doc": "Accepted and being applied on chain. A vault has at most one pending\n change."
+          },
+          {
+            "name": "APPLIED",
+            "number": 2,
+            "doc": "Applied: the destination is on the vault's allowlist (ADD_DESTINATION)\n or no longer on it (REMOVE_DESTINATION). An added destination is\n payable from its VaultAllowlistEntry.payable_from."
+          },
+          {
+            "name": "NOT_APPLIED",
+            "number": 3,
+            "doc": "Not applied, and never will be; failure says why. Nothing changed on\n the vault's allowlist. Request the change again to retry it."
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.AssetVolume",
       "kind": "message",
       "doc": "AssetVolume is a total amount in one asset.",
@@ -1310,6 +1387,41 @@
             "name": "PAYOUT_NOT_FOUND",
             "number": 46,
             "doc": "No payout run of the broker's vaults has this ID."
+          },
+          {
+            "name": "ALLOWLIST_DESTINATION_INVALID",
+            "number": 47,
+            "doc": "The destination address is not a valid address on the destination\n chain, or the chain takes no external payouts."
+          },
+          {
+            "name": "ALLOWLIST_DESTINATION_EXISTS",
+            "number": 48,
+            "doc": "The destination is already on the vault's payout address allowlist."
+          },
+          {
+            "name": "ALLOWLIST_FULL",
+            "number": 49,
+            "doc": "The vault's payout address allowlist already holds 50 destinations on\n the destination chain; remove one first."
+          },
+          {
+            "name": "ALLOWLIST_DESTINATION_NOT_LISTED",
+            "number": 50,
+            "doc": "The destination is not on the vault's payout address allowlist."
+          },
+          {
+            "name": "ALLOWLIST_DESTINATION_IN_USE",
+            "number": 51,
+            "doc": "The vault's payout rule pays the destination, enabled or paused; change\n the rule before removing the destination."
+          },
+          {
+            "name": "ALLOWLIST_CHANGE_PENDING",
+            "number": 52,
+            "doc": "The vault already has a pending payout address allowlist change; wait\n until ListVaultAllowlistChanges shows it APPLIED or NOT_APPLIED."
+          },
+          {
+            "name": "VAULT_ALLOWLIST_NOT_READY",
+            "number": 53,
+            "doc": "The vault's payout address allowlist cannot be changed yet: its\n on-chain protection is still being set up. Retry in a few minutes."
           }
         ]
       }
@@ -1444,7 +1556,7 @@
             "name": "started_at",
             "jsonName": "startedAt",
             "number": 7,
-            "doc": "When execution started.",
+            "doc": "When the first slice was submitted for execution. Unset while all slices\n remain unsent, including an execution refused during planning. Planned\n slice times and the execution deadline do not imply a slice was sent.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -1453,7 +1565,7 @@
             "name": "deadline",
             "jsonName": "deadline",
             "number": 8,
-            "doc": "Execution deadline: started_at plus the TWAP duration, or plus the market\n execution window. Funds not converted by then are refunded or returned.\n Independent of the quote validity and the funding window. Unset until\n the execution is planned, and for a bridge, which trades nothing.",
+            "doc": "Execution deadline frozen during planning: the planned start plus the TWAP\n duration or market execution window. A later first submission does not move\n this deadline. Funds not converted by then are refunded or returned.\n Independent of the quote validity and the funding window. Unset until\n the execution is planned, and for a bridge, which trades nothing.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -1466,6 +1578,139 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "slices",
+            "jsonName": "slices",
+            "number": 10,
+            "doc": "Planned slices in increasing index order, at most 50. Includes future and\n active slices. Empty for a bridge, or when slices_unavailable_reason is set.\n When available and not truncated, input_traded and\n output_received sum to executed_input and output_amount respectively;\n completed entries count to completed_slices and the list has total_slices\n entries. Amounts are rounded cumulatively in index order.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ExecutionSlice"
+          },
+          {
+            "name": "slices_truncated",
+            "jsonName": "slicesTruncated",
+            "number": 11,
+            "doc": "True when more than 50 slices exist; only the first 50 are listed.\n Totals and completed_slices still cover the entire execution.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "slices_unavailable_reason",
+            "jsonName": "slicesUnavailableReason",
+            "number": 12,
+            "doc": "Why slice history is unavailable. When set, slices is empty and\n slices_truncated is false. Aggregate amounts, counts, execution status\n and withdrawals remain available. Unspecified when history is available.",
+            "protoRef": "swap.quickswap.v1.ExecutionProgress.SlicesUnavailableReason"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ExecutionSlice",
+      "kind": "message",
+      "doc": "ExecutionSlice is one planned execution slot, including a slot that trades\n nothing. Its index and planned_at never change.",
+      "message": {
+        "fields": [
+          {
+            "name": "index",
+            "jsonName": "index",
+            "number": 1,
+            "doc": "Zero-based position in the execution's frozen schedule.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "planned_at",
+            "jsonName": "plannedAt",
+            "number": 2,
+            "doc": "Frozen scheduled start time of this slot.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "executed_at",
+            "jsonName": "executedAt",
+            "number": 3,
+            "doc": "When its first order was sent; unset for an unsent slice.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "finished_at",
+            "jsonName": "finishedAt",
+            "number": 4,
+            "doc": "When its outcome became final; unset while planned or executing.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 5,
+            "doc": "Current slice state.",
+            "protoRef": "swap.quickswap.v1.ExecutionSlice.State"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 6,
+            "doc": "Why a final slice did not trade in full; unspecified after full trading.",
+            "protoRef": "swap.quickswap.v1.ExecutionSlice.Reason"
+          },
+          {
+            "name": "completed",
+            "jsonName": "completed",
+            "number": 7,
+            "doc": "Whether this slice contributes to completed_slices. A final market slice\n completes even if it traded nothing; a TWAP slice completes only if it\n traded source input and is over.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "input_traded",
+            "jsonName": "inputTraded",
+            "number": 8,
+            "doc": "Source input traded, in source token units, counting only the first leg.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "output_received",
+            "jsonName": "outputReceived",
+            "number": 9,
+            "doc": "Destination received after all trading fees, in destination token units.\n On a two-leg route this is the second leg's output in this slot, which\n can include conversion of intermediate funds from earlier slots.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "average_price",
+            "jsonName": "averagePrice",
+            "number": 10,
+            "doc": "Net destination tokens per source token for this slot, rounded down to\n 18 decimal places; empty when no source input traded. A two-leg slot's\n output can include conversion of funds carried from previous slots.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "second_leg",
+            "jsonName": "secondLeg",
+            "number": 11,
+            "doc": "Second-leg conversion; unset on a direct route or a bridge.",
+            "protoRef": "swap.quickswap.v1.ExecutionSlice.SecondLeg"
+          },
+          {
+            "name": "intermediate_carried",
+            "jsonName": "intermediateCarried",
+            "number": 12,
+            "doc": "Intermediate balance after this slot's recorded fills, including earlier\n carried funds, in the refund route's token units; unset on a direct route.\n It passes to later slots while executing, or to refund when execution ends.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "carry_reason",
+            "jsonName": "carryReason",
+            "number": 13,
+            "doc": "Why intermediate funds could not be converted in this slot; unspecified\n when no conversion was refused.",
+            "protoRef": "swap.quickswap.v1.ExecutionSlice.Reason"
           }
         ]
       }
@@ -2787,6 +3032,161 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.ListVaultAllowlistChangesRequest",
+      "kind": "message",
+      "doc": "ListVaultAllowlistChangesRequest lists one vault's allowlist changes.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Maximum changes, default 20, max 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 4,
+            "doc": "Opaque exclusive keyset cursor, bound to the broker and vault. Reuse\n with the same broker and vault_account_id; limit may change.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 128
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultAllowlistChangesResponse",
+      "kind": "message",
+      "doc": "ListVaultAllowlistChangesResponse lists changes newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "changes",
+            "jsonName": "changes",
+            "number": 1,
+            "doc": "The changes.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.VaultAllowlistChange"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultAllowlistRequest",
+      "kind": "message",
+      "doc": "ListVaultAllowlistRequest reads one vault's payout address allowlist.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 3,
+            "doc": "Only destinations on this destination chain; 0 for every chain.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64",
+            "validate": {
+              "number": {
+                "lte": "65535"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultAllowlistResponse",
+      "kind": "message",
+      "doc": "ListVaultAllowlistResponse is the vault's whole allowlist, at most 50\n destinations per destination chain, ordered by destination_chain_id, then\n destination_address. It is not paginated. A change applied moments ago\n can take a few seconds to show.",
+      "message": {
+        "fields": [
+          {
+            "name": "entries",
+            "jsonName": "entries",
+            "number": 1,
+            "doc": "The destinations.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.VaultAllowlistEntry"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.ListVaultBalancesRequest",
       "kind": "message",
       "doc": "ListVaultBalancesRequest selects a broker's default and affiliate vaults.",
@@ -2863,6 +3263,107 @@
             "jsonName": "nextPageToken",
             "number": 2,
             "doc": "Opaque exclusive keyset cursor. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultLedgerRequest",
+      "kind": "message",
+      "doc": "ListVaultLedgerRequest lists the ledger entries of the broker's vaults,\n newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name. A broker API key may name only its own broker.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Only this vault's entries: the default vault or an affiliate vault, as\n a public sub-account ID. Zero for every vault of the broker.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 3,
+            "doc": "Only entries that occurred at or after start_time; unset for no lower\n bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 4,
+            "doc": "Only entries that occurred before end_time (exclusive); unset for no\n upper bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 5,
+            "doc": "Maximum number of entries to return; 0 means 25, at most 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 6,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the broker, the vault filter, the time bounds and the list order.\n Reuse it with the same filters; limit may change. Empty for the first\n page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListVaultLedgerResponse",
+      "kind": "message",
+      "doc": "ListVaultLedgerResponse lists vault ledger entries newest first by\n occurred_at. At one time, payouts come before fee credits and a refund\n before its debit; otherwise entries of the same time follow a stable\n server-defined order, the same on every page; it does not follow\n credit_id or run_id. Paging lists exactly once\n every entry that sorts after the previous page's last entry when the next\n page is read, including one that appeared meanwhile at an older time (a\n payout whose withdrawal ended meanwhile, at its run's slot). One that\n appears meanwhile at a newer time sorts before the cursor and appears only\n in a listing started again from the first page. A page may hold fewer\n than limit entries while next_page_token is set; continue until it is\n empty.",
+      "message": {
+        "fields": [
+          {
+            "name": "entries",
+            "jsonName": "entries",
+            "number": 1,
+            "doc": "The entries.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.VaultLedgerEntry"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
             "protoScalar": "string",
             "jsonType": "string"
           }
@@ -3201,6 +3702,35 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.PayoutClose",
+      "kind": "enum",
+      "doc": "PayoutClose is how a debited payout's withdrawal ended.",
+      "enum": {
+        "values": [
+          {
+            "name": "CLOSE_PAID",
+            "number": 1,
+            "doc": "The withdrawal completed on its destination network; the destination\n received amount minus charged_network_fee."
+          },
+          {
+            "name": "CLOSE_REFUNDED_TO_SMART_ACCOUNT",
+            "number": 2,
+            "doc": "The destination network's bridge rejected the withdrawal and refunded\n its net, less the network fee it kept, to the vault's own smart account;\n a PAYOUT_REFUND entry and PayoutStep.refunded_amount show the refund.\n The debit stands."
+          },
+          {
+            "name": "CLOSE_SENT_TO_RECOVERY",
+            "number": 3,
+            "doc": "The withdrawal's execution failed on its destination network: the net\n went to the bridge's recovery address, which settles it with the\n broker, and the network fee was kept. The debit stands."
+          },
+          {
+            "name": "CLOSE_UNKNOWN",
+            "number": 4,
+            "doc": "The withdrawal failed, and where its funds went is not known: the\n payout ended before payouts recorded how a failed withdrawal closed, its\n outcome was not known when it ended, or the records of its end disagree. The payout may have left the vault or\n may have been returned to it; the vault's balance is authoritative."
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.PayoutRuleDestination",
       "kind": "message",
       "doc": "PayoutRuleDestination pays one asset of a vault, in kind, to one address.\n Amounts are in base units of 18 decimals.",
@@ -3335,7 +3865,7 @@
           {
             "name": "PAYOUT_FAILED",
             "number": 6,
-            "doc": "Nothing was paid, and at least one asset's payout failed; reason is the\n first failure's: withdrawal_refused (refused before any funds left the\n vault), gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released (released before it was sent; nothing left the\n vault) or withdrawal_failed (the withdrawal ended without paying, before\n or after it reached the destination network). Where the funds of a\n withdrawal_failed payout are now is not shown yet. The step's tx_hash,\n when set, is its destination-network transaction."
+            "doc": "Nothing was paid, and at least one asset's payout failed; reason is the\n first failure's: withdrawal_refused (refused before any funds left the\n vault), gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released (released before it was sent; nothing left the\n vault) or withdrawal_failed (the withdrawal ended without paying, before\n or after it reached the destination network). Each step's close\n (PayoutStep.close, as ListVaultLedger shows it) says where the funds of\n a withdrawal that left the vault went; a withdrawal_failed step whose\n close was not recorded reads CLOSE_UNKNOWN, never a guess. The step's\n tx_hash, when set, is its destination-network transaction."
           }
         ]
       }
@@ -3383,7 +3913,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 5,
-            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; see\n PAYOUT_FAILED); empty otherwise.",
+            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -3428,6 +3958,20 @@
             "jsonName": "chargedNetworkFee",
             "number": 11,
             "doc": "The network fee charged on the withdrawal. On a completed step it was\n taken out of amount, so the destination received amount minus this fee.\n On a failed step whose withdrawal the destination network's bridge\n rejected or failed to execute, it is the fee kept, which is not\n refunded. Unset until the step is final, on a skipped step or one that\n failed before reaching that bridge, and when the fee was not reported;\n never zero for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "close",
+            "jsonName": "close",
+            "number": 12,
+            "doc": "How the step's withdrawal ended once it left the vault, the same close\n as the step's PAYOUT_DEBIT entry in ListVaultLedger: CLOSE_PAID for a\n completed step; for a failed one CLOSE_REFUNDED_TO_SMART_ACCOUNT,\n CLOSE_SENT_TO_RECOVERY, or CLOSE_UNKNOWN when where its funds went is\n not known. Unset (CLOSE_UNSPECIFIED) while the step is not final, and on\n a step that never left the vault, such as a skipped, refused, held or\n released one.",
+            "protoRef": "swap.quickswap.v1.PayoutClose"
+          },
+          {
+            "name": "refunded_amount",
+            "jsonName": "refundedAmount",
+            "number": 13,
+            "doc": "The net the destination network's bridge refunded to the vault's own\n smart account, the amount of the step's PAYOUT_REFUND entry; set only\n with CLOSE_REFUNDED_TO_SMART_ACCOUNT, never zero for unknown.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
@@ -4993,6 +5537,115 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.RequestVaultAllowlistChangeRequest",
+      "kind": "message",
+      "doc": "RequestVaultAllowlistChangeRequest asks to add one destination to, or\n remove one from, a vault's payout address allowlist.",
+      "message": {
+        "fields": [
+          {
+            "name": "broker",
+            "jsonName": "broker",
+            "number": 1,
+            "doc": "Broker name.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+              }
+            }
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "action",
+            "jsonName": "action",
+            "number": 3,
+            "doc": "What the change does.",
+            "protoRef": "swap.quickswap.v1.AllowlistAction",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 4,
+            "doc": "Destination chain identifier, as in\n PayoutRuleDestination.destination_chain_id.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64",
+            "validate": {
+              "number": {
+                "gt": "0",
+                "lte": "65535"
+              }
+            }
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 5,
+            "doc": "Destination address, in any form the destination network accepts; it\n is stored and returned in canonical form. For REMOVE_DESTINATION, name a\n VaultAllowlistEntry.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 385
+              }
+            }
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 6,
+            "doc": "ADD_DESTINATION only: the member's name for the destination, at most 64\n characters without leading or trailing whitespace. Optional; must be\n empty for REMOVE_DESTINATION.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.RequestVaultAllowlistChangeResponse",
+      "kind": "message",
+      "doc": "RequestVaultAllowlistChangeResponse returns the change, PENDING.",
+      "message": {
+        "fields": [
+          {
+            "name": "change",
+            "jsonName": "change",
+            "number": 1,
+            "doc": "The change. Follow it with ListVaultAllowlistChanges.",
+            "protoRef": "swap.quickswap.v1.VaultAllowlistChange"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.RequestedFees",
       "kind": "message",
       "doc": "RequestedFees are the broker and affiliate fees a QuickSwap request set,\n charged on top of the service fee.",
@@ -5734,6 +6387,192 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.VaultAllowlistChange",
+      "kind": "message",
+      "doc": "VaultAllowlistChange is one request to add a destination to, or remove one\n from, a vault's payout address allowlist.",
+      "message": {
+        "fields": [
+          {
+            "name": "change_id",
+            "jsonName": "changeId",
+            "number": 1,
+            "doc": "Public ID of the change.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 2,
+            "doc": "Public sub-account ID of the vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "action",
+            "jsonName": "action",
+            "number": 3,
+            "doc": "What the change does.",
+            "protoRef": "swap.quickswap.v1.AllowlistAction"
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 4,
+            "doc": "Destination chain identifier.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 5,
+            "doc": "Canonical destination address.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 6,
+            "doc": "ADD_DESTINATION only: the member's name for the destination; may be\n empty.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "requested_by_account_id",
+            "jsonName": "requestedByAccountId",
+            "number": 7,
+            "doc": "Public account ID of the member who requested the change.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "requested_at",
+            "jsonName": "requestedAt",
+            "number": 8,
+            "doc": "When the change was requested.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 9,
+            "doc": "The end of the change's approval window: a change not applied by then\n ends NOT_APPLIED / TIMED_OUT. A change can stay PENDING shortly past it\n while its outcome is confirmed.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 10,
+            "doc": "Where the change stands.",
+            "protoRef": "swap.quickswap.v1.AllowlistChangeStatus"
+          },
+          {
+            "name": "failure",
+            "jsonName": "failure",
+            "number": 11,
+            "doc": "NOT_APPLIED only: why.",
+            "protoRef": "swap.quickswap.v1.AllowlistChangeFailure"
+          },
+          {
+            "name": "closed_at",
+            "jsonName": "closedAt",
+            "number": 12,
+            "doc": "When the change became APPLIED or NOT_APPLIED; unset while PENDING.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultAllowlistEntry",
+      "kind": "message",
+      "doc": "VaultAllowlistEntry is one destination on a vault's payout address\n allowlist: an address on one network that the vault's payouts and\n withdrawals may pay.",
+      "message": {
+        "fields": [
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 1,
+            "doc": "Destination chain identifier, as in\n PayoutRuleDestination.destination_chain_id.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 2,
+            "doc": "Canonical destination address, exactly as payout rules and withdrawals\n must name it.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 3,
+            "doc": "The member's name for the destination. Empty when the destination was\n not added with RequestVaultAllowlistChange or was added without one.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "created_by_account_id",
+            "jsonName": "createdByAccountId",
+            "number": 4,
+            "doc": "Public account ID of the member who added the destination; 0 when it\n was not added with RequestVaultAllowlistChange.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "listed_at",
+            "jsonName": "listedAt",
+            "number": 5,
+            "doc": "When the destination was added to the allowlist.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "payable_from",
+            "jsonName": "payableFrom",
+            "number": 6,
+            "doc": "When payouts and withdrawals to the destination become possible: 24\n hours after listed_at. Until then payouts to it are held and\n withdrawals to it are refused.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "cooling_down",
+            "jsonName": "coolingDown",
+            "number": 7,
+            "doc": "Whether payable_from is still in the future when the allowlist was\n read.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "used_by_payout_rule",
+            "jsonName": "usedByPayoutRule",
+            "number": 8,
+            "doc": "Whether the latest version of the vault's payout rule pays this\n destination, enabled or paused. A destination a rule pays cannot be\n removed: change the rule first.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.VaultAssetBalance",
       "kind": "message",
       "doc": "VaultAssetBalance is the current posted balance in one asset.",
@@ -5796,6 +6635,300 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultLedgerEntry",
+      "kind": "message",
+      "doc": "VaultLedgerEntry is one movement of a broker vault's funds.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "detail",
+            "fields": [
+              "fee_credit",
+              "payout_debit",
+              "payout_refund"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "kind",
+            "jsonName": "kind",
+            "number": 1,
+            "doc": "What moved.",
+            "protoRef": "swap.quickswap.v1.VaultLedgerEntryKind"
+          },
+          {
+            "name": "occurred_at",
+            "jsonName": "occurredAt",
+            "number": 2,
+            "doc": "When it happened: when a fee credit was credited; a payout debit's and\n refund's run's scheduled slot (Payout.scheduled_for).",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "vault_account_id",
+            "jsonName": "vaultAccountId",
+            "number": 3,
+            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 4,
+            "doc": "Asset, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 5,
+            "doc": "Amount moved, positive, in base units of 18 decimals: credited to the\n vault (FEE_CREDIT), debited from it (PAYOUT_DEBIT), or refunded to its\n smart account (PAYOUT_REFUND).",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "fee_credit",
+            "jsonName": "feeCredit",
+            "number": 6,
+            "doc": "Set for FEE_CREDIT.",
+            "protoRef": "swap.quickswap.v1.VaultLedgerFeeCredit",
+            "oneof": "detail"
+          },
+          {
+            "name": "payout_debit",
+            "jsonName": "payoutDebit",
+            "number": 7,
+            "doc": "Set for PAYOUT_DEBIT.",
+            "protoRef": "swap.quickswap.v1.VaultLedgerPayoutDebit",
+            "oneof": "detail"
+          },
+          {
+            "name": "payout_refund",
+            "jsonName": "payoutRefund",
+            "number": 8,
+            "doc": "Set for PAYOUT_REFUND.",
+            "protoRef": "swap.quickswap.v1.VaultLedgerPayoutRefund",
+            "oneof": "detail"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultLedgerEntryKind",
+      "kind": "enum",
+      "doc": "VaultLedgerEntryKind is what moved in a vault ledger entry.",
+      "enum": {
+        "values": [
+          {
+            "name": "FEE_CREDIT",
+            "number": 1,
+            "doc": "A broker or affiliate fee a QuickSwap credited to the vault."
+          },
+          {
+            "name": "PAYOUT_DEBIT",
+            "number": 2,
+            "doc": "An asset's payout in a payout run, debited from the vault."
+          },
+          {
+            "name": "PAYOUT_REFUND",
+            "number": 3,
+            "doc": "The net of a payout the destination network's bridge rejected, refunded\n to the vault's own smart account, less the network fee it kept. The\n funds stay in that smart account: the refund is not part of the vault\n balance ListVaultBalances reads, and no entry returns it to the vault."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultLedgerFeeCredit",
+      "kind": "message",
+      "doc": "VaultLedgerFeeCredit is the QuickSwap fee of a FEE_CREDIT entry.",
+      "message": {
+        "fields": [
+          {
+            "name": "credit_id",
+            "jsonName": "creditId",
+            "number": 1,
+            "doc": "Public ID of the credit, unique among the broker's fee credits.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 2,
+            "doc": "Public ID of the QuickSwap the fee was charged on. Read it with\n GetQuickSwap for its full detail.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "fee_kind",
+            "jsonName": "feeKind",
+            "number": 3,
+            "doc": "BROKER (the broker fee, credited to the default vault) or AFFILIATE (an\n affiliate fee, credited to that affiliate vault).",
+            "protoRef": "swap.quickswap.v1.FeeKind"
+          },
+          {
+            "name": "fee_bps",
+            "jsonName": "feeBps",
+            "number": 4,
+            "doc": "The fee's rate, in basis points of what each trading leg receives (of\n the credited amount on a bridge); a two-leg route credits it once per\n leg. Unset when the QuickSwap's fee terms are not known.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "source_zipped_asset_id",
+            "jsonName": "sourceZippedAssetId",
+            "number": 5,
+            "doc": "Source asset and network, as an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_zipped_asset_id",
+            "jsonName": "destinationZippedAssetId",
+            "number": 6,
+            "doc": "Destination asset and network, as an AssetChainVariant.zipped_asset_id\n from GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "quoted_source_amount",
+            "jsonName": "quotedSourceAmount",
+            "number": 7,
+            "doc": "Source amount quoted at creation, in source token units; an estimate.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "quoted_destination_amount",
+            "jsonName": "quotedDestinationAmount",
+            "number": 8,
+            "doc": "Destination amount expected at creation, in destination token units; an\n estimate.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "source_amount",
+            "jsonName": "sourceAmount",
+            "number": 9,
+            "doc": "Source amount received, in source token units; unset until a deposit is\n detected.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_amount",
+            "jsonName": "destinationAmount",
+            "number": 10,
+            "doc": "Destination amount delivered, in destination token units; unset until a\n destination payout completes.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultLedgerPayoutDebit",
+      "kind": "message",
+      "doc": "VaultLedgerPayoutDebit is the payout of a PAYOUT_DEBIT entry: one asset's\n step of a payout run, listed once its withdrawal ended and only when it\n left the vault. A payout that paid nothing, or whose withdrawal was\n released before it left, has no entry.",
+      "message": {
+        "fields": [
+          {
+            "name": "run_id",
+            "jsonName": "runId",
+            "number": 1,
+            "doc": "Public payout run ID; read the run with GetPayout.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "payout_status",
+            "jsonName": "payoutStatus",
+            "number": 2,
+            "doc": "What the run came to.",
+            "protoRef": "swap.quickswap.v1.PayoutStatus"
+          },
+          {
+            "name": "destination_chain_id",
+            "jsonName": "destinationChainId",
+            "number": 3,
+            "doc": "Destination chain identifier.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "destination_address",
+            "jsonName": "destinationAddress",
+            "number": 4,
+            "doc": "Canonical destination address.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "tx_hash",
+            "jsonName": "txHash",
+            "number": 5,
+            "doc": "Destination-network transaction hash; empty when none is known.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 6,
+            "doc": "The step's state: PAYOUT_STEP_COMPLETED or PAYOUT_STEP_FAILED.",
+            "protoRef": "swap.quickswap.v1.PayoutStepState"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 7,
+            "doc": "Machine-readable reason of a failed step (see PayoutStep.reason); empty\n otherwise.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "close",
+            "jsonName": "close",
+            "number": 8,
+            "doc": "How the withdrawal ended.",
+            "protoRef": "swap.quickswap.v1.PayoutClose"
+          },
+          {
+            "name": "charged_network_fee",
+            "jsonName": "chargedNetworkFee",
+            "number": 9,
+            "doc": "The network fee charged on the withdrawal, in base units of 18\n decimals: taken out of a paid amount, or kept on a rejected or failed\n one and not refunded. Unset when it was not reported; never zero for\n unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.VaultLedgerPayoutRefund",
+      "kind": "message",
+      "doc": "VaultLedgerPayoutRefund is the refund of a PAYOUT_REFUND entry.",
+      "message": {
+        "fields": [
+          {
+            "name": "run_id",
+            "jsonName": "runId",
+            "number": 1,
+            "doc": "Public payout run ID of the refunded payout; its PAYOUT_DEBIT entry has\n the same run_id and asset_id.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }

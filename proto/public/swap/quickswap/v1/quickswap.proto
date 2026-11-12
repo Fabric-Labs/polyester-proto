@@ -585,15 +585,135 @@ message ExecutionProgress {
   // has its slice count, duration_ms over slice_interval_ms rounded up. Zero
   // until then, and for a bridge, which trades nothing.
   uint32 total_slices = 6;
-  // When execution started.
+  // When the first slice was submitted for execution. Unset while all slices
+  // remain unsent, including an execution refused during planning. Planned
+  // slice times and the execution deadline do not imply a slice was sent.
   google.protobuf.Timestamp started_at = 7;
-  // Execution deadline: started_at plus the TWAP duration, or plus the market
-  // execution window. Funds not converted by then are refunded or returned.
+  // Execution deadline frozen during planning: the planned start plus the TWAP
+  // duration or market execution window. A later first submission does not move
+  // this deadline. Funds not converted by then are refunded or returned.
   // Independent of the quote validity and the funding window. Unset until
   // the execution is planned, and for a bridge, which trades nothing.
   google.protobuf.Timestamp deadline = 8;
   // When execution finished; unset while executing.
   google.protobuf.Timestamp finished_at = 9;
+  // Planned slices in increasing index order, at most 50. Includes future and
+  // active slices. Empty for a bridge, or when slices_unavailable_reason is set.
+  // When available and not truncated, input_traded and
+  // output_received sum to executed_input and output_amount respectively;
+  // completed entries count to completed_slices and the list has total_slices
+  // entries. Amounts are rounded cumulatively in index order.
+  repeated ExecutionSlice slices = 10;
+  // True when more than 50 slices exist; only the first 50 are listed.
+  // Totals and completed_slices still cover the entire execution.
+  bool slices_truncated = 11;
+  // Why slice history is unavailable. When set, slices is empty and
+  // slices_truncated is false. Aggregate amounts, counts, execution status
+  // and withdrawals remain available. Unspecified when history is available.
+  SlicesUnavailableReason slices_unavailable_reason = 12;
+
+  // SlicesUnavailableReason explains why slice details cannot be shown.
+  enum SlicesUnavailableReason {
+    // Slice history is available, or the execution has no slices.
+    UNAVAILABLE_REASON_UNSPECIFIED = 0;
+    // Recorded slice data is inconsistent; no slice amounts are fabricated.
+    ACCOUNTING_INCONSISTENCY = 1;
+    // The precision of one or more execution assets is unavailable, so slice
+    // amounts cannot be shown accurately. Aggregate amounts may be unknown.
+    PRECISION_UNAVAILABLE = 2;
+  }
+}
+
+// ExecutionSlice is one planned execution slot, including a slot that trades
+// nothing. Its index and planned_at never change.
+message ExecutionSlice {
+  // State distinguishes pending work from a final slice outcome.
+  enum State {
+    // No state; never returned.
+    STATE_UNSPECIFIED = 0;
+    // Scheduled; no order has been sent yet.
+    PLANNED = 1;
+    // An order has been sent and the outcome is not final.
+    EXECUTING = 2;
+    // The slice traded its planned orders in full.
+    TRADED = 3;
+    // The slice traded some input but left an order partly unfilled or
+    // intermediate funds unconverted.
+    PARTLY_TRADED = 4;
+    // No input traded because the slot was not used or no order could fill.
+    SKIPPED = 5;
+    // No input traded because an order or its execution failed.
+    FAILED = 6;
+  }
+  // Reason explains a slice outcome or why intermediate funds were carried.
+  enum Reason {
+    // No reason is needed while pending or after a fully traded slice.
+    REASON_UNSPECIFIED = 0;
+    // The slot ended before an order could be sent.
+    SLOT_MISSED = 1;
+    // The execution deadline ended this slice.
+    DEADLINE_REACHED = 2;
+    // The required market was closed.
+    MARKET_CLOSED = 3;
+    // The amount was below the market's minimum order size.
+    BELOW_MINIMUM = 4;
+    // The amount exceeded the market's maximum order size.
+    ABOVE_MAXIMUM = 5;
+    // No order could satisfy the swap's price protection.
+    PROTECTION_NOT_MET = 6;
+    // An order was refused.
+    ORDER_REJECTED = 7;
+    // Available liquidity did not fill the whole order at its protected price.
+    INSUFFICIENT_LIQUIDITY = 8;
+    // The execution ended before this slot was used.
+    EXECUTION_ENDED = 9;
+  }
+  // SecondLeg is the intermediate-to-destination conversion in this slot.
+  // It may spend intermediate funds carried from earlier slots as well.
+  message SecondLeg {
+    // Intermediate amount traded, in the refund route's token units.
+    TokenAmount input_traded = 1;
+    // Destination amount received after all trading fees, in destination units.
+    TokenAmount output_received = 2;
+    // Net destination tokens per intermediate token, rounded down to 18
+    // decimal places; empty when no intermediate amount traded.
+    string average_price = 3;
+  }
+  // Zero-based position in the execution's frozen schedule.
+  uint32 index = 1;
+  // Frozen scheduled start time of this slot.
+  google.protobuf.Timestamp planned_at = 2;
+  // When its first order was sent; unset for an unsent slice.
+  google.protobuf.Timestamp executed_at = 3;
+  // When its outcome became final; unset while planned or executing.
+  google.protobuf.Timestamp finished_at = 4;
+  // Current slice state.
+  State state = 5;
+  // Why a final slice did not trade in full; unspecified after full trading.
+  Reason reason = 6;
+  // Whether this slice contributes to completed_slices. A final market slice
+  // completes even if it traded nothing; a TWAP slice completes only if it
+  // traded source input and is over.
+  bool completed = 7;
+  // Source input traded, in source token units, counting only the first leg.
+  TokenAmount input_traded = 8;
+  // Destination received after all trading fees, in destination token units.
+  // On a two-leg route this is the second leg's output in this slot, which
+  // can include conversion of intermediate funds from earlier slots.
+  TokenAmount output_received = 9;
+  // Net destination tokens per source token for this slot, rounded down to
+  // 18 decimal places; empty when no source input traded. A two-leg slot's
+  // output can include conversion of funds carried from previous slots.
+  string average_price = 10;
+  // Second-leg conversion; unset on a direct route or a bridge.
+  SecondLeg second_leg = 11;
+  // Intermediate balance after this slot's recorded fills, including earlier
+  // carried funds, in the refund route's token units; unset on a direct route.
+  // It passes to later slots while executing, or to refund when execution ends.
+  TokenAmount intermediate_carried = 12;
+  // Why intermediate funds could not be converted in this slot; unspecified
+  // when no conversion was refused.
+  Reason carry_reason = 13;
 }
 
 // WithdrawalRole is why a withdrawal pays its recipient.
@@ -1170,6 +1290,25 @@ enum ErrorCode {
   REFERRAL_PARTNER_INACTIVE = 45;
   // No payout run of the broker's vaults has this ID.
   PAYOUT_NOT_FOUND = 46;
+  // The destination address is not a valid address on the destination
+  // chain, or the chain takes no external payouts.
+  ALLOWLIST_DESTINATION_INVALID = 47;
+  // The destination is already on the vault's payout address allowlist.
+  ALLOWLIST_DESTINATION_EXISTS = 48;
+  // The vault's payout address allowlist already holds 50 destinations on
+  // the destination chain; remove one first.
+  ALLOWLIST_FULL = 49;
+  // The destination is not on the vault's payout address allowlist.
+  ALLOWLIST_DESTINATION_NOT_LISTED = 50;
+  // The vault's payout rule pays the destination, enabled or paused; change
+  // the rule before removing the destination.
+  ALLOWLIST_DESTINATION_IN_USE = 51;
+  // The vault already has a pending payout address allowlist change; wait
+  // until ListVaultAllowlistChanges shows it APPLIED or NOT_APPLIED.
+  ALLOWLIST_CHANGE_PENDING = 52;
+  // The vault's payout address allowlist cannot be changed yet: its
+  // on-chain protection is still being set up. Retry in a few minutes.
+  VAULT_ALLOWLIST_NOT_READY = 53;
 }
 
 // ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it
