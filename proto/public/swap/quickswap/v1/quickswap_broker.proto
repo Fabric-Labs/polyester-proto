@@ -799,9 +799,11 @@ enum PayoutStatus {
   // vault), gateway_capacity_insufficient (the funds stay for a later run),
   // withdrawal_released (released before it was sent; nothing left the
   // vault) or withdrawal_failed (the withdrawal ended without paying, before
-  // or after it reached the destination network). Where the funds of a
-  // withdrawal_failed payout are now is not shown yet. The step's tx_hash,
-  // when set, is its destination-network transaction.
+  // or after it reached the destination network). Each step's close
+  // (PayoutStep.close, as ListVaultLedger shows it) says where the funds of
+  // a withdrawal that left the vault went; a withdrawal_failed step whose
+  // close was not recorded reads CLOSE_UNKNOWN, never a guess. The step's
+  // tx_hash, when set, is its destination-network transaction.
   PAYOUT_FAILED = 6;
 }
 
@@ -861,8 +863,8 @@ message PayoutStep {
   // withdrawal_refused,
   // gateway_capacity_insufficient, withdrawal_released (the withdrawal was
   // released before it was sent; nothing left the vault) or
-  // withdrawal_failed (the withdrawal ended without paying; see
-  // PAYOUT_FAILED); empty otherwise.
+  // withdrawal_failed (the withdrawal ended without paying; close says
+  // where its funds went, see PAYOUT_FAILED); empty otherwise.
   string reason = 5;
   // The vault's available balance of the asset when the run started.
   TokenAmount available = 6;
@@ -888,6 +890,18 @@ message PayoutStep {
   // failed before reaching that bridge, and when the fee was not reported;
   // never zero for unknown.
   TokenAmount charged_network_fee = 11;
+  // How the step's withdrawal ended once it left the vault, the same close
+  // as the step's PAYOUT_DEBIT entry in ListVaultLedger: CLOSE_PAID for a
+  // completed step; for a failed one CLOSE_REFUNDED_TO_SMART_ACCOUNT,
+  // CLOSE_SENT_TO_RECOVERY, or CLOSE_UNKNOWN when where its funds went is
+  // not known. Unset (CLOSE_UNSPECIFIED) while the step is not final, and on
+  // a step that never left the vault, such as a skipped, refused, held or
+  // released one.
+  PayoutClose close = 12;
+  // The net the destination network's bridge refunded to the vault's own
+  // smart account, the amount of the step's PAYOUT_REFUND entry; set only
+  // with CLOSE_REFUNDED_TO_SMART_ACCOUNT, never zero for unknown.
+  TokenAmount refunded_amount = 13;
 }
 
 // Payout is one scheduled payout run of a broker vault's payout rule.
@@ -1180,6 +1194,372 @@ message ListVaultPayoutRulesResponse {
   string next_page_token = 2;
 }
 
+// VaultLedgerEntryKind is what moved in a vault ledger entry.
+enum VaultLedgerEntryKind {
+  // Never returned.
+  LEDGER_ENTRY_KIND_UNSPECIFIED = 0;
+  // A broker or affiliate fee a QuickSwap credited to the vault.
+  FEE_CREDIT = 1;
+  // An asset's payout in a payout run, debited from the vault.
+  PAYOUT_DEBIT = 2;
+  // The net of a payout the destination network's bridge rejected, refunded
+  // to the vault's own smart account, less the network fee it kept. The
+  // funds stay in that smart account: the refund is not part of the vault
+  // balance ListVaultBalances reads, and no entry returns it to the vault.
+  PAYOUT_REFUND = 3;
+}
+
+// PayoutClose is how a debited payout's withdrawal ended.
+enum PayoutClose {
+  // No close: the payout step is not final, or nothing left the vault. Never
+  // returned on a ledger entry.
+  CLOSE_UNSPECIFIED = 0;
+  // The withdrawal completed on its destination network; the destination
+  // received amount minus charged_network_fee.
+  CLOSE_PAID = 1;
+  // The destination network's bridge rejected the withdrawal and refunded
+  // its net, less the network fee it kept, to the vault's own smart account;
+  // a PAYOUT_REFUND entry and PayoutStep.refunded_amount show the refund.
+  // The debit stands.
+  CLOSE_REFUNDED_TO_SMART_ACCOUNT = 2;
+  // The withdrawal's execution failed on its destination network: the net
+  // went to the bridge's recovery address, which settles it with the
+  // broker, and the network fee was kept. The debit stands.
+  CLOSE_SENT_TO_RECOVERY = 3;
+  // The withdrawal failed, and where its funds went is not known: the
+  // payout ended before payouts recorded how a failed withdrawal closed, its
+  // outcome was not known when it ended, or the records of its end disagree. The payout may have left the vault or
+  // may have been returned to it; the vault's balance is authoritative.
+  CLOSE_UNKNOWN = 4;
+}
+
+// VaultLedgerFeeCredit is the QuickSwap fee of a FEE_CREDIT entry.
+message VaultLedgerFeeCredit {
+  // Public ID of the credit, unique among the broker's fee credits.
+  fixed64 credit_id = 1;
+  // Public ID of the QuickSwap the fee was charged on. Read it with
+  // GetQuickSwap for its full detail.
+  fixed64 swap_id = 2;
+  // BROKER (the broker fee, credited to the default vault) or AFFILIATE (an
+  // affiliate fee, credited to that affiliate vault).
+  FeeKind fee_kind = 3;
+  // The fee's rate, in basis points of what each trading leg receives (of
+  // the credited amount on a bridge); a two-leg route credits it once per
+  // leg. Unset when the QuickSwap's fee terms are not known.
+  optional uint32 fee_bps = 4;
+  // Source asset and network, as an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 source_zipped_asset_id = 5;
+  // Destination asset and network, as an AssetChainVariant.zipped_asset_id
+  // from GET /v1/chain/deposit-withdraw/config.
+  uint32 destination_zipped_asset_id = 6;
+  // Source amount quoted at creation, in source token units; an estimate.
+  TokenAmount quoted_source_amount = 7;
+  // Destination amount expected at creation, in destination token units; an
+  // estimate.
+  TokenAmount quoted_destination_amount = 8;
+  // Source amount received, in source token units; unset until a deposit is
+  // detected.
+  TokenAmount source_amount = 9;
+  // Destination amount delivered, in destination token units; unset until a
+  // destination payout completes.
+  TokenAmount destination_amount = 10;
+}
+
+// VaultLedgerPayoutDebit is the payout of a PAYOUT_DEBIT entry: one asset's
+// step of a payout run, listed once its withdrawal ended and only when it
+// left the vault. A payout that paid nothing, or whose withdrawal was
+// released before it left, has no entry.
+message VaultLedgerPayoutDebit {
+  // Public payout run ID; read the run with GetPayout.
+  fixed64 run_id = 1;
+  // What the run came to.
+  PayoutStatus payout_status = 2;
+  // Destination chain identifier.
+  uint64 destination_chain_id = 3;
+  // Canonical destination address.
+  string destination_address = 4;
+  // Destination-network transaction hash; empty when none is known.
+  string tx_hash = 5;
+  // The step's state: PAYOUT_STEP_COMPLETED or PAYOUT_STEP_FAILED.
+  PayoutStepState state = 6;
+  // Machine-readable reason of a failed step (see PayoutStep.reason); empty
+  // otherwise.
+  string reason = 7;
+  // How the withdrawal ended.
+  PayoutClose close = 8;
+  // The network fee charged on the withdrawal, in base units of 18
+  // decimals: taken out of a paid amount, or kept on a rejected or failed
+  // one and not refunded. Unset when it was not reported; never zero for
+  // unknown.
+  TokenAmount charged_network_fee = 9;
+}
+
+// VaultLedgerPayoutRefund is the refund of a PAYOUT_REFUND entry.
+message VaultLedgerPayoutRefund {
+  // Public payout run ID of the refunded payout; its PAYOUT_DEBIT entry has
+  // the same run_id and asset_id.
+  fixed64 run_id = 1;
+}
+
+// VaultLedgerEntry is one movement of a broker vault's funds.
+message VaultLedgerEntry {
+  // What moved.
+  VaultLedgerEntryKind kind = 1;
+  // When it happened: when a fee credit was credited; a payout debit's and
+  // refund's run's scheduled slot (Payout.scheduled_for).
+  google.protobuf.Timestamp occurred_at = 2;
+  // Public sub-account ID of the vault: the default vault or an affiliate
+  // vault.
+  fixed64 vault_account_id = 3;
+  // Asset, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 asset_id = 4;
+  // Amount moved, positive, in base units of 18 decimals: credited to the
+  // vault (FEE_CREDIT), debited from it (PAYOUT_DEBIT), or refunded to its
+  // smart account (PAYOUT_REFUND).
+  TokenAmount amount = 5;
+  // The detail of kind.
+  oneof detail {
+    // Set for FEE_CREDIT.
+    VaultLedgerFeeCredit fee_credit = 6;
+    // Set for PAYOUT_DEBIT.
+    VaultLedgerPayoutDebit payout_debit = 7;
+    // Set for PAYOUT_REFUND.
+    VaultLedgerPayoutRefund payout_refund = 8;
+  }
+}
+
+// ListVaultLedgerRequest lists the ledger entries of the broker's vaults,
+// newest first.
+message ListVaultLedgerRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Only this vault's entries: the default vault or an affiliate vault, as
+  // a public sub-account ID. Zero for every vault of the broker.
+  fixed64 vault_account_id = 2;
+  // Only entries that occurred at or after start_time; unset for no lower
+  // bound.
+  google.protobuf.Timestamp start_time = 3;
+  // Only entries that occurred before end_time (exclusive); unset for no
+  // upper bound.
+  google.protobuf.Timestamp end_time = 4;
+  // Maximum number of entries to return; 0 means 25, at most 100.
+  uint32 limit = 5 [(buf.validate.field).uint32.lte = 100];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound
+  // to the broker, the vault filter, the time bounds and the list order.
+  // Reuse it with the same filters; limit may change. Empty for the first
+  // page.
+  string page_token = 6 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListVaultLedgerResponse lists vault ledger entries newest first by
+// occurred_at. At one time, payouts come before fee credits and a refund
+// before its debit; otherwise entries of the same time follow a stable
+// server-defined order, the same on every page; it does not follow
+// credit_id or run_id. Paging lists exactly once
+// every entry that sorts after the previous page's last entry when the next
+// page is read, including one that appeared meanwhile at an older time (a
+// payout whose withdrawal ended meanwhile, at its run's slot). One that
+// appears meanwhile at a newer time sorts before the cursor and appears only
+// in a listing started again from the first page. A page may hold fewer
+// than limit entries while next_page_token is set; continue until it is
+// empty.
+message ListVaultLedgerResponse {
+  // The entries.
+  repeated VaultLedgerEntry entries = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// AllowlistAction is what a payout address allowlist change does.
+enum AllowlistAction {
+  // Rejected in requests and never returned.
+  ALLOWLIST_ACTION_UNSPECIFIED = 0;
+  // Adds the destination to the vault's allowlist.
+  ADD_DESTINATION = 1;
+  // Removes the destination from the vault's allowlist.
+  REMOVE_DESTINATION = 2;
+}
+
+// AllowlistChangeStatus is where a payout address allowlist change stands.
+enum AllowlistChangeStatus {
+  // Never returned.
+  ALLOWLIST_CHANGE_STATUS_UNSPECIFIED = 0;
+  // Accepted and being applied on chain. A vault has at most one pending
+  // change.
+  PENDING = 1;
+  // Applied: the destination is on the vault's allowlist (ADD_DESTINATION)
+  // or no longer on it (REMOVE_DESTINATION). An added destination is
+  // payable from its VaultAllowlistEntry.payable_from.
+  APPLIED = 2;
+  // Not applied, and never will be; failure says why. Nothing changed on
+  // the vault's allowlist. Request the change again to retry it.
+  NOT_APPLIED = 3;
+}
+
+// AllowlistChangeFailure is why a change ended NOT_APPLIED.
+enum AllowlistChangeFailure {
+  // The change is not NOT_APPLIED.
+  ALLOWLIST_CHANGE_FAILURE_UNSPECIFIED = 0;
+  // The change could not be applied before its expires_at.
+  TIMED_OUT = 1;
+  // REMOVE_DESTINATION only: the destination was no longer on the
+  // allowlist when the change was applied.
+  NOT_LISTED_ON_CHAIN = 2;
+  // ADD_DESTINATION only: the allowlist already held 50 destinations on the
+  // destination's network when the change was applied.
+  LIMIT_REACHED = 3;
+  // The requesting member no longer held the Owner or Finance role, under
+  // the same grant, when the change was applied.
+  REQUESTER_NO_LONGER_ALLOWED = 4;
+  // The change was refused for another reason.
+  REFUSED = 5;
+}
+
+// VaultAllowlistEntry is one destination on a vault's payout address
+// allowlist: an address on one network that the vault's payouts and
+// withdrawals may pay.
+message VaultAllowlistEntry {
+  // Destination chain identifier, as in
+  // PayoutRuleDestination.destination_chain_id.
+  uint64 destination_chain_id = 1;
+  // Canonical destination address, exactly as payout rules and withdrawals
+  // must name it.
+  string destination_address = 2;
+  // The member's name for the destination. Empty when the destination was
+  // not added with RequestVaultAllowlistChange or was added without one.
+  string label = 3;
+  // Public account ID of the member who added the destination; 0 when it
+  // was not added with RequestVaultAllowlistChange.
+  fixed64 created_by_account_id = 4;
+  // When the destination was added to the allowlist.
+  google.protobuf.Timestamp listed_at = 5;
+  // When payouts and withdrawals to the destination become possible: 24
+  // hours after listed_at. Until then payouts to it are held and
+  // withdrawals to it are refused.
+  google.protobuf.Timestamp payable_from = 6;
+  // Whether payable_from is still in the future when the allowlist was
+  // read.
+  bool cooling_down = 7;
+  // Whether the latest version of the vault's payout rule pays this
+  // destination, enabled or paused. A destination a rule pays cannot be
+  // removed: change the rule first.
+  bool used_by_payout_rule = 8;
+}
+
+// VaultAllowlistChange is one request to add a destination to, or remove one
+// from, a vault's payout address allowlist.
+message VaultAllowlistChange {
+  // Public ID of the change.
+  fixed64 change_id = 1;
+  // Public sub-account ID of the vault.
+  fixed64 vault_account_id = 2;
+  // What the change does.
+  AllowlistAction action = 3;
+  // Destination chain identifier.
+  uint64 destination_chain_id = 4;
+  // Canonical destination address.
+  string destination_address = 5;
+  // ADD_DESTINATION only: the member's name for the destination; may be
+  // empty.
+  string label = 6;
+  // Public account ID of the member who requested the change.
+  fixed64 requested_by_account_id = 7;
+  // When the change was requested.
+  google.protobuf.Timestamp requested_at = 8;
+  // The end of the change's approval window: a change not applied by then
+  // ends NOT_APPLIED / TIMED_OUT. A change can stay PENDING shortly past it
+  // while its outcome is confirmed.
+  google.protobuf.Timestamp expires_at = 9;
+  // Where the change stands.
+  AllowlistChangeStatus status = 10;
+  // NOT_APPLIED only: why.
+  AllowlistChangeFailure failure = 11;
+  // When the change became APPLIED or NOT_APPLIED; unset while PENDING.
+  google.protobuf.Timestamp closed_at = 12;
+}
+
+// ListVaultAllowlistRequest reads one vault's payout address allowlist.
+message ListVaultAllowlistRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public sub-account ID of the vault: the default vault or an affiliate
+  // vault.
+  fixed64 vault_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // Only destinations on this destination chain; 0 for every chain.
+  uint64 destination_chain_id = 3 [(buf.validate.field).uint64.lte = 65535];
+}
+
+// ListVaultAllowlistResponse is the vault's whole allowlist, at most 50
+// destinations per destination chain, ordered by destination_chain_id, then
+// destination_address. It is not paginated. A change applied moments ago
+// can take a few seconds to show.
+message ListVaultAllowlistResponse {
+  // The destinations.
+  repeated VaultAllowlistEntry entries = 1;
+}
+
+// ListVaultAllowlistChangesRequest lists one vault's allowlist changes.
+message ListVaultAllowlistChangesRequest {
+  // Broker name. A broker API key may name only its own broker.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public sub-account ID of the vault: the default vault or an affiliate
+  // vault.
+  fixed64 vault_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // Maximum changes, default 20, max 100.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 100];
+  // Opaque exclusive keyset cursor, bound to the broker and vault. Reuse
+  // with the same broker and vault_account_id; limit may change.
+  string page_token = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// ListVaultAllowlistChangesResponse lists changes newest first.
+message ListVaultAllowlistChangesResponse {
+  // The changes.
+  repeated VaultAllowlistChange changes = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// RequestVaultAllowlistChangeRequest asks to add one destination to, or
+// remove one from, a vault's payout address allowlist.
+message RequestVaultAllowlistChangeRequest {
+  // Broker name.
+  string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
+  // Public sub-account ID of the vault: the default vault or an affiliate
+  // vault.
+  fixed64 vault_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+  // What the change does.
+  AllowlistAction action = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Destination chain identifier, as in
+  // PayoutRuleDestination.destination_chain_id.
+  uint64 destination_chain_id = 4 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 65535
+  }];
+  // Destination address, in any form the destination network accepts; it
+  // is stored and returned in canonical form. For REMOVE_DESTINATION, name a
+  // VaultAllowlistEntry.
+  string destination_address = 5 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 385
+  }];
+  // ADD_DESTINATION only: the member's name for the destination, at most 64
+  // characters without leading or trailing whitespace. Optional; must be
+  // empty for REMOVE_DESTINATION.
+  string label = 6 [(buf.validate.field).string.max_len = 64];
+}
+
+// RequestVaultAllowlistChangeResponse returns the change, PENDING.
+message RequestVaultAllowlistChangeResponse {
+  // The change. Follow it with ListVaultAllowlistChanges.
+  VaultAllowlistChange change = 1;
+}
+
 // QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.
 // Every request names its broker. The caller is either the broker's API key,
 // sent as a bearer token (see QuickSwapService), or a member's interactive
@@ -1188,13 +1568,15 @@ message ListVaultPayoutRulesResponse {
 //
 // | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |
 // | --- | --- | --- | --- | --- | --- | --- |
-// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules) | yes | yes | yes | yes | yes | yes, except ListMembers |
+// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |
 // | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |
 // | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |
 // | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |
 // | Transfer ownership | yes | no | no | no | no | no |
+// | Manage the payout address allowlist (RequestVaultAllowlistChange) | yes | no | yes | no | no | no |
 //
-// A member managing keys or members must also send a fresh step-up proof in
+// A member managing keys, members or the payout address allowlist must also
+// send a fresh step-up proof in
 // the X-Auth-Step-Up header, obtained by completing an MFA challenge for
 // fresh step-up; each proof authorizes one change. Reads, vaults and a key
 // rotating itself need none. A denied action fails with PERMISSION_DENIED /
@@ -1619,6 +2001,94 @@ service QuickSwapBrokerService {
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault payout rules"
       description: "Read the payout rule of each of the broker's vaults and the assets it pays no destination for."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultLedger lists the movements of the broker's vaults' funds,
+  // newest first: each fee a QuickSwap credited, each payout that left a
+  // vault with how it ended, and each refund of a rejected payout to the
+  // vault's smart account. It carries no running balance; read the current
+  // balance with ListVaultBalances. Every broker role and the broker's API
+  // keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is
+  //   not the broker's.
+  // - INVALID_ARGUMENT: a page_token from another broker, other filters or
+  //   malformed.
+  // - UNAVAILABLE: the ledger cannot be read; retry the same request.
+  rpc ListVaultLedger(ListVaultLedgerRequest) returns (ListVaultLedgerResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault ledger"
+      description: "List the fee credits, payouts and payout refunds of the broker's vaults, newest first."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultAllowlist reads one vault's payout address allowlist: the
+  // destinations its payouts and withdrawals may pay, each with when it
+  // becomes payable. A destination is payable 24 hours after it is listed.
+  // Every broker role and the broker's API keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - UNAVAILABLE: the allowlist or the vault's payout rule cannot be read;
+  //   no partial list is returned.
+  rpc ListVaultAllowlist(ListVaultAllowlistRequest) returns (ListVaultAllowlistResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault payout addresses"
+      description: "Read a vault's payout address allowlist and when each address becomes payable."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // ListVaultAllowlistChanges lists one vault's payout address allowlist
+  // changes, newest first, pending ones included. Every broker role and the
+  // broker's API keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or vault, or
+  //   malformed.
+  rpc ListVaultAllowlistChanges(ListVaultAllowlistChangesRequest) returns (ListVaultAllowlistChangesResponse) {
+    option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List vault payout address changes"
+      description: "List a vault's payout address allowlist changes, newest first."
+      tags: "QuickSwap Broker"
+    };
+  }
+
+  // RequestVaultAllowlistChange asks to add one destination to, or remove
+  // one from, a vault's payout address allowlist. Only Owner and Finance
+  // members can, each change with its own fresh step-up proof. The change
+  // is returned PENDING; ListVaultAllowlistChanges shows how it ends. A
+  // vault has at most one pending change. An added
+  // destination becomes payable 24 hours after it is listed
+  // (VaultAllowlistEntry.payable_from).
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND;
+  //   ALLOWLIST_DESTINATION_NOT_LISTED for a removal.
+  // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
+  // - INVALID_ARGUMENT: ALLOWLIST_DESTINATION_INVALID, or a label on a
+  //   removal or with leading or trailing whitespace.
+  // - ALREADY_EXISTS: ALLOWLIST_DESTINATION_EXISTS.
+  // - FAILED_PRECONDITION: ALLOWLIST_FULL, ALLOWLIST_DESTINATION_IN_USE,
+  //   ALLOWLIST_CHANGE_PENDING or VAULT_ALLOWLIST_NOT_READY.
+  // - UNAVAILABLE: outcome unknown; read ListVaultAllowlistChanges before
+  //   requesting again.
+  rpc RequestVaultAllowlistChange(RequestVaultAllowlistChangeRequest) returns (RequestVaultAllowlistChangeResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Request vault payout address change"
+      description: "Add a payout address to a vault's allowlist, or remove one. Owner and Finance members only, with a fresh step-up proof."
       tags: "QuickSwap Broker"
     };
   }

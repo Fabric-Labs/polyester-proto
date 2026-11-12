@@ -1,0 +1,408 @@
+syntax = "proto3";
+
+package notifications.v1;
+
+import "alerts/v1/price_alerts.proto";
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/notifications/v1;notificationsv1";
+// Document-level OpenAPI metadata for the Notification API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Notification Service"
+      description: "The caller's notification center: what happened on the account, newest first, with read state."
+    }
+  ]
+};
+
+// ErrorCode identifies a Notification API error.
+enum ErrorCode {
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // No notification of the caller has this ID. Another account's
+  // notification is reported the same way.
+  NOTIFICATION_NOT_FOUND = 1;
+  // A required service is temporarily unavailable; retry the same request.
+  SERVICE_UNAVAILABLE = 2;
+}
+
+// ErrorDetail is attached to Notification API errors as an error detail of
+// type notifications.v1.ErrorDetail.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+}
+
+// NotificationType is what a notification reports. Each type belongs to one
+// category, and its detail is the matching field of Notification.detail.
+enum NotificationType {
+  // Not set. Never returned.
+  TYPE_UNSPECIFIED = 0;
+  // A price alert of the caller fired. Category ALERTS; detail price_alert.
+  PRICE_ALERT = 1;
+  // An action was approved from the Telegram account linked to the caller's
+  // account. Category SECURITY; detail telegram_approval. If the caller did
+  // not approve it, the linked Telegram account may be in someone else's
+  // hands: unlink it and review the account's sessions.
+  TELEGRAM_APPROVAL = 2;
+}
+
+// NotificationCategory groups notification types for filtering and counts.
+enum NotificationCategory {
+  // Not set. Rejected in requests and never returned.
+  CATEGORY_UNSPECIFIED = 0;
+  // Alerts the caller set, such as price alerts.
+  ALERTS = 1;
+  // Security of the account, such as actions approved from a linked
+  // Telegram account.
+  SECURITY = 2;
+}
+
+// ReadState filters notifications by whether the caller has read them.
+enum ReadState {
+  // Read and unread notifications.
+  READ_STATE_UNSPECIFIED = 0;
+  // Only notifications the caller has not read.
+  UNREAD = 1;
+  // Only notifications the caller has read.
+  READ = 2;
+}
+
+// Notification is one notification of the caller.
+message Notification {
+  // Public notification ID.
+  fixed64 notification_id = 1;
+  // What the notification reports.
+  NotificationType type = 2;
+  // Category of the type.
+  NotificationCategory category = 3;
+  // Short plain-text title, the same for every notification of a type, for
+  // example "Price alert".
+  string title = 4;
+  // Plain-text summary of what happened, at most 4096 bytes. It may span
+  // several lines.
+  string text = 5;
+  // When the notification was created.
+  google.protobuf.Timestamp created_at = 6;
+  // When the caller marked it read. Omitted while it is unread.
+  google.protobuf.Timestamp read_at = 7;
+  // What happened, as typed values. Exactly one is set, the one type names.
+  // A client that does not recognize the type, for example one added after
+  // it was built, shows the title and text only.
+  oneof detail {
+    // The price alert that fired.
+    PriceAlertNotice price_alert = 10;
+    // The action approved from the linked Telegram account.
+    TelegramApprovalNotice telegram_approval = 11;
+  }
+}
+
+// PriceAlertNotice is a price alert that fired, as it was when it fired.
+message PriceAlertNotice {
+  // Public alert ID, as the Price Alert API returns it.
+  fixed64 alert_id = 1;
+  // Numeric spot market identifier; resolve its symbol with GetSpotConfig.
+  uint32 symbol_id = 2;
+  // Price crossing the alert waited for.
+  alerts.v1.AlertDirection direction = 3;
+  // Price the alert watched.
+  alerts.v1.AlertPriceSource price_source = 4;
+  // Alert price in quote units scaled by 1e9.
+  int64 price_ticks = 5;
+  // Price that fired the alert, in quote units scaled by 1e9.
+  int64 triggered_price_ticks = 6;
+  // When the alert fired.
+  google.protobuf.Timestamp triggered_at = 7;
+}
+
+// TelegramApprovalAction is what an approval from Telegram approved.
+enum TelegramApprovalAction {
+  // Not set. Never returned.
+  ACTION_UNSPECIFIED = 0;
+  // Place one order.
+  PLACE_ORDER = 1;
+  // Place several limit orders together.
+  PLACE_ORDERS = 2;
+  // Change open limit orders.
+  MODIFY_ORDERS = 3;
+  // Cancel an order or a trigger.
+  CANCEL_ORDER = 4;
+  // Cancel every open order of a market or of the account.
+  CANCEL_ALL_ORDERS = 5;
+  // Change a trigger.
+  MODIFY_TRIGGER = 6;
+  // Pause a trigger.
+  PAUSE_TRIGGER = 7;
+  // Resume a paused trigger.
+  RESUME_TRIGGER = 8;
+  // Swap between assets within the trading account.
+  SWAP = 9;
+}
+
+// NoticeField is one labelled value of a notice, for example "Market" and
+// "BTC/USDT".
+message NoticeField {
+  // Short label, in plain words: 1 to 64 bytes.
+  string label = 1 [(buf.validate.field).string = {
+    min_bytes: 1
+    max_bytes: 64
+  }];
+  // The value, in plain words, with its unit or asset when it has one: 1 to
+  // 256 bytes.
+  string value = 2 [(buf.validate.field).string = {
+    min_bytes: 1
+    max_bytes: 256
+  }];
+}
+
+// TelegramApprovalNotice is an action approved from the Telegram account
+// linked to the caller's account, as the approval recorded it.
+message TelegramApprovalNotice {
+  // The approval's ID, as the Assistant API returns it.
+  fixed64 approval_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // What the approval approved.
+  TelegramApprovalAction action = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Public ID of the trading account (sub-account) the action acted on.
+  fixed64 account_id = 3 [(buf.validate.field).fixed64.gt = 0];
+  // What approving did, written from the exact action: 1 to 512 bytes.
+  string summary = 4 [(buf.validate.field).string = {
+    min_bytes: 1
+    max_bytes: 512
+  }];
+  // The action's key parameters in display order, such as the market, side,
+  // quantity and prices, from the same exact action: at most 16.
+  repeated NoticeField parameters = 5 [(buf.validate.field).repeated.max_items = 16];
+  // When the approval was given.
+  google.protobuf.Timestamp approved_at = 6 [(buf.validate.field).required = true];
+}
+
+// ListNotificationsRequest lists the caller's notifications.
+message ListNotificationsRequest {
+  // Return only notifications in these categories. Empty returns every
+  // category.
+  repeated NotificationCategory categories = 1 [(buf.validate.field).repeated = {
+    max_items: 8
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Return only read or only unread notifications. Unspecified returns both.
+  ReadState read_state = 2 [(buf.validate.field).enum.defined_only = true];
+  // Return only notifications created at or after this time. Omitted means
+  // no lower bound.
+  google.protobuf.Timestamp start_time = 3;
+  // Return only notifications created before this time. Omitted means no
+  // upper bound. Must be after start_time when both are set.
+  google.protobuf.Timestamp end_time = 4;
+  // Maximum number of notifications to return: default 25, max 100.
+  uint32 limit = 5 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller, categories, read_state,
+  // start_time and end_time; reuse it only with the same values.
+  string page_token = 6 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListNotificationsResponse returns one page of the caller's notifications.
+message ListNotificationsResponse {
+  // Notifications, newest first.
+  repeated Notification notifications = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetNotificationRequest reads one notification of the caller.
+message GetNotificationRequest {
+  // Public notification ID.
+  fixed64 notification_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetNotificationResponse returns the notification.
+message GetNotificationResponse {
+  // The notification.
+  Notification notification = 1;
+}
+
+// GetNotificationCountsRequest counts the caller's notifications.
+message GetNotificationCountsRequest {}
+
+// TypeCount counts the caller's notifications of one type.
+message TypeCount {
+  // The type.
+  NotificationType type = 1;
+  // Category of the type.
+  NotificationCategory category = 2;
+  // Number of notifications of the type.
+  uint64 total = 3;
+  // Number of those the caller has not read.
+  uint64 unread = 4;
+}
+
+// GetNotificationCountsResponse returns exact counts of the caller's
+// notifications, as of one moment.
+message GetNotificationCountsResponse {
+  // Number of notifications.
+  uint64 total = 1;
+  // Number of notifications the caller has not read.
+  uint64 unread = 2;
+  // Counts of every type, in ascending enum order, including types with no
+  // notification.
+  repeated TypeCount types = 3;
+}
+
+// MarkNotificationsReadRequest marks notifications of the caller read.
+message MarkNotificationsReadRequest {
+  // Public notification IDs: one to 100, distinct.
+  repeated fixed64 notification_ids = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 100
+    unique: true
+    items: {
+      fixed64: {gt: 0}
+    }
+  }];
+}
+
+// MarkNotificationsReadResponse reports what MarkNotificationsRead changed.
+message MarkNotificationsReadResponse {
+  // Number of notifications this call marked read. Notifications already
+  // read are not counted.
+  uint32 changed = 1;
+}
+
+// MarkNotificationsUnreadRequest marks notifications of the caller unread.
+message MarkNotificationsUnreadRequest {
+  // Public notification IDs: one to 100, distinct.
+  repeated fixed64 notification_ids = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 100
+    unique: true
+    items: {
+      fixed64: {gt: 0}
+    }
+  }];
+}
+
+// MarkNotificationsUnreadResponse reports what MarkNotificationsUnread
+// changed.
+message MarkNotificationsUnreadResponse {
+  // Number of notifications this call marked unread. Notifications already
+  // unread are not counted.
+  uint32 changed = 1;
+}
+
+// MarkAllNotificationsReadRequest marks every unread notification of the
+// caller read, within the given categories.
+message MarkAllNotificationsReadRequest {
+  // Mark only notifications in these categories. Empty marks every category.
+  repeated NotificationCategory categories = 1 [(buf.validate.field).repeated = {
+    max_items: 8
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+  // Mark only this notification and older ones: pass the newest notification
+  // the caller has shown, so one that arrives later stays unread. Zero marks
+  // every notification that exists when the call is processed.
+  fixed64 through_notification_id = 2;
+}
+
+// MarkAllNotificationsReadResponse reports what MarkAllNotificationsRead
+// changed.
+message MarkAllNotificationsReadResponse {
+  // Number of notifications this call marked read.
+  uint64 changed = 1;
+}
+
+// NotificationService serves the caller's notification center. Every method
+// takes a session token: notifications of the account are read and marked on
+// the website and in the app, never with an API key.
+service NotificationService {
+  option (polyester.api.docs_group) = "account";
+
+  // ListNotifications lists the caller's notifications, newest first.
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Notifications"
+      description: "List the caller's notifications, newest first."
+      tags: "Notification Service"
+    };
+  }
+
+  // GetNotification reads one notification of the caller.
+  rpc GetNotification(GetNotificationRequest) returns (GetNotificationResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Notification"
+      description: "Read one notification of the caller."
+      tags: "Notification Service"
+    };
+  }
+
+  // GetNotificationCounts counts the caller's notifications and unread
+  // notifications, by type.
+  rpc GetNotificationCounts(GetNotificationCountsRequest) returns (GetNotificationCountsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Notification Counts"
+      description: "Count the caller's notifications and unread notifications, by type."
+      tags: "Notification Service"
+    };
+  }
+
+  // MarkNotificationsRead marks notifications of the caller read. Either
+  // every ID is the caller's and each is marked, or nothing changes and the
+  // call fails with NOTIFICATION_NOT_FOUND.
+  rpc MarkNotificationsRead(MarkNotificationsReadRequest) returns (MarkNotificationsReadResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Mark Notifications Read"
+      description: "Mark notifications of the caller read."
+      tags: "Notification Service"
+    };
+  }
+
+  // MarkNotificationsUnread marks notifications of the caller unread. Either
+  // every ID is the caller's and each is marked, or nothing changes and the
+  // call fails with NOTIFICATION_NOT_FOUND.
+  rpc MarkNotificationsUnread(MarkNotificationsUnreadRequest) returns (MarkNotificationsUnreadResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Mark Notifications Unread"
+      description: "Mark notifications of the caller unread."
+      tags: "Notification Service"
+    };
+  }
+
+  // MarkAllNotificationsRead marks every unread notification of the caller
+  // read, within the given categories and up to the given notification.
+  rpc MarkAllNotificationsRead(MarkAllNotificationsReadRequest) returns (MarkAllNotificationsReadResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Mark All Notifications Read"
+      description: "Mark every unread notification of the caller read."
+      tags: "Notification Service"
+    };
+  }
+}

@@ -1497,6 +1497,50 @@ message ListAssistantKeysResponse {
   repeated AssistantKey keys = 1;
 }
 
+// TelegramApprovalLimits are the caller's optional limits on what they may
+// approve from Telegram, in US dollars of notional value. Each is off unless
+// set. They apply to placing orders, swapping, modifying orders or triggers
+// and resuming a trigger; cancelling, pausing a trigger and rejecting are
+// never limited. Stablecoin amounts count one US dollar per unit; other
+// amounts are valued at the current market price, and an approval that
+// cannot be valued is refused while a limit is set.
+message TelegramApprovalLimits {
+  // Largest notional value one approval from Telegram may have, in US
+  // dollars: a decimal string with at most 2 decimal places, for example
+  // "5000" or "250.50". "0" allows none. Unset: no limit.
+  optional string per_approval_usd = 1 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,14})(\\.[0-9]{1,2})?$"];
+  // Largest total notional value of approvals from Telegram in any rolling
+  // 24 hours, in US dollars, in the same format. Unset: no limit.
+  optional string daily_usd = 2 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]{0,14})(\\.[0-9]{1,2})?$"];
+}
+
+// GetTelegramApprovalLimitsRequest reads the caller's Telegram approval
+// limits.
+message GetTelegramApprovalLimitsRequest {}
+
+// GetTelegramApprovalLimitsResponse returns the caller's Telegram approval
+// limits and what counts against the daily one.
+message GetTelegramApprovalLimitsResponse {
+  // The limits; both unset when the caller set none.
+  TelegramApprovalLimits limits = 1;
+  // Notional value approved from Telegram in the last 24 hours while a limit
+  // was set, in US dollars: a decimal string with 2 decimal places.
+  string approved_last_24h_usd = 2;
+}
+
+// SetTelegramApprovalLimitsRequest replaces the caller's Telegram approval
+// limits.
+message SetTelegramApprovalLimitsRequest {
+  // The limits as they are from now on: an unset limit is turned off.
+  TelegramApprovalLimits limits = 1 [(buf.validate.field).required = true];
+}
+
+// SetTelegramApprovalLimitsResponse returns the limits as recorded.
+message SetTelegramApprovalLimitsResponse {
+  // The limits now.
+  TelegramApprovalLimits limits = 1;
+}
+
 // AssistantService is the Polyester trading assistant. A user sends a
 // message, which starts a run: the assistant's answer, with the tools,
 // skills and subagents it uses. The run continues on the server when no
@@ -1728,6 +1772,42 @@ service AssistantService {
     option (gnostic.openapi.v3.operation) = {
       summary: "List Assistant Keys"
       description: "List the keys the assistant holds for the caller's accounts."
+      tags: "Assistant Service"
+    };
+  }
+
+  // GetTelegramApprovalLimits reads the caller's optional limits on what
+  // they may approve from Telegram, and the notional value approved from
+  // Telegram in the last 24 hours.
+  //
+  // Errors:
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetTelegramApprovalLimits(GetTelegramApprovalLimitsRequest) returns (GetTelegramApprovalLimitsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Telegram Approval Limits"
+      description: "Read the caller's limits on what they may approve from Telegram."
+      tags: "Assistant Service"
+    };
+  }
+
+  // SetTelegramApprovalLimits replaces the caller's optional limits on what
+  // they may approve from Telegram. A limit left unset is turned off. Only a
+  // signed-in session sets them, never Telegram; they apply to the next
+  // approval from Telegram.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc SetTelegramApprovalLimits(SetTelegramApprovalLimitsRequest) returns (SetTelegramApprovalLimitsResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Set Telegram Approval Limits"
+      description: "Replace the caller's limits on what they may approve from Telegram."
       tags: "Assistant Service"
     };
   }

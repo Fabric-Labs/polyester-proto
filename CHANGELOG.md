@@ -3,6 +3,43 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-12 — develop-20261112T092748Z
+
+trading contract for release 0.93.0: OCO, iceberg and pegged orders, quote-proceeds sizing, receive windows, price bands and public trigger IDs.
+
+- [2026-11-04T0745Z-orders-v1](changes/2026-11-04T0745Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-07T1626Z-triggers-v1](changes/2026-11-07T1626Z-triggers-v1.md): changed `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-07T2159Z-marketdata-v1](changes/2026-11-07T2159Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`, `orders.v1.OrdersReadService`.
+- [2026-11-07T2213Z-tradews-v1](changes/2026-11-07T2213Z-tradews-v1.md): added `orders.v1.OrdersService`.
+- [2026-11-07T2310Z-orders-v1](changes/2026-11-07T2310Z-orders-v1.md): added `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `triggers.v1.TriggersService`.
+- [2026-11-07T2315Z-orders-v1](changes/2026-11-07T2315Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-08T0251Z-tradews-v1](changes/2026-11-08T0251Z-tradews-v1.md): changed `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-08T0634Z-orders-v1](changes/2026-11-08T0634Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-08T2026Z-orders-v1](changes/2026-11-08T2026Z-orders-v1.md): added `orders.v1.OrdersReadService`, `orders.v1.OrdersService`.
+- [2026-11-08T2040Z-orders-v1](changes/2026-11-08T2040Z-orders-v1.md): added `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-08T2220Z-triggers-v1](changes/2026-11-08T2220Z-triggers-v1.md): added `triggers.v1.TriggersService`.
+- [2026-11-08T2256Z-orders-v1](changes/2026-11-08T2256Z-orders-v1.md): changed `orders.v1.OrdersReadService`.
+- [2026-11-09T1435Z-ledger-read-v1](changes/2026-11-09T1435Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-09T1527Z-triggers-v1](changes/2026-11-09T1527Z-triggers-v1.md): added `triggers.v1.TriggersService`.
+- [2026-11-09T1555Z-swap-quickswap-v1](changes/2026-11-09T1555Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-10T0141Z-tradews-v1](changes/2026-11-10T0141Z-tradews-v1.md): changed `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-10T0504Z-orders-v1](changes/2026-11-10T0504Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`.
+- [2026-11-10T0734Z-orders-v1](changes/2026-11-10T0734Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-10T1048Z-ai-v1](changes/2026-11-10T1048Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-10T1344Z-notifications-v1](changes/2026-11-10T1344Z-notifications-v1.md): added `notifications.v1.NotificationService`.
+- [2026-11-10T1436Z-notifications-v1](changes/2026-11-10T1436Z-notifications-v1.md): changed `notifications.v1.NotificationService`.
+- [2026-11-11T0047Z-alerts-v1](changes/2026-11-11T0047Z-alerts-v1.md): changed `alerts.v1.PriceAlertService`, `auth.v1.PolicyService`. **Breaking.**
+- [2026-11-11T0139Z-orders-v1](changes/2026-11-11T0139Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-11T0210Z-orders-v1](changes/2026-11-11T0210Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-11T0412Z-swap-quickswap-v1](changes/2026-11-11T0412Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-11T0552Z-ledger-v1](changes/2026-11-11T0552Z-ledger-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-11T0619Z-swap-quickswap-v1](changes/2026-11-11T0619Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-11T2140Z-triggers-v1](changes/2026-11-11T2140Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-11T2224Z-orders-v1](changes/2026-11-11T2224Z-orders-v1.md): changed `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-11T2240Z-changelog-v1](changes/2026-11-11T2240Z-changelog-v1.md): added `changelog.v1.ChangelogService`.
+- [2026-11-11T2306Z-tradews-v1](changes/2026-11-11T2306Z-tradews-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-12T0542Z-swap-quickswap-v1](changes/2026-11-12T0542Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`, `auth.v1.SubaccountViewService`.
+
 ## 2026-11-11 — develop-20261111T051900Z
 
 API-key account permissions, single-use WebSocket login nonces, timed SBE order requests, a version endpoint, pausable auto-withdraw rules, QuickSwap broker payouts and referrals, and the assistant and price alerts on devnet.

@@ -70,10 +70,10 @@ enum FeeAsset {
   BASE = 2;
 }
 
-// SelfTradePreventionMode controls which orders expire when an order would
-// trade against another order of the same root account, including all its
+// SelfTradePreventionMode controls what happens when an order would trade
+// against another order of the same root account, including all its
 // subaccounts: two subaccounts of one root never trade with each other. The
-// incoming order's mode decides which orders expire.
+// incoming order's mode decides which orders expire or are reduced.
 enum SelfTradePreventionMode {
   // Self-trade prevention mode was not provided; create requests default to EXPIRE_MAKER.
   SELF_TRADE_PREVENTION_MODE_UNSPECIFIED = 0;
@@ -83,6 +83,20 @@ enum SelfTradePreventionMode {
   EXPIRE_TAKER = 2;
   // Cancel both maker and taker orders on self-trade.
   EXPIRE_BOTH = 3;
+  // Reduce both orders by the quantity that would have traded, with no
+  // trade. The order left with no quantity is canceled with
+  // CANCEL_REASON_STP_DECREMENT, both when their quantities are equal; a
+  // resting order that keeps a quantity keeps its place in the queue, and an
+  // incoming order that keeps one goes on matching and may rest. A reduced
+  // order's quantity is its original quantity less what self-trade
+  // prevention removed. A fill-or-kill order that would meet such an order
+  // before it is completely filled is rejected instead of reduced. Applies
+  // to attached protective exits and trigger children too. Prevention does
+  // not count as a fill of the parent position. A fully prevented attached
+  // exit re-arms its unexecuted exposure and waits while the surviving self
+  // maker heads the opposite book; it can fire again once that maker stops
+  // leading.
+  DECREMENT = 4;
 }
 
 // =============================================================================
@@ -117,6 +131,19 @@ message LimitGtc {
   // Reject the order instead of taking liquidity. Post-only is available only
   // on this resting limit-order variant.
   bool post_only = 2;
+  // Optional iceberg display quantity, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig. Zero places a plain order. When
+  // positive, the order book shows at most this quantity of the order; once
+  // that shown part is fully executed, the next part is shown at the same
+  // price, behind the orders already resting there. It must be below
+  // base_qty_scaled, a multiple of the pair's quantity step, at least the
+  // pair's minimum quantity, and at least base_qty_scaled divided by 100,
+  // rounded up, so the order splits into at most 100 parts: otherwise the
+  // order is refused with ICEBERG_DISPLAY_TOO_SMALL or
+  // ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk
+  // (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps
+  // it.
+  int64 display_qty_scaled = 3 [(buf.validate.field).int64.gte = 0];
 }
 
 // LimitGtd configures a limit order that may remain active only before an
@@ -146,6 +173,19 @@ message LimitGtd {
     },
     (google.api.field_behavior) = REQUIRED
   ];
+  // Optional iceberg display quantity, scaled by the pair's
+  // base_quantity_scale from GetSpotConfig. Zero places a plain order. When
+  // positive, the order book shows at most this quantity of the order; once
+  // that shown part is fully executed, the next part is shown at the same
+  // price, behind the orders already resting there. It must be below
+  // base_qty_scaled, a multiple of the pair's quantity step, at least the
+  // pair's minimum quantity, and at least base_qty_scaled divided by 100,
+  // rounded up, so the order splits into at most 100 parts: otherwise the
+  // order is refused with ICEBERG_DISPLAY_TOO_SMALL or
+  // ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk
+  // (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps
+  // it.
+  int64 display_qty_scaled = 4 [(buf.validate.field).int64.gte = 0];
 }
 
 // LimitIoc configures an immediate-or-cancel limit order.
@@ -160,6 +200,29 @@ message LimitFok {
   int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
 }
 
+// The displayed book side used for a static entry peg.
+enum PegReference {
+  // No reference selected.
+  PEG_REFERENCE_UNSPECIFIED = 0;
+  // Highest live bid at entry.
+  BEST_BID = 1;
+  // Lowest live ask at entry.
+  BEST_ASK = 2;
+}
+
+// Derives a limit price once at entry. Available only with base quantity and
+// limit execution, without attached risk. The limit execution's price_ticks is
+// required: a BUY maximum price or SELL minimum price. A derived price beyond
+// that bound is rejected. The order never follows later book changes.
+message StaticPeg {
+  // Required public book side. An empty selected side rejects the order.
+  PegReference reference = 1 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
+  // Signed number of configured price increments added to the reference.
+  // One increment is the pair’s configured price increment in quote units; this count
+  // is not Q9 and does not select occupied price levels. Defaults to zero.
+  int64 offset_ticks = 2;
+}
+
 // OrderIntent contains one order's complete, transport-independent placement
 // intent. Single and batch create use this same message.
 message OrderIntent {
@@ -167,6 +230,11 @@ message OrderIntent {
     id: "order_intent.max_quote_debit_eligibility"
     message: "max_quote_debit_scaled is valid only for BUY market IOC or BUY limit IOC orders"
     expression: "!has(this.max_quote_debit_scaled) || (this.side == 1 && (has(this.market_ioc) || has(this.limit_ioc)))"
+  };
+  option (buf.validate.message).cel = {
+    id: "order_intent.quote_proceeds_eligibility"
+    message: "quote_proceeds_scaled is valid only for SELL market IOC or SELL limit IOC orders"
+    expression: "!has(this.quote_proceeds_scaled) || (this.side == 2 && (has(this.market_ioc) || has(this.limit_ioc)))"
   };
   option (buf.validate.message).cel = {
     id: "order_intent.sell_fee_asset"
@@ -200,6 +268,17 @@ message OrderIntent {
     // its price limit stops it first, its remainder is canceled. It can carry
     // attached_risk: the legs protect the quantity it actually buys.
     int64 max_quote_debit_scaled = 4 [(buf.validate.field).int64.gt = 0];
+    // Quote proceeds target scaled by the pair's quote_quantity_scale from
+    // GetSpotConfig. Valid only for SELL market IOC and SELL limit IOC. The
+    // order sells whole quantity steps until its proceeds, the sum of each
+    // fill's price times quantity before fees, reach this amount, and never
+    // receives more. The fee is charged in quote on those proceeds. The order
+    // holds the base this amount sells at its limit price, or a market
+    // order's maximum slippage price, and is rejected INSUFFICIENT_FUNDS when
+    // that base is not available. Once what is left sells no further quantity
+    // step, it ends FILLED; if the book or its price limit stops it first,
+    // its remainder is canceled. It cannot carry attached_risk.
+    int64 quote_proceeds_scaled = 5 [(buf.validate.field).int64.gt = 0];
   }
   // Required execution behavior. The selected variant exposes only fields that
   // can be honored together.
@@ -233,6 +312,9 @@ message OrderIntent {
   SelfTradePreventionMode self_trade_prevention_mode = 22 [(buf.validate.field).enum.defined_only = true];
   // Optional attached risk controls that arm after the parent order fills.
   RiskPolicy attached_risk = 30;
+  // Optional static peg. The selected limit execution still requires its price
+  // bound. Quote sizing, market execution and attached risk are invalid.
+  StaticPeg peg = 31;
 }
 
 // CreateOrderRequest submits one independent order intent for admission.
@@ -275,6 +357,10 @@ message CreateOrderResponse {
   // quote_quantity_scale from GetSpotConfig. Present only when that sizing
   // method was submitted.
   optional int64 submitted_max_quote_debit_scaled = 6;
+  // Submitted quote proceeds target, scaled by the pair's
+  // quote_quantity_scale from GetSpotConfig. Present only when that sizing
+  // method was submitted.
+  optional int64 submitted_quote_proceeds_scaled = 7;
   // Trigger ID for attached take-profit.
   optional uint64 take_profit_trigger_id = 20;
   // Trigger ID for attached stop-loss.
@@ -429,7 +515,10 @@ enum ErrorCode {
   ERROR_CODE_POLICY_MAX_NOTIONAL = 21;
   // Trading has been globally halted for this sub-account.
   ERROR_CODE_POLICY_TRADING_HALTED = 22;
-  // Sub-account policy does not allow spot trading (action mask).
+  // The sub-account's policy does not allow spot trading: enable TRADE_SPOT
+  // (Spot Trading Write) on the sub-account's policy. A sub-account without a
+  // policy is read-only. When the API key's policy lacks it instead, the
+  // refusal is ERROR_CODE_API_KEY_SPOT_TRADE_DENY.
   ERROR_CODE_POLICY_SPOT_TRADE_DENY = 23;
   // API key is scoped to the master/root account and cannot trade on
   // sub-accounts.
@@ -439,7 +528,8 @@ enum ErrorCode {
   ERROR_CODE_API_KEY_SUB_SCOPE_ONLY = 25;
   // API key is scoped to a different sub-account than the one requested.
   ERROR_CODE_API_KEY_SUBACCOUNT_MISMATCH = 26;
-  // API key must have an attached policy before it can be used for trading.
+  // The API key has no policy, so it has no permissions: attach a policy to
+  // the API key that grants what it needs.
   ERROR_CODE_API_KEY_POLICY_REQUIRED = 27;
   // API key referenced in the request could not be resolved by the Orders
   // service.
@@ -447,6 +537,10 @@ enum ErrorCode {
   // API key policy does not allow trading this market, even though the
   // sub-account policy does.
   ERROR_CODE_API_KEY_MARKET_DENY = 29;
+  // The API key's policy does not allow spot trading: enable TRADE_SPOT
+  // (Spot Trading Write) on the API key's policy. When both the key's and the
+  // sub-account's policies lack it, the key is named first.
+  ERROR_CODE_API_KEY_SPOT_TRADE_DENY = 78;
   // Price must align with the pair tick size, including trigger and activation prices.
   ERROR_CODE_PRICE_TICK_SIZE = 30;
   // Quantity is below the pair minimum quantity (base units).
@@ -528,8 +622,10 @@ enum ErrorCode {
   // HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after
   // one of the outstanding requests completes.
   ERROR_CODE_OVERLOADED = 67;
-  // The all-in quote budget cannot resolve one valid step-aligned base quantity.
-  ERROR_CODE_MAX_QUOTE_DEBIT_TOO_SMALL = 68;
+  // The quote amount cannot resolve one valid step-aligned base quantity: an
+  // all-in quote budget at the order's highest price, or a quote proceeds
+  // target at its lowest price.
+  ERROR_CODE_QUOTE_SIZE_TOO_SMALL = 68;
   // The account exhausted its current order-admission quota.
   ERROR_CODE_RATE_LIMIT_EXCEEDED = 69;
   // Caller has a sub-account role that does not allow reading spot data.
@@ -559,9 +655,11 @@ enum ErrorCode {
   // above its planned quantity. Nothing changed.
   ERROR_CODE_CHILD_QTY_RAISE_NOT_ALLOWED = 81;
   // Attached take-profit, stop-loss or trailing legs can't be applied here:
-  // this market takes none, an attached trailing stop isn't offered yet, or
-  // the modify changes them together with the order's price, quantity, client
-  // order ID or a replace. Nothing changed.
+  // this market takes none, an attached trailing stop isn't offered yet, the
+  // modify changes them together with the order's price, quantity, client
+  // order ID or a replace, or the order was placed by a triggered take-profit,
+  // stop-loss or trailing-stop leg, which can't carry legs of its own. Nothing
+  // changed.
   ERROR_CODE_ATTACHED_RISK_NOT_SUPPORTED = 82;
   // The account has too many filled or ended orders whose settlement has not
   // completed yet. Nothing changed; the request is accepted again once settlement
@@ -868,8 +966,16 @@ enum ErrorCode {
   // activated is already reached by that price, so it would activate at once.
   // Nothing changed; the trigger keeps its previous settings. Returned by
   // ModifyTrigger, and by an order modify that moves an attached take-profit,
-  // stop-loss or trailing stop of an order with a fill. Choose a price the
-  // market has not reached.
+  // stop-loss or trailing stop of an order with a fill. Also returned when a
+  // market order is created or previewed with an attached take-profit or
+  // stop-loss on the last price that its own fill would trigger, at or past
+  // the best price the order takes (the best ask for a buy, the best bid for
+  // a sell); the order is not placed. A market order with an attached
+  // take-profit or stop-loss on the index price that the index has already
+  // reached is accepted, then rejected with this reason before it trades,
+  // and so is one whose last-price leg the market reaches before the order
+  // reaches the book; nothing is placed. Choose a price the market has not
+  // reached.
   ERROR_CODE_TRIGGER_WOULD_TRIGGER_IMMEDIATELY = 302;
   // The order was sent but not confirmed in time. Its outcome is unknown and
   // it may have been accepted; read the order by its client order ID, or read
@@ -879,8 +985,8 @@ enum ErrorCode {
   // and retries the rest without admitting any item twice.
   ERROR_CODE_ORDER_CREATE_OUTCOME_UNKNOWN = 303;
   // The trigger was sent but not confirmed in time. Its outcome is unknown and
-  // it may have been created; read the triggers for its client trigger ID
-  // before retrying.
+  // it may have been created; read the triggers for its client trigger ID,
+  // or an OCO's for its client list ID, before retrying.
   ERROR_CODE_TRIGGER_CREATE_OUTCOME_UNKNOWN = 304;
   // The request names a listed trading pair other than the trigger's own, so
   // it was refused. Nothing changed; name the trigger's own pair, or omit the
@@ -930,6 +1036,24 @@ enum ErrorCode {
   // of a signed request, or recv_window_ms of a WebSocket command. Send a new
   // request with a fresh timestamp.
   ERROR_CODE_REQUEST_DEADLINE_EXCEEDED = 308;
+  // A display quantity was set on an order that cannot be an iceberg order.
+  // Only good-till-cancelled and good-till-date limit orders without attached
+  // take-profit, stop-loss or trailing stop orders can be iceberg orders.
+  // Nothing changed.
+  ERROR_CODE_ICEBERG_NOT_ALLOWED = 309;
+  // The iceberg display quantity is below the pair's minimum order quantity,
+  // or splits the order's quantity into more than 100 parts: it must be at
+  // least the order's quantity divided by 100, rounded up. Nothing changed.
+  ERROR_CODE_ICEBERG_DISPLAY_TOO_SMALL = 310;
+  // The iceberg display quantity is not below the order's quantity, or is not
+  // a multiple of the pair's quantity step. Nothing changed.
+  ERROR_CODE_ICEBERG_DISPLAY_INVALID = 311;
+  // Resolved peg exceeds its buy cap or falls below its sell floor.
+  ERROR_CODE_PEG_LIMIT_VIOLATION = 312;
+  // Selected entry-peg book side has no live quote.
+  ERROR_CODE_PEG_REFERENCE_UNAVAILABLE = 313;
+  // Entry peg has an invalid reference or unsupported combination.
+  ERROR_CODE_INVALID_PEG = 314;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -1116,6 +1240,19 @@ message TrailingStopPolicy {
 // checked against the pair's minimums at the quantity the whole amount buys
 // at the order's limit price, or a market order's maximum slippage price:
 // the least it buys if it spends the amount.
+//
+// Each leg's exit must be able to meet the pair's minimum quantity, step size
+// and minimum notional for the parent's whole quantity, valued where it would
+// execute: a buy-back at its maximum price (a market exit's slippage bound
+// above its trigger price, a limit exit's limit price, a trailing stop's limit
+// price), a market sell exit at its slippage bound below its trigger price, a
+// limit sell exit at its limit price, and a trailing sell exit by its quantity
+// alone. An order, or a ModifyOrder, whose leg could never meet them is
+// rejected with that check's code (ERROR_CODE_MIN_QTY,
+// ERROR_CODE_QTY_STEP_SIZE or ERROR_CODE_MIN_NOTIONAL), as for the order
+// itself, and its ErrorDetail names the leg with a field violation on its
+// attached-risk field (take_profit, stop_loss or trailing_stop) whose rule is
+// that code. Nothing is placed or changed.
 //
 // The legs of one parent share that position, whether or not oco is set, and
 // only one exit works at a time. The first leg whose condition is met submits
@@ -1437,6 +1574,9 @@ message BatchCreateAccepted {
   // Submitted hard all-in quote debit limit, scaled by the pair's
   // quote_quantity_scale from GetSpotConfig. Present only when submitted.
   optional int64 submitted_max_quote_debit_scaled = 6;
+  // Submitted quote proceeds target, scaled by the pair's
+  // quote_quantity_scale from GetSpotConfig. Present only when submitted.
+  optional int64 submitted_quote_proceeds_scaled = 7;
 }
 
 // BatchCreateRejected contains the typed reason an item was not admitted.
