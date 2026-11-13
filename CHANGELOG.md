@@ -3,6 +3,28 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-13 — develop-20261113T013449Z
+
+release deployment groups, assistant controls and precise trading and funding histories.
+
+- [2026-11-11T0421Z-ai-v1](changes/2026-11-11T0421Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-11T2227Z-triggers-v1](changes/2026-11-11T2227Z-triggers-v1.md): changed `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-12T0043Z-ledger-v1](changes/2026-11-12T0043Z-ledger-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-12T0054Z-orders-v1](changes/2026-11-12T0054Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-12T0105Z-auth-v1](changes/2026-11-12T0105Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-12T0106Z-ai-v1](changes/2026-11-12T0106Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-12T0155Z-chain-lifecycle-v1](changes/2026-11-12T0155Z-chain-lifecycle-v1.md): changed `auth.v1.AddressBookService`, `auth.v1.ApiKeyService`, `auth.v1.AuthService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.ResolveService`, `auth.v1.SocialVerificationService`, `auth.v1.SubaccountRoleService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `chain.analytics.v1.ChainAnalyticsService`, `chain.deposit.v1.DepositAddressService`, `chain.lifecycle.v1.LifecycleReadService`, `chain.withdraw.v1.WithdrawService`, `chain.zipper.v1.ZipperService`, `changelog.v1.ChangelogService`, `checkpoints.v1.CheckpointService`, `claims.v1.ClaimsService`, `fees.v1.FeeService`, `marketoverview.v1.MarketOverviewService`, `ratelimit.v1.RateLimitService`, `rewards.v1.RewardCampaignService`, `system.v1.SystemService`, `transfer.v1.InternalTransferService`, `triggers.v1.TriggersService`, `vip.v1.VIPService`. **Breaking.**
+- [2026-11-12T0205Z-ledger-read-v1](changes/2026-11-12T0205Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-12T0211Z-marketoverview-v1](changes/2026-11-12T0211Z-marketoverview-v1.md): changed `marketoverview.v1.MarketOverviewService`, `orderbook.v1.OrderbookService`. **Breaking.**
+- [2026-11-12T0310Z-ai-v1](changes/2026-11-12T0310Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-12T0428Z-orders-v1](changes/2026-11-12T0428Z-orders-v1.md): changed `orders.v1.OrdersReadService`.
+- [2026-11-12T0507Z-auth-v1](changes/2026-11-12T0507Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.ApiKeyService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.SubaccountService`, `auth.v1.AddressBookService`, `auth.v1.ResolveService`, `auth.v1.SocialVerificationService`, `claims.v1.ClaimsService`, `rewards.v1.RewardCampaignService`. **Breaking.**
+- [2026-11-12T0646Z-ai-v1](changes/2026-11-12T0646Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-12T0654Z-changelog-v1](changes/2026-11-12T0654Z-changelog-v1.md): added `changelog.v1.ChangelogService`.
+- [2026-11-12T0826Z-notifications-v1](changes/2026-11-12T0826Z-notifications-v1.md): changed `notifications.v1.NotificationService`.
+- [2026-11-12T1358Z-chain-lifecycle-v1](changes/2026-11-12T1358Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`.
+- [2026-11-12T1522Z-chain-lifecycle-v1](changes/2026-11-12T1522Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`, `chain.withdraw.v1.AutoWithdrawService`.
+
 ## 2026-11-12 — develop-20261112T092748Z
 
 trading contract for release 0.93.0: OCO, iceberg and pegged orders, quote-proceeds sizing, receive windows, price bands and public trigger IDs.

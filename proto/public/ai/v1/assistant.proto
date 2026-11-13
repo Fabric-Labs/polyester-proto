@@ -239,8 +239,9 @@ message TriggersTable {
 message BalancesTable {
   // Balances, one per asset, highest available trading amount first.
   repeated ledger.read.v1.AssetBalance balances = 1;
-  // Trading account (subaccount) the balances were read from: the run's account, as
-  // SendMessageRequest.subaccount_id named it.
+  // Account the balances were read from: the run's trading account, as
+  // SendMessageRequest.subaccount_id named it, or the caller's main account
+  // when the request named none.
   fixed64 account_id = 2;
 }
 
@@ -412,12 +413,22 @@ message RecalledMemory {
 // every answer, and they are not reported here. The event follows that call's
 // ToolFinished event with ok true; a failed search has a ToolFinished event
 // with ok false and no MemoriesRecalled event.
+//
+// In an existing conversation, the assistant also gets the memories the user
+// saved or changed in their other conversations since its previous answer in
+// this one, whatever the message is about. When there are any, the run reports
+// them before the answer as a memory_updates tool call (ToolStarted and
+// ToolFinished with ok true) and its MemoriesRecalled event, so a client can
+// show that memory was updated from another conversation. Otherwise the run
+// has no memory_updates call.
 message MemoriesRecalled {
   // Identifier of the search's tool call, as in its ToolStarted and
   // ToolFinished events.
   string tool_call_id = 1;
-  // The relevant memories found, at most 8, most relevant first; never a
-  // profile memory. Empty when none is relevant.
+  // For a recall_memories call: the relevant memories found, at most 8, most
+  // relevant first, empty when none is relevant. For a memory_updates call:
+  // the memories saved or changed in other conversations, at most 20, newest
+  // first, never empty. Never a profile memory.
   repeated RecalledMemory memories = 2;
 }
 
@@ -434,6 +445,62 @@ message DestinationsSuggested {
   // 1 to 3 destination ids, most relevant first, each declared in the run's
   // SendMessage destinations. A client that no longer knows an id skips it.
   repeated string destination_ids = 2;
+}
+
+// DisplaySetting is one of the client's display preferences the assistant may
+// change for the user: cosmetic settings the user can change back at any
+// time. Each value names the values the assistant may apply to it, exactly as
+// DisplaySettingAction.value carries them. Security, funds, API keys,
+// permissions and notification channels are never display settings.
+enum DisplaySetting {
+  // Not a setting; never sent.
+  SETTING_UNSPECIFIED = 0;
+  // Light or dark mode: "light", "dark", or "system" to follow the device.
+  APPEARANCE = 1;
+  // Interface language: "en" (English), "fr" (French) or "zh-CN"
+  // (Simplified Chinese).
+  LANGUAGE = 2;
+  // Fiat currency amounts are also shown in: the code of one of the fiat
+  // currencies GetCurrencyConversionConfig lists, for example "EUR".
+  CURRENCY = 3;
+  // Date format, as a pattern: "MMM dd, yyyy", "MM/dd/yyyy", "dd/MM/yyyy",
+  // "yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd", "dd-MM-yyyy", "dd.MM.yyyy" or
+  // "dd MMM yyyy".
+  DATE_FORMAT = 4;
+  // Time format: "12h" or "24h".
+  TIME_FORMAT = 5;
+  // Number separators: "US" (1,234,567.89), "EU" (1.234.567,89), "SPACE"
+  // (1 234 567,89), "CH" (1'234'567.89), "IN" (12,34,567.89) or "NONE"
+  // (1234567.89).
+  NUMBER_FORMAT = 6;
+  // First day of the week: "1" (Monday) to "6" (Saturday), or "0" (Sunday).
+  WEEK_START = 7;
+  // Sound effects: "on" or "off".
+  SOUNDS = 8;
+}
+
+// DisplaySettingAction asks the client to change one of its display settings
+// for the user, or, when the user did not say to what, to show that setting's
+// choices in the conversation so the user picks one. The setting is one the
+// run's SendMessage declared in display_settings. The event follows the
+// ToolFinished event, with ok true, of the set_display_preference call that
+// chose it.
+//
+// Apply an action once, when it arrives in a run the client sent and follows:
+// replaying a run's events later, for example to show an earlier
+// conversation, applies none of them again. Offer the user a way to undo the
+// change, back to the value the setting had before. A client that no longer
+// has the setting, or does not accept the value, changes nothing.
+message DisplaySettingAction {
+  // Identifier of the tool call, as in its ToolStarted and ToolFinished
+  // events.
+  string tool_call_id = 1;
+  // The setting, never SETTING_UNSPECIFIED.
+  DisplaySetting setting = 2;
+  // The value to apply, one of the setting's values as DisplaySetting lists
+  // them. Omitted when the user did not name one: show the setting's choices
+  // instead, and change nothing until the user picks.
+  optional string value = 3;
 }
 
 // SkillLoaded reports that the assistant loaded a skill: instructions for one
@@ -1247,6 +1314,8 @@ message RunEvent {
     MemoriesRecalled memories_recalled = 15;
     // Places in the client the assistant offers the user to go to.
     DestinationsSuggested destinations_suggested = 16;
+    // A display setting for the client to change, or to offer the choices of.
+    DisplaySettingAction display_setting_action = 17;
   }
 }
 
@@ -1306,6 +1375,29 @@ message Destination {
   string description = 3 [(buf.validate.field).string.max_len = 200];
 }
 
+// CurrentPage is the page of the client the user is on as they send a message.
+// It names the page by its template and title, never by its address: a client
+// must never send the URL the user sees, its query string or fragment, or any
+// id, symbol or other value taken from the path.
+message CurrentPage {
+  // The id of the client's destination for the page, when the page is one of
+  // its destinations, for example "page-settings": lowercase letters, digits
+  // and hyphens, 1 to 64 characters, as in Destination.id. Omit it for a page
+  // that is none of them.
+  optional string destination_id = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9-]{0,63}$"];
+  // The page's route template, each variable path segment named by its
+  // parameter in brackets, for example "/account/settings/[section]": it
+  // starts with "/" and has at most 200 characters, each a letter, a digit or
+  // one of "/", "-", "_", ".", "[" and "]".
+  string route = 2 [(buf.validate.field).string.pattern = "^/[A-Za-z0-9/_.\\[\\]-]{0,199}$"];
+  // The page's title as the client shows it, for example "Settings", 1 to 80
+  // characters. Never the user's own data, such as an account label.
+  string title = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 80
+  }];
+}
+
 // SendMessageRequest sends the caller's message and starts a run that answers
 // it.
 message SendMessageRequest {
@@ -1329,15 +1421,40 @@ message SendMessageRequest {
   string idempotency_key = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
   // Trading account (subaccount) the run reads and acts on. It must be one
   // the caller's account owns; any other value, also one that does not
-  // exist, is INVALID_ARGUMENT. Omit it to answer without account data: the
-  // run then has no account tools. It is part of the request the idempotency
-  // key covers.
+  // exist, is INVALID_ARGUMENT. Omit it for the main account: the run then
+  // reads the main account (its balances, funding included, every trading
+  // account with its equity, API keys, price alerts, fee rates and
+  // permissions) and places, changes or cancels no order, trigger or swap;
+  // asked to trade, it asks the user to select a trading account. It is part
+  // of the request the idempotency key covers.
   optional fixed64 subaccount_id = 4 [(buf.validate.field).fixed64.gt = 0];
   // The places in the client the run may suggest to the user, at most 100,
   // each id at most once; their order does not matter. Omit them for a client
   // that cannot take the user anywhere: the run then suggests nothing. They
   // are part of the request the idempotency key covers.
   repeated Destination destinations = 5 [(buf.validate.field).repeated.max_items = 100];
+  // The page the user is on as they send the message. The run is told it, so
+  // it can say which page the user is on and point within that page rather
+  // than suggest it again. Omit it for a client without pages: the run is then
+  // told nothing about where the user is. It is part of the request the
+  // idempotency key covers: a retry sends the page the first attempt sent.
+  CurrentPage page = 6;
+  // The display settings the client can change for the user when the run
+  // asks it to (DisplaySettingAction), each at most once; their order does
+  // not matter. Declare only those the client offers the user now. Omit them
+  // for a client without display settings: the run then changes none and
+  // points the user to their settings instead. They are part of the request
+  // the idempotency key covers.
+  repeated DisplaySetting display_settings = 7 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 8
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
 }
 
 // SendMessageResponse identifies the started run.

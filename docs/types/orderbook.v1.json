@@ -152,7 +152,7 @@
     {
       "name": "orderbook.v1.OrderBookDelta",
       "kind": "message",
-      "doc": "OrderBookDelta is an incremental update to the orderbook state.\n Uses scaled integers (binary protobuf) for realtime streaming performance.\n\n Semantics:\n - For each side, each [price_ticks] entry is a SET at that price:\n   - qty_scaled \u003e 0 =\u003e set/replace that level quantity\n   - qty_scaled == 0 =\u003e delete that level\n - reset=true indicates the book should be cleared before applying any levels.\n\n Clients are expected to initialize from GetOrderBook (snapshot) and then\n apply deltas in order. If a gap is detected, clients should refetch a\n snapshot.",
+      "doc": "OrderBookDelta is an incremental update to the orderbook state of one depth\n tier: the difference between two published views of the tier's top levels\n per side. Uses scaled integers (binary protobuf) for realtime streaming\n performance.\n\n Semantics:\n - For each side, each [price_ticks] entry is a SET at that price:\n   - qty_scaled \u003e 0 =\u003e set/replace that level quantity\n   - qty_scaled == 0 =\u003e remove that level from the tier's view\n - reset=true indicates the book should be cleared before applying any levels.\n   A reset carrying the full view is sent periodically, currently about every\n   30 seconds, and after a sequence gap.\n\n To start, subscribe, then fetch GetOrderBook with the tier's depth. Drop\n deltas whose book_seq_end is at most the snapshot's book_seq, and apply the\n first delta only when its book_seq_start equals that book_seq; then apply\n each delta only when its book_seq_start equals the previous book_seq_end.\n Otherwise, or after a gap, wait for the next reset.",
       "message": {
         "fields": [
           {
@@ -168,7 +168,7 @@
             "name": "book_seq_start",
             "jsonName": "bookSeqStart",
             "number": 2,
-            "doc": "Monotonic book sequence range covered by this update.\n When reset=true, book_seq_start may be 0.",
+            "doc": "Book sequence of the view this update applies to: the previous update's\n book_seq_end. Apply it only to a book at exactly this sequence. 0 when\n reset=true.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -177,7 +177,7 @@
             "name": "book_seq_end",
             "jsonName": "bookSeqEnd",
             "number": 3,
-            "doc": "Monotonic book sequence at the end of this update's range. Consumers can\n retain it as the last applied sequence and ignore updates that do not advance it.",
+            "doc": "Book sequence of the view after this update. It can advance without any\n change to the book. Consumers can retain it as the last applied sequence\n and ignore updates that do not advance it.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"

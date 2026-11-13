@@ -74,6 +74,31 @@ enum Surface {
   ASSISTANT = 11;
 }
 
+// Environment is a Polyester network with its own changelog.
+enum Environment {
+  // Not set. Never returned.
+  ENVIRONMENT_UNSPECIFIED = 0;
+  // Development network.
+  DEVNET = 1;
+  // Test network.
+  TESTNET = 2;
+  // Main network.
+  MAINNET = 3;
+}
+
+// ChangeAvailability is how one change of a release differs from its release
+// in one environment.
+enum ChangeAvailability {
+  // Not set. Never returned.
+  AVAILABILITY_UNSPECIFIED = 0;
+  // Available in the environment while its release is still pending there.
+  AHEAD = 1;
+  // Not yet available in the environment although its release is live there.
+  PENDING = 2;
+  // Not available in the environment for now, whatever its release's status.
+  UNAVAILABLE = 3;
+}
+
 // SortDirection orders changes by post publication time.
 enum SortDirection {
   // Default: descending.
@@ -82,6 +107,26 @@ enum SortDirection {
   SORT_ASC = 1;
   // Descending (newest first).
   SORT_DESC = 2;
+}
+
+// EnvironmentStatus says whether a release is live in one environment.
+message EnvironmentStatus {
+  // Environment.
+  Environment environment = 1;
+  // When the release went live in the environment. Omitted while it is
+  // pending there.
+  google.protobuf.Timestamp live_at = 2;
+}
+
+// ChangeException is the status of one change in one environment where it
+// differs from its release's status.
+message ChangeException {
+  // Environment.
+  Environment environment = 1;
+  // How the change differs from its release there.
+  ChangeAvailability availability = 2;
+  // When the change became available in the environment; set for AHEAD only.
+  google.protobuf.Timestamp live_at = 3;
 }
 
 // Change is one announced change. A republished post may reword or withdraw it.
@@ -105,6 +150,10 @@ message Change {
   repeated Audience audiences = 8;
   // Product areas affected. May be empty.
   repeated Surface surfaces = 9;
+  // Environments where this change differs from its release's status, in any
+  // environment, not only this one. Empty outside release posts and when the
+  // change follows its release everywhere.
+  repeated ChangeException environment_exceptions = 10;
 }
 
 // Section groups related changes inside a post.
@@ -150,6 +199,20 @@ message PostSummary {
   // Published revision, starting at 1. Each republication of the post, for
   // example to correct its copy or withdraw a change, increments it.
   uint32 revision = 13;
+  // Release the post announces, for example "0.92.9". Omitted for posts that
+  // do not announce one release. A release post has the same slug, for
+  // example "v0.92.9", and the same content in every environment, and is
+  // listed in every environment, including environments where it is still
+  // pending.
+  optional string release_version = 14;
+  // Status of the post's release in each environment: DEVNET, TESTNET and
+  // MAINNET, in that order. Empty for posts without release_version. The
+  // status changes when the release goes live, without a new revision.
+  repeated EnvironmentStatus environments = 15;
+  // Slug of the deployment group that brought the release to this
+  // environment. Omitted while the release is pending here and for posts
+  // without release_version.
+  optional string deployment_group_slug = 16;
 }
 
 // Post is one complete published post at its current revision.
@@ -252,6 +315,115 @@ message ListChangesResponse {
   string next_page_token = 2;
 }
 
+// DeploymentGroupPost is one published release post a deployment group
+// brought.
+message DeploymentGroupPost {
+  // Post slug, for example "v0.92.9".
+  string slug = 1;
+  // Release the post announces, for example "0.92.9".
+  string release_version = 2;
+  // Post title.
+  string title = 3;
+  // Time of first publication of the post.
+  google.protobuf.Timestamp published_at = 4;
+  // Published revision of the post, starting at 1.
+  uint32 revision = 5;
+  // When the post's current revision was published.
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// DeploymentGroupSummary describes one deployment group without its details.
+// A deployment group is one deployment to this environment that raised its
+// release version, and brought every release above the previous group's
+// version up to and including its own.
+message DeploymentGroupSummary {
+  // Stable shareable identifier: the environment and the group's own
+  // release, for example "testnet-v0.92.9". It never changes.
+  string slug = 1;
+  // Environment the group was deployed to.
+  Environment environment = 2;
+  // When the deployment ran.
+  google.protobuf.Timestamp occurred_at = 3;
+  // The group's own, highest release, for example "0.92.9".
+  string release_version = 4;
+  // Release tag of the group's own release, for example "v0.92.9". Omitted
+  // when unknown.
+  optional string release_tag = 5;
+  // Release of the previous deployment group. Omitted for the first group.
+  optional string previous_release_version = 6;
+  // Every release the group brought, ascending, for example ["0.92.8",
+  // "0.92.9"].
+  repeated string versions = 7;
+  // Published release posts of those releases, ascending by release. A
+  // release without a published post has none.
+  repeated DeploymentGroupPost posts = 8;
+}
+
+// DeploymentGroupAttention is one change of a deployment group that needs
+// attention.
+message DeploymentGroupAttention {
+  // Slug of the release post that announces the change.
+  string post_slug = 1;
+  // Release of that post.
+  string release_version = 2;
+  // The change, as in its post.
+  Change change = 3;
+}
+
+// DeploymentGroupHighlight is one highlight of a release post in a deployment
+// group.
+message DeploymentGroupHighlight {
+  // Slug of the release post.
+  string post_slug = 1;
+  // Release of that post.
+  string release_version = 2;
+  // Highlight text, inline Markdown.
+  string text = 3;
+}
+
+// DeploymentGroup is one complete deployment group.
+message DeploymentGroup {
+  // Group summary.
+  DeploymentGroupSummary summary = 1;
+  // Breaking changes and changes with action_required across the group's
+  // posts, in post order (ascending release), then section and change order.
+  repeated DeploymentGroupAttention attention = 2;
+  // Highlights of the group's posts, in post order.
+  repeated DeploymentGroupHighlight highlights = 3;
+}
+
+// ListDeploymentGroupsRequest pages through this environment's deployment
+// groups, newest first.
+message ListDeploymentGroupsRequest {
+  // Maximum groups to return. 0 means the default of 20; maximum 100.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, keyset-backed, exclusive cursor from a previous response.
+  // Bound to deployment time and slug.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListDeploymentGroupsResponse returns deployment group summaries, newest
+// first.
+message ListDeploymentGroupsResponse {
+  // Group summaries ordered by deployment time descending, then slug
+  // descending.
+  repeated DeploymentGroupSummary groups = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetDeploymentGroupRequest selects one deployment group.
+message GetDeploymentGroupRequest {
+  // Group slug, for example "testnet-v0.92.9".
+  string slug = 1 [(buf.validate.field).string = {min_len: 1, max_len: 200}];
+}
+
+// GetDeploymentGroupResponse returns one complete deployment group.
+message GetDeploymentGroupResponse {
+  // The group with its attention changes and highlights.
+  DeploymentGroup group = 1;
+}
+
 // ChangelogService serves the published changelog of this environment. It is
 // public and caller-independent, and supports cacheable ConnectRPC GET.
 service ChangelogService {
@@ -280,5 +452,21 @@ service ChangelogService {
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/changelog/changes"};
     option (gnostic.openapi.v3.operation) = {summary: "List Changelog Changes" tags: "Changelog Service" security: [{}]};
+  }
+  // List this environment's deployment groups, newest first: each deployment
+  // that brought new releases, with the release posts it brought.
+  rpc ListDeploymentGroups(ListDeploymentGroupsRequest) returns (ListDeploymentGroupsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/changelog/deployment-groups"};
+    option (gnostic.openapi.v3.operation) = {summary: "List Changelog Deployment Groups" tags: "Changelog Service" security: [{}]};
+  }
+  // Get one deployment group by slug, with the changes that need attention
+  // and the highlights of its release posts.
+  rpc GetDeploymentGroup(GetDeploymentGroupRequest) returns (GetDeploymentGroupResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/changelog/deployment-groups/{slug}"};
+    option (gnostic.openapi.v3.operation) = {summary: "Get Changelog Deployment Group" tags: "Changelog Service" security: [{}]};
   }
 }
