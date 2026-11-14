@@ -4,6 +4,7 @@ package ledger.read.v1;
 
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "ledger/v1/catalog.proto";
 import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
@@ -397,6 +398,78 @@ message ListTransfersResponse {
   string next_page_token = 3 [(buf.validate.field).string.max_len = 512];
 }
 
+// ExportStatementRequest selects the account, period and assets of an account
+// statement.
+message ExportStatementRequest {
+  // The period must be non-empty and at most 366 days long.
+  option (buf.validate.message).cel = {
+    id: "export_statement.period_valid"
+    message: "end_time must be after start_time and at most 366 days after it"
+    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= duration('8784h')"
+  };
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account. The statement covers that one account only.
+  optional fixed64 subaccount_id = 1;
+  // Start of the statement period (UTC), inclusive.
+  google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
+  // End of the statement period (UTC), exclusive. Movements recorded after
+  // the request are not included, so a period that has not ended yet covers
+  // the movements up to the time of the request.
+  google.protobuf.Timestamp end_time = 3 [(buf.validate.field).required = true];
+  // Optional public unified asset ID. When unset/0, the statement covers every
+  // asset.
+  uint32 asset_id = 4;
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to the authenticated account, sub-account scope, asset filter and
+  // period; reuse it only with the same request fields.
+  string page_token = 5 [(buf.validate.field).string.max_len = 512];
+}
+
+// ExportStatementResponse is one page of an account statement in CSV.
+message ExportStatementResponse {
+  // Statement rows as RFC 4180 CSV in UTF-8, with CRLF line endings. The first
+  // page starts with the header row and later pages carry rows only, so
+  // concatenating the pages in order yields the complete statement; a period
+  // without movements yields the header row alone. A page holds at most 2000
+  // ledger movements, and an entry is never split across pages.
+  //
+  // Rows are ordered oldest first. Each row is the effect of one entry on one
+  // account bucket in one asset. An entry is one ledger operation, such as a
+  // trade with its fees, a deposit, a withdrawal step or an internal transfer.
+  //
+  // Columns, in order:
+  // - `time`: entry time, RFC 3339 in UTC with microseconds, for example
+  //   `2026-11-12T19:52:07.734123Z`.
+  // - `entry_id`: stable entry identifier, an unsigned 128-bit integer as a
+  //   decimal string. It is the `transfer_id` of the entry's first transfer leg
+  //   on the account, as ListTransfers returns it.
+  // - `type`: `trade` for a trade's settlement and its fees; otherwise the
+  //   entry's transfer reason, such as `deposit`, `withdraw`,
+  //   `internal_transfer`, `funding_to_trading` or `system_adjustment`.
+  // - `account`: account bucket, `funding` or `trading`.
+  // - `asset`: asset symbol.
+  // - `amount`: signed balance change of the entry in whole units of the
+  //   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees
+  //   the account receives are included here.
+  // - `fee`: fees the account paid in the asset for the entry, in whole units
+  //   of the asset; `0` when none.
+  // - `balance`: account bucket balance in the asset after the entry, in whole
+  //   units of the asset. For consecutive rows of the same bucket and asset,
+  //   each balance equals the previous balance plus `amount` minus `fee`.
+  // - `link_id`: correlation ID shared by related transfer legs, the trade's
+  //   match ID for trades; empty when unavailable.
+  // - `flow_id`: public lifecycle flow ID when the entry belongs to a chain
+  //   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,
+  //   as ListTransfers returns it; empty otherwise.
+  //
+  // Amounts are exact decimal strings with up to 18 fractional digits and no
+  // trailing zeros.
+  string csv = 1;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
 // LedgerReadService exposes read-only ledger endpoints (balances, history, transfers).
 service LedgerReadService {
   option (polyester.api.docs_group) = "account";
@@ -439,6 +512,14 @@ service LedgerReadService {
   // Retrieve the latest balances for an account.
   // Supports optional subaccount scoping and returns asset symbols with decimal amounts on REST.
   rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+
+  // Export an account statement for a period as CSV, one page at a time.
+  // Covers one account, optionally one asset, for a period of at most 366
+  // days. API keys need the READ_STATEMENTS policy action.
+  rpc ExportStatement(ExportStatementRequest) returns (ExportStatementResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
   }

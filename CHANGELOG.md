@@ -3,6 +3,23 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-14 — develop-20261114T094652Z
+
+account statement exports, maintenance and incident status, asset information and deposit and withdrawal route status.
+
+- [2026-11-11T2248Z-triggers-v1](changes/2026-11-11T2248Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-12T2020Z-ledger-read-v1](changes/2026-11-12T2020Z-ledger-read-v1.md): added `ledger.read.v1.LedgerReadService`, `auth.v1.PolicyService`, `auth.v1.SubaccountRoleService`.
+- [2026-11-12T2044Z-system-v1](changes/2026-11-12T2044Z-system-v1.md): added `system.v1.SystemService`.
+- [2026-11-12T2111Z-marketdata-v1](changes/2026-11-12T2111Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-12T2235Z-ledger-read-v1](changes/2026-11-12T2235Z-ledger-read-v1.md): added `ledger.read.v1.LedgerReadService`.
+- [2026-11-13T0003Z-swap-quickswap-v1](changes/2026-11-13T0003Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-13T0117Z-ledger-read-v1](changes/2026-11-13T0117Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-13T0209Z-auth-v1](changes/2026-11-13T0209Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-13T0214Z-auth-v1](changes/2026-11-13T0214Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-13T0228Z-swap-quickswap-v1](changes/2026-11-13T0228Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-13T0258Z-chain-zipper-v1](changes/2026-11-13T0258Z-chain-zipper-v1.md): added `chain.zipper.v1.ZipperService`.
+- [2026-11-13T0308Z-changelog-v1](changes/2026-11-13T0308Z-changelog-v1.md): changed `changelog.v1.ChangelogService`.
+
 ## 2026-11-13 — develop-20261113T013449Z
 
 release deployment groups, assistant controls and precise trading and funding histories.

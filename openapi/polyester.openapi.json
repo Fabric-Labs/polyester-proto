@@ -8026,7 +8026,8 @@
           "READ_SUBACCOUNT_INVITES",
           "READ_GUARD_SIGNER_STATUS",
           "READ_PRICE_ALERTS",
-          "MANAGE_PRICE_ALERTS"
+          "MANAGE_PRICE_ALERTS",
+          "READ_STATEMENTS"
         ],
         "title": "PolicyAction",
         "type": "string"
@@ -9059,7 +9060,8 @@
           "SUBACCOUNT_PERMISSION_MANAGE_GUARD_SIGNER",
           "SUBACCOUNT_PERMISSION_READ_AUTO_WITHDRAW",
           "SUBACCOUNT_PERMISSION_MANAGE_AUTO_WITHDRAW",
-          "SUBACCOUNT_PERMISSION_SWAP"
+          "SUBACCOUNT_PERMISSION_SWAP",
+          "SUBACCOUNT_PERMISSION_READ_STATEMENTS"
         ],
         "title": "SubaccountPermission",
         "type": "string"
@@ -13288,6 +13290,11 @@
             "title": "deposit_min_amount",
             "type": "string"
           },
+          "depositStatus": {
+            "$ref": "#/components/schemas/chain.zipper.v1.RouteStatus",
+            "description": "Whether this route currently accepts new deposits. Funds sent to a\n deposit address while deposits are suspended are delayed, not lost: they\n can be processed only after deposits resume.",
+            "title": "deposit_status"
+          },
           "isNativeAsset": {
             "description": "True when the asset is the native gas/token of the source chain.",
             "title": "is_native_asset",
@@ -13321,6 +13328,11 @@
             "description": "Minimum withdraw amount for this variant as a human-readable string in zToken units.",
             "title": "withdraw_min_amount",
             "type": "string"
+          },
+          "withdrawalStatus": {
+            "$ref": "#/components/schemas/chain.zipper.v1.RouteStatus",
+            "description": "Whether this route currently accepts new withdrawals.",
+            "title": "withdrawal_status"
           },
           "zippedAssetId": {
             "description": "Canonical zipped asset route id.",
@@ -13562,6 +13574,16 @@
           "NOT_SUPPORTED"
         ],
         "title": "MemoRequirement",
+        "type": "string"
+      },
+      "chain.zipper.v1.RouteStatus": {
+        "description": "RouteStatus says whether a chain route accepts new deposits or new\n withdrawals.",
+        "enum": [
+          "STATUS_UNSPECIFIED",
+          "NORMAL",
+          "SUSPENDED"
+        ],
+        "title": "RouteStatus",
         "type": "string"
       },
       "chain.zipper.v1.ZipperReasonCode": {
@@ -14216,7 +14238,7 @@
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque, keyset-backed, exclusive cursor from a previous response.\n Bound to publication time and slug.",
+            "description": "Opaque, keyset-backed, exclusive cursor from a previous response.\n Bound to publication time, release version and slug.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -14235,7 +14257,7 @@
             "type": "string"
           },
           "posts": {
-            "description": "Post summaries ordered by publication time descending, then slug descending.",
+            "description": "Post summaries ordered by publication time descending. Posts published\n at the same time list release posts first, by release version descending\n (0.92.10 before 0.92.9), then the other posts by slug descending.",
             "items": {
               "$ref": "#/components/schemas/changelog.v1.PostSummary"
             },
@@ -14393,7 +14415,7 @@
         "type": "object"
       },
       "changelog.v1.SortDirection": {
-        "description": "SortDirection orders changes by post publication time.",
+        "description": "SortDirection orders changes by post publication time. Posts published at\n the same time keep the ListPosts order, reversed for ascending.",
         "enum": [
           "SORT_DIRECTION_UNSPECIFIED",
           "SORT_ASC",
@@ -16491,6 +16513,68 @@
         "title": "EquitySeries",
         "type": "object"
       },
+      "ledger.read.v1.ExportStatementRequest": {
+        "additionalProperties": false,
+        "description": "ExportStatementRequest selects the account, period and assets of an account\n statement.\nend_time must be after start_time and at most 366 days after it",
+        "properties": {
+          "assetId": {
+            "description": "Optional public unified asset ID. When unset/0, the statement covers every\n asset.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the statement period (UTC), exclusive. Movements recorded after\n the request are not included, so a period that has not ended yet covers\n the movements up to the time of the request.",
+            "title": "end_time"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, asset filter and\n period; reuse it only with the same request fields.",
+            "maxLength": 512,
+            "title": "page_token",
+            "type": "string"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the statement period (UTC), inclusive.",
+            "title": "start_time"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The statement covers that one account only.",
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "startTime",
+          "endTime"
+        ],
+        "title": "ExportStatementRequest",
+        "type": "object"
+      },
+      "ledger.read.v1.ExportStatementResponse": {
+        "additionalProperties": false,
+        "description": "ExportStatementResponse is one page of an account statement in CSV.",
+        "properties": {
+          "csv": {
+            "description": "Statement rows as RFC 4180 CSV in UTF-8, with CRLF line endings. The first\n page starts with the header row and later pages carry rows only, so\n concatenating the pages in order yields the complete statement; a period\n without movements yields the header row alone. A page holds at most 2000\n ledger movements, and an entry is never split across pages.\n\n Rows are ordered oldest first. Each row is the effect of one entry on one\n account bucket in one asset. An entry is one ledger operation, such as a\n trade with its fees, a deposit, a withdrawal step or an internal transfer.\n\n Columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: stable entry identifier, an unsigned 128-bit integer as a\n   decimal string. It is the `transfer_id` of the entry's first transfer leg\n   on the account, as ListTransfers returns it.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   as ListTransfers returns it; empty otherwise.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.",
+            "title": "csv",
+            "type": "string"
+          },
+          "nextPageToken": {
+            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "maxLength": 512,
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ExportStatementResponse",
+        "type": "object"
+      },
       "ledger.read.v1.GetBalanceHistoryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -17198,6 +17282,108 @@
           }
         },
         "title": "AssetConfig",
+        "type": "object"
+      },
+      "marketdata.v1.AssetEditorialInfo": {
+        "additionalProperties": false,
+        "description": "AssetEditorialInfo contains team-maintained plain text and official links.\n Empty strings and collections mean unknown and may be hidden by clients.",
+        "properties": {
+          "description": {
+            "description": "Plain text description, at most 10000 characters. Render as text.",
+            "title": "description",
+            "type": "string"
+          },
+          "discordUrl": {
+            "description": "Official HTTPS Discord URL, at most 2048 bytes.",
+            "title": "discord_url",
+            "type": "string"
+          },
+          "explorerUrls": {
+            "description": "Up to 10 HTTPS block explorer URLs, each at most 2048 bytes; editorial order.",
+            "items": {
+              "type": "string"
+            },
+            "title": "explorer_urls",
+            "type": "array"
+          },
+          "githubUrl": {
+            "description": "Official HTTPS GitHub URL, at most 2048 bytes.",
+            "title": "github_url",
+            "type": "string"
+          },
+          "issueDate": {
+            "description": "Launch calendar date as YYYY-MM-DD, or empty when unknown.",
+            "title": "issue_date",
+            "type": "string"
+          },
+          "issuePrice": {
+            "$ref": "#/components/schemas/marketdata.v1.AssetIssuePrice",
+            "description": "Launch price; absent when unknown.",
+            "title": "issue_price"
+          },
+          "telegramUrl": {
+            "description": "Official HTTPS Telegram URL, at most 2048 bytes.",
+            "title": "telegram_url",
+            "type": "string"
+          },
+          "websiteUrl": {
+            "description": "Official HTTPS website, at most 2048 bytes.",
+            "title": "website_url",
+            "type": "string"
+          },
+          "whitepaperUrl": {
+            "description": "HTTPS whitepaper URL, at most 2048 bytes.",
+            "title": "whitepaper_url",
+            "type": "string"
+          },
+          "xUrl": {
+            "description": "Official HTTPS X profile URL, at most 2048 bytes.",
+            "title": "x_url",
+            "type": "string"
+          }
+        },
+        "title": "AssetEditorialInfo",
+        "type": "object"
+      },
+      "marketdata.v1.AssetInfo": {
+        "additionalProperties": false,
+        "description": "AssetInfo is independently loaded asset information.",
+        "properties": {
+          "assetId": {
+            "description": "Numeric asset ID, matching AssetConfig.ledger_id.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "editorial": {
+            "$ref": "#/components/schemas/marketdata.v1.AssetEditorialInfo",
+            "description": "Team-maintained asset information.",
+            "title": "editorial"
+          },
+          "editorialUpdatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time of the last effective editorial change, in UTC.",
+            "title": "editorial_updated_at"
+          }
+        },
+        "title": "AssetInfo",
+        "type": "object"
+      },
+      "marketdata.v1.AssetIssuePrice": {
+        "additionalProperties": false,
+        "description": "AssetIssuePrice is a known launch price in US dollars, including zero.",
+        "properties": {
+          "amount": {
+            "description": "Nonnegative decimal string, at most 64 characters; no exponent or sign.",
+            "title": "amount",
+            "type": "string"
+          },
+          "currency": {
+            "description": "Always USD.",
+            "title": "currency",
+            "type": "string"
+          }
+        },
+        "title": "AssetIssuePrice",
         "type": "object"
       },
       "marketdata.v1.Candle": {
@@ -18068,6 +18254,42 @@
           }
         },
         "title": "HeatmapTimeRange",
+        "type": "object"
+      },
+      "marketdata.v1.ListAssetInfoRequest": {
+        "additionalProperties": false,
+        "description": "ListAssetInfoRequest selects a finite asset information snapshot.",
+        "properties": {
+          "assetIds": {
+            "description": "Optional numeric asset IDs, matching AssetConfig.ledger_id; empty means all.\n At most 1000 IDs. Duplicate and unknown IDs are ignored.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 1000,
+              "maximum": 2147483647,
+              "type": "integer"
+            },
+            "maxItems": 1000,
+            "title": "asset_ids",
+            "type": "array"
+          }
+        },
+        "title": "ListAssetInfoRequest",
+        "type": "object"
+      },
+      "marketdata.v1.ListAssetInfoResponse": {
+        "additionalProperties": false,
+        "description": "ListAssetInfoResponse contains assets with saved editorial information.\n Assets never edited are omitted. Cleared information retains an empty entry.",
+        "properties": {
+          "assetInfo": {
+            "description": "Complete finite result, ordered by ascending asset_id. No pagination.",
+            "items": {
+              "$ref": "#/components/schemas/marketdata.v1.AssetInfo"
+            },
+            "title": "asset_info",
+            "type": "array"
+          }
+        },
+        "title": "ListAssetInfoResponse",
         "type": "object"
       },
       "marketdata.v1.MarketTrade": {
@@ -26785,7 +27007,7 @@
             "title": "execution"
           },
           "feeScheduleVersion": {
-            "description": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service fees, whatever later\n versions change.",
+            "description": "Fee schedule version fixed at creation. Every execution or bridge payout\n of this QuickSwap is charged that version's service fees, capped by the\n broker's fee ceiling in force at creation if one applies, whatever later\n versions or ceiling changes make.",
             "format": "int64",
             "title": "fee_schedule_version",
             "type": [
@@ -27518,7 +27740,7 @@
       },
       "swap.quickswap.v1.ReferralRates": {
         "additionalProperties": false,
-        "description": "ReferralRates are the referral rates of one route category, in whole basis\n points of the swapped amount. Both come out of the broker fee; the\n Polyester service fee is never reduced.",
+        "description": "ReferralRates are the referral rates of one route category, in whole basis\n points of the swapped amount. Both come out of the broker fee; a referral\n never reduces the Polyester service fee.",
         "properties": {
           "commissionBps": {
             "description": "Paid to the partner.",
@@ -29328,6 +29550,23 @@
         "title": "SwapTerms",
         "type": "object"
       },
+      "system.v1.AffectedService": {
+        "description": "AffectedService is a part of the platform a status event affects.",
+        "enum": [
+          "SERVICE_UNSPECIFIED",
+          "TRADING",
+          "MARKET_DATA",
+          "DEPOSITS",
+          "WITHDRAWALS",
+          "TRANSFERS",
+          "ACCOUNTS",
+          "API",
+          "QUICKSWAP",
+          "APP"
+        ],
+        "title": "AffectedService",
+        "type": "string"
+      },
       "system.v1.GetVersionRequest": {
         "additionalProperties": false,
         "description": "GetVersionRequest takes no parameters.",
@@ -29363,6 +29602,223 @@
           }
         },
         "title": "GetVersionResponse",
+        "type": "object"
+      },
+      "system.v1.ListStatusEventsRequest": {
+        "additionalProperties": false,
+        "description": "ListStatusEventsRequest selects status events. Filters on different fields\n combine with AND; values within one field combine with OR.",
+        "properties": {
+          "kinds": {
+            "description": "Kinds to include. Empty means all.",
+            "items": {
+              "$ref": "#/components/schemas/system.v1.StatusEventKind"
+            },
+            "maxItems": 2,
+            "title": "kinds",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "limit": {
+            "description": "Maximum events to return. 0 means the default of 50; maximum 200.",
+            "maximum": 200,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque, keyset-backed, exclusive cursor from a previous response. Bound\n to states and kinds, and to the start time and id of the last event\n returned. Reuse it only with the same states and kinds. States follow\n the clock, so an event that changes state between two pages can be\n missing from both or appear on both; match events by id.",
+            "maxLength": 512,
+            "title": "page_token",
+            "type": "string"
+          },
+          "states": {
+            "description": "States to include. Empty means SCHEDULED and IN_PROGRESS: current and\n upcoming events.",
+            "items": {
+              "$ref": "#/components/schemas/system.v1.StatusEventState"
+            },
+            "maxItems": 4,
+            "title": "states",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "title": "ListStatusEventsRequest",
+        "type": "object"
+      },
+      "system.v1.ListStatusEventsResponse": {
+        "additionalProperties": false,
+        "description": "ListStatusEventsResponse returns matching status events.",
+        "properties": {
+          "events": {
+            "description": "Matching events ordered by start_time descending, then id descending:\n the latest start first.",
+            "items": {
+              "$ref": "#/components/schemas/system.v1.StatusEvent"
+            },
+            "title": "events",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Cursor for the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListStatusEventsResponse",
+        "type": "object"
+      },
+      "system.v1.StatusEvent": {
+        "additionalProperties": false,
+        "description": "StatusEvent is one scheduled maintenance or incident.",
+        "properties": {
+          "assets": {
+            "description": "Codes of the affected assets, such as \"SOL\", in ascending order. Empty\n when the event is not limited to particular assets.",
+            "items": {
+              "type": "string"
+            },
+            "title": "assets",
+            "type": "array"
+          },
+          "cancelledAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the event was cancelled. Set only when state is CANCELLED.",
+            "title": "cancelled_at"
+          },
+          "detailsUrl": {
+            "description": "HTTPS link to a long-form announcement about the event, at most 2048\n characters. Omitted when the event has none.",
+            "nullable": true,
+            "title": "details_url",
+            "type": "string"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the window, after start_time: when the maintenance is expected to\n end, or when the incident ended or is expected to end. Always set for\n MAINTENANCE. Omitted for an INCIDENT with no expected end yet.",
+            "title": "end_time"
+          },
+          "id": {
+            "description": "Stable opaque 64-bit identifier. It never changes when the event is\n updated.",
+            "format": "int64",
+            "title": "id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "impact": {
+            "$ref": "#/components/schemas/system.v1.StatusEventImpact",
+            "description": "Severity of an INCIDENT. IMPACT_UNSPECIFIED for MAINTENANCE and for an\n incident not yet assessed.",
+            "title": "impact"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/system.v1.StatusEventKind",
+            "description": "Maintenance or incident.",
+            "title": "kind"
+          },
+          "markets": {
+            "description": "Symbols of the affected markets, such as \"BTC-USDT\", in ascending order.\n Empty when the event is not limited to particular markets.",
+            "items": {
+              "type": "string"
+            },
+            "title": "markets",
+            "type": "array"
+          },
+          "message": {
+            "description": "Plain-text summary for users, at most 4000 characters. It can be revised;\n progress notes are in updates.",
+            "title": "message",
+            "type": "string"
+          },
+          "services": {
+            "description": "Affected parts of the platform. Never empty.",
+            "items": {
+              "$ref": "#/components/schemas/system.v1.AffectedService"
+            },
+            "title": "services",
+            "type": "array"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the window: when the maintenance begins, or when the incident\n began. It no longer changes once the window has started.",
+            "title": "start_time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/system.v1.StatusEventState",
+            "description": "State at the time of the response.",
+            "title": "state"
+          },
+          "title": {
+            "description": "Short title, at most 200 characters.",
+            "title": "title",
+            "type": "string"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time of the latest change to the event, a new progress note included. Its\n state moving with the clock is not a change.",
+            "title": "updated_at"
+          },
+          "updates": {
+            "description": "Progress notes, oldest first. At most 50.",
+            "items": {
+              "$ref": "#/components/schemas/system.v1.StatusEventUpdate"
+            },
+            "title": "updates",
+            "type": "array"
+          }
+        },
+        "title": "StatusEvent",
+        "type": "object"
+      },
+      "system.v1.StatusEventImpact": {
+        "description": "StatusEventImpact is how severely an incident affects users.",
+        "enum": [
+          "IMPACT_UNSPECIFIED",
+          "DEGRADED",
+          "PARTIAL_OUTAGE",
+          "MAJOR_OUTAGE"
+        ],
+        "title": "StatusEventImpact",
+        "type": "string"
+      },
+      "system.v1.StatusEventKind": {
+        "description": "StatusEventKind classifies a status event.",
+        "enum": [
+          "KIND_UNSPECIFIED",
+          "MAINTENANCE",
+          "INCIDENT"
+        ],
+        "title": "StatusEventKind",
+        "type": "string"
+      },
+      "system.v1.StatusEventState": {
+        "description": "StatusEventState is where a status event stands at the time of the\n response. It follows from the event's window: SCHEDULED before start_time,\n IN_PROGRESS from start_time until end_time, and COMPLETED from end_time on.\n A cancelled event is CANCELLED whatever its window.",
+        "enum": [
+          "STATE_UNSPECIFIED",
+          "SCHEDULED",
+          "IN_PROGRESS",
+          "COMPLETED",
+          "CANCELLED"
+        ],
+        "title": "StatusEventState",
+        "type": "string"
+      },
+      "system.v1.StatusEventUpdate": {
+        "additionalProperties": false,
+        "description": "StatusEventUpdate is one progress note posted on a status event. Notes are\n never edited or removed.",
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the note was posted.",
+            "title": "created_at"
+          },
+          "id": {
+            "description": "Position of the note on its event: 1 for the first, then increasing by 1.\n Unique within the event and never reused.",
+            "title": "id",
+            "type": "integer"
+          },
+          "message": {
+            "description": "Plain-text note for users, at most 4000 characters.",
+            "title": "message",
+            "type": "string"
+          }
+        },
+        "title": "StatusEventUpdate",
         "type": "object"
       },
       "transfer.v1.CreateInternalTransferRequest": {
@@ -42560,6 +43016,75 @@
         ]
       }
     },
+    "/ledger.read.v1.LedgerReadService/ExportStatement": {
+      "post": {
+        "description": "Export an account statement for a period as CSV, one page at a time.\n Covers one account, optionally one asset, for a period of at most 366\n days. API keys need the READ_STATEMENTS policy action.",
+        "operationId": "LedgerReadService_ExportStatement",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.ExportStatementRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.ExportStatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ExportStatementResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ExportStatementResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Export an account statement for a period as CSV, one page at a time.  Covers one account, optionally one asset, for a period of at most 366  days. API keys need the READ_STATEMENTS policy action.",
+        "tags": [
+          "LedgerReadService"
+        ]
+      }
+    },
     "/ledger.read.v1.LedgerReadService/GetBalanceHistory": {
       "post": {
         "description": "Retrieve balance history buckets for an account.\n Supports optional subaccount, range, asset, and account-code filters.",
@@ -43245,6 +43770,172 @@
           }
         },
         "summary": "Retrieve recent public trades for a spot market.  Results are ordered newest-first and support optional aggressor side,  inclusive time-range, and opaque keyset pagination filters. With  after_trade_id, it walks the symbol's trades by trade identifier,  oldest first and gap-free, to backfill trades missed on a live stream.",
+        "tags": [
+          "MarketDataService"
+        ]
+      }
+    },
+    "/marketdata.v1.MarketDataService/ListAssetInfo": {
+      "get": {
+        "description": "ListAssetInfo returns a cacheable, caller-independent asset information snapshot.\n Empty asset_ids returns all saved entries in ascending asset_id order.",
+        "operationId": "MarketDataService_ListAssetInfo.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          },
+          {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoRequest"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoRequest"
+                }
+              }
+            },
+            "in": "query",
+            "name": "message"
+          },
+          {
+            "in": "query",
+            "name": "encoding",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/encoding"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base64",
+            "schema": {
+              "$ref": "#/components/schemas/base64"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compression",
+            "schema": {
+              "$ref": "#/components/schemas/compression"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connect",
+            "schema": {
+              "$ref": "#/components/schemas/connect"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "ListAssetInfo returns a cacheable, caller-independent asset information snapshot.  Empty asset_ids returns all saved entries in ascending asset_id order.",
+        "tags": [
+          "MarketDataService"
+        ]
+      },
+      "post": {
+        "description": "ListAssetInfo returns a cacheable, caller-independent asset information snapshot.\n Empty asset_ids returns all saved entries in ascending asset_id order.",
+        "operationId": "MarketDataService_ListAssetInfo",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/marketdata.v1.ListAssetInfoResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "ListAssetInfo returns a cacheable, caller-independent asset information snapshot.  Empty asset_ids returns all saved entries in ascending asset_id order.",
         "tags": [
           "MarketDataService"
         ]
@@ -48802,6 +49493,180 @@
         ]
       }
     },
+    "/system.v1.SystemService/ListStatusEvents": {
+      "get": {
+        "description": "List scheduled maintenance and incidents, the latest start first. With no states, it lists current and upcoming events.",
+        "operationId": "SystemService_ListStatusEvents.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          },
+          {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsRequest"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsRequest"
+                }
+              }
+            },
+            "in": "query",
+            "name": "message"
+          },
+          {
+            "in": "query",
+            "name": "encoding",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/encoding"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base64",
+            "schema": {
+              "$ref": "#/components/schemas/base64"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compression",
+            "schema": {
+              "$ref": "#/components/schemas/compression"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connect",
+            "schema": {
+              "$ref": "#/components/schemas/connect"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "List Status Events",
+        "tags": [
+          "System Service",
+          "SystemService"
+        ]
+      },
+      "post": {
+        "description": "List scheduled maintenance and incidents, the latest start first. With no states, it lists current and upcoming events.",
+        "operationId": "SystemService_ListStatusEvents",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/system.v1.ListStatusEventsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/system.v1.ListStatusEventsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/system.v1.ListStatusEventsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "List Status Events",
+        "tags": [
+          "System Service",
+          "SystemService"
+        ]
+      }
+    },
     "/transfer.v1.InternalTransferService/CreateInternalTransfer": {
       "post": {
         "description": "Create or return one authenticated Trading to Trading internal transfer. Root-owner same-owner transfers and root-owner transfers to explicitly whitelisted destinations accept recent MFA; delegated and other interactive transfers require fresh step-up.",
@@ -50209,7 +51074,7 @@
       "name": "QuickSwap Broker"
     },
     {
-      "description": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n | Manage the payout address allowlist (RequestVaultAllowlistChange) | yes | no | yes | no | no | no |\n\n A member managing keys, members or the payout address allowlist must also\n send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
+      "description": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n | Manage the payout address allowlist (RequestVaultAllowlistChange) | yes | no | yes | no | no | no |\n\n A member managing keys, members or the payout address allowlist must also\n send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n An API key's calls count against the broker's read_rps for the key. A\n member's session calls count against the member's account, across every\n broker the member belongs to: changes (vaults, keys, members, invites,\n ownership and the payout address allowlist) against the account's change\n quota, and reads against the account's own read rate. These limits are\n checked before the call runs, so a call they refuse changes nothing: over a\n limit it fails with RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After\n header in seconds, and while a member's change quota cannot be checked, the\n change fails with UNAVAILABLE carrying a RateLimitDetail (REST: the message\n \"rate limit authority unavailable\"). Any other UNAVAILABLE on a change can\n leave its outcome unknown: read the state again before retrying it.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
       "name": "QuickSwapBrokerService"
     },
     {
@@ -50229,7 +51094,7 @@
       "name": "SwapService"
     },
     {
-      "description": "The build an environment serves.",
+      "description": "The build an environment serves, and its scheduled maintenance and incidents.",
       "name": "System Service"
     },
     {

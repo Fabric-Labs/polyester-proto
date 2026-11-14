@@ -5,6 +5,7 @@ package system.v1;
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/system/v1;systemv1";
@@ -13,7 +14,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "System Service"
-      description: "The build an environment serves."
+      description: "The build an environment serves, and its scheduled maintenance and incidents."
     }
   ]
 };
@@ -46,6 +47,172 @@ message GetVersionResponse {
   }];
 }
 
+// StatusEventKind classifies a status event.
+enum StatusEventKind {
+  // Not set. Never returned.
+  KIND_UNSPECIFIED = 0;
+  // Planned maintenance, announced ahead of its window.
+  MAINTENANCE = 1;
+  // Unplanned disruption.
+  INCIDENT = 2;
+}
+
+// StatusEventState is where a status event stands at the time of the
+// response. It follows from the event's window: SCHEDULED before start_time,
+// IN_PROGRESS from start_time until end_time, and COMPLETED from end_time on.
+// A cancelled event is CANCELLED whatever its window.
+enum StatusEventState {
+  // Not set. Never returned.
+  STATE_UNSPECIFIED = 0;
+  // The window has not started.
+  SCHEDULED = 1;
+  // The window has started and not ended.
+  IN_PROGRESS = 2;
+  // The window has ended.
+  COMPLETED = 3;
+  // Called off; its window no longer applies.
+  CANCELLED = 4;
+}
+
+// StatusEventImpact is how severely an incident affects users.
+enum StatusEventImpact {
+  // No impact given: always for MAINTENANCE, and for an INCIDENT not yet
+  // assessed.
+  IMPACT_UNSPECIFIED = 0;
+  // Working, but slower or less reliable than usual.
+  DEGRADED = 1;
+  // Unavailable for some users, markets or assets.
+  PARTIAL_OUTAGE = 2;
+  // Unavailable.
+  MAJOR_OUTAGE = 3;
+}
+
+// AffectedService is a part of the platform a status event affects.
+enum AffectedService {
+  // Not set. Never returned.
+  SERVICE_UNSPECIFIED = 0;
+  // Placing, changing and cancelling orders, and order execution.
+  TRADING = 1;
+  // Prices, trades, candles and order books.
+  MARKET_DATA = 2;
+  // Deposits.
+  DEPOSITS = 3;
+  // Withdrawals.
+  WITHDRAWALS = 4;
+  // Transfers between accounts and subaccounts.
+  TRANSFERS = 5;
+  // Sign-in, account management and API keys.
+  ACCOUNTS = 6;
+  // The REST and WebSocket interfaces for programmatic clients such as market
+  // makers and brokers.
+  API = 7;
+  // QuickSwap swaps.
+  QUICKSWAP = 8;
+  // The web app.
+  APP = 9;
+}
+
+// StatusEventUpdate is one progress note posted on a status event. Notes are
+// never edited or removed.
+message StatusEventUpdate {
+  // Position of the note on its event: 1 for the first, then increasing by 1.
+  // Unique within the event and never reused.
+  uint32 id = 1;
+  // Plain-text note for users, at most 4000 characters.
+  string message = 2;
+  // When the note was posted.
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// StatusEvent is one scheduled maintenance or incident.
+message StatusEvent {
+  // Stable opaque 64-bit identifier. It never changes when the event is
+  // updated.
+  fixed64 id = 1;
+  // Maintenance or incident.
+  StatusEventKind kind = 2;
+  // State at the time of the response.
+  StatusEventState state = 3;
+  // Short title, at most 200 characters.
+  string title = 4;
+  // Plain-text summary for users, at most 4000 characters. It can be revised;
+  // progress notes are in updates.
+  string message = 5;
+  // Start of the window: when the maintenance begins, or when the incident
+  // began. It no longer changes once the window has started.
+  google.protobuf.Timestamp start_time = 6;
+  // End of the window, after start_time: when the maintenance is expected to
+  // end, or when the incident ended or is expected to end. Always set for
+  // MAINTENANCE. Omitted for an INCIDENT with no expected end yet.
+  google.protobuf.Timestamp end_time = 7;
+  // Affected parts of the platform. Never empty.
+  repeated AffectedService services = 8;
+  // Symbols of the affected markets, such as "BTC-USDT", in ascending order.
+  // Empty when the event is not limited to particular markets.
+  repeated string markets = 9;
+  // Time of the latest change to the event, a new progress note included. Its
+  // state moving with the clock is not a change.
+  google.protobuf.Timestamp updated_at = 10;
+  // Severity of an INCIDENT. IMPACT_UNSPECIFIED for MAINTENANCE and for an
+  // incident not yet assessed.
+  StatusEventImpact impact = 11;
+  // Codes of the affected assets, such as "SOL", in ascending order. Empty
+  // when the event is not limited to particular assets.
+  repeated string assets = 12;
+  // When the event was cancelled. Set only when state is CANCELLED.
+  google.protobuf.Timestamp cancelled_at = 13;
+  // Progress notes, oldest first. At most 50.
+  repeated StatusEventUpdate updates = 14;
+  // HTTPS link to a long-form announcement about the event, at most 2048
+  // characters. Omitted when the event has none.
+  optional string details_url = 15;
+}
+
+// ListStatusEventsRequest selects status events. Filters on different fields
+// combine with AND; values within one field combine with OR.
+message ListStatusEventsRequest {
+  // States to include. Empty means SCHEDULED and IN_PROGRESS: current and
+  // upcoming events.
+  repeated StatusEventState states = 1 [(buf.validate.field).repeated = {
+    max_items: 4,
+    unique: true,
+    items: {
+      enum: {
+        defined_only: true,
+        not_in: [0]
+      }
+    }
+  }];
+  // Kinds to include. Empty means all.
+  repeated StatusEventKind kinds = 2 [(buf.validate.field).repeated = {
+    max_items: 2,
+    unique: true,
+    items: {
+      enum: {
+        defined_only: true,
+        not_in: [0]
+      }
+    }
+  }];
+  // Maximum events to return. 0 means the default of 50; maximum 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed, exclusive cursor from a previous response. Bound
+  // to states and kinds, and to the start time and id of the last event
+  // returned. Reuse it only with the same states and kinds. States follow
+  // the clock, so an event that changes state between two pages can be
+  // missing from both or appear on both; match events by id.
+  string page_token = 4 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListStatusEventsResponse returns matching status events.
+message ListStatusEventsResponse {
+  // Matching events ordered by start_time descending, then id descending:
+  // the latest start first.
+  repeated StatusEvent events = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
 // SystemService serves facts about the environment itself.
 service SystemService {
   option (polyester.api.docs_group) = "changelog";
@@ -59,6 +226,21 @@ service SystemService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Version"
       description: "Get the version and source revision of the build the environment serves."
+      tags: "System Service"
+      security: [{}]
+    };
+  }
+
+  // List scheduled maintenance and incidents, the latest start first. With no
+  // states, it lists current and upcoming events. This public read supports
+  // cacheable ConnectRPC GET; answers can be up to 10 seconds old.
+  rpc ListStatusEvents(ListStatusEventsRequest) returns (ListStatusEventsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (google.api.http) = {get: "/v1/system/status-events"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Status Events"
+      description: "List scheduled maintenance and incidents, the latest start first. With no states, it lists current and upcoming events."
       tags: "System Service"
       security: [{}]
     };
