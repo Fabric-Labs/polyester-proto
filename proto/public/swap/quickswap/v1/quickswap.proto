@@ -526,7 +526,11 @@ enum QuickSwapReason {
 
 // Deposit is one deposit detected on the QuickSwap's deposit address.
 message Deposit {
-  // Zero-based position in detection order; stable for the QuickSwap's life.
+  // Zero-based position in deposits, which lists deposits oldest first. Not
+  // stable: a deposit detected earlier can appear later, for example a
+  // dropped or replaced deposit that confirms after all, and then shifts the
+  // index of every deposit after it. Identify a deposit by tx_hash with
+  // tx_occurrence_index, not by index.
   uint32 index = 1;
   // Source-network transaction identifier in the network's native text form.
   string tx_hash = 2;
@@ -772,7 +776,8 @@ message Withdrawal {
   uint32 index = 1;
   // Why this withdrawal pays its recipient.
   WithdrawalRole role = 2;
-  // Deposit whose funds this withdrawal moves.
+  // Index (Deposit.index), in the same response, of the deposit whose funds
+  // this withdrawal moves. Not stable across reads, like Deposit.index.
   uint32 deposit_index = 3;
   // Asset and network paid, as a zipped_asset_id.
   uint32 zipped_asset_id = 4;
@@ -833,11 +838,17 @@ message Withdrawal {
 // PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a
 // bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A
 // QuickSwap that cannot be issued a deposit address goes from ALLOCATING
-// straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from
-// any non-terminal status and is not terminal; a QuickSwap HELD with
-// SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are
+// straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A deposit that is dropped
+// or replaced on its network before it confirms brings no funds: the
+// QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to
+// AWAITING_DEPOSIT, the only status that moves back, and no longer shows
+// that deposit. HELD can be
+// entered from any non-terminal status and is not terminal; a QuickSwap HELD
+// with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are
 // COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never
-// changes. Accept status values added later; is_terminal is authoritative.
+// changes, except that EXPIRED becomes HELD when a dropped or replaced
+// deposit confirms after all (see EXPIRED). Accept status values added
+// later; is_terminal is authoritative.
 enum QuickSwapStatus {
   // No status; never returned.
   STATUS_UNSPECIFIED = 0;
@@ -887,7 +898,11 @@ enum QuickSwapStatus {
   RETURNED = 15;
   // Terminal: the funding window ended without an eligible deposit
   // (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address
-  // (DEPOSIT_ADDRESS_CONFLICT).
+  // (DEPOSIT_ADDRESS_CONFLICT). With FUNDING_WINDOW_ENDED, terminal_at is
+  // funding_expires_at, also after a dropped or replaced deposit. If such a
+  // deposit confirms after all, its funds are held for review: the QuickSwap
+  // becomes HELD, with that deposit ON_HOLD, the one change of a terminal
+  // status.
   EXPIRED = 16;
   // Terminal: the deposit was blocked by its risk screen
   // (SOURCE_SCREENING_BLOCKED), and Zipper's compliance team transferred the
@@ -921,8 +936,9 @@ message QuickSwap {
   // another deposit observed on an already retired address shows as
   // MANUAL_RECOVERY. Returns made directly for such deposits are not yet
   // reported in withdrawals; RETURN_ONLY does not confirm a completed return.
-  // Read again if the end user reports such a deposit or needs the final
-  // retirement time.
+  // An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all
+  // becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user
+  // reports such a deposit or needs the final retirement time.
   bool is_terminal = 5;
   // Accepted economic terms.
   QuickSwapTerms terms = 6;
@@ -955,7 +971,8 @@ message QuickSwap {
   DepositInstructions deposit_instructions = 15;
   // Risk screening.
   Screening screening = 16;
-  // Detected deposits, oldest first, at most 50.
+  // Detected deposits, oldest first, at most 50. A deposit detected earlier
+  // can appear later and shift the others' index (see Deposit.index).
   repeated Deposit deposits = 17;
   // True when more than 50 deposits were detected; only the first 50 are
   // listed.
@@ -1313,6 +1330,17 @@ enum ErrorCode {
   // The vault's payout address allowlist cannot be changed yet: its
   // on-chain protection is still being set up. Retry in a few minutes.
   VAULT_ALLOWLIST_NOT_READY = 53;
+  // The route is temporarily suspended: deposits on the source network or
+  // withdrawals on the destination network, as AssetChainVariant
+  // deposit_status and withdrawal_status SUSPENDED show. Quotes and creates
+  // are refused and nothing is bound to the key; QuickSwaps already created
+  // continue. Repeat the request once both are NORMAL again.
+  ROUTE_SUSPENDED = 54;
+  // The invite is void: the member who sent it has left the broker or may no
+  // longer grant its role. Accepting it granted nothing and cancelled it; ask
+  // a member who may grant the role for a new invite. Invites voided by a
+  // member change are cancelled by that change and answer INVITE_NOT_FOUND.
+  INVITE_VOID = 55;
 }
 
 // ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it

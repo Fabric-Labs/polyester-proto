@@ -1,0 +1,238 @@
+syntax = "proto3";
+
+package ledger.read.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/ledger/read/v1;ledgerrdv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Statement Exports"
+      description: "Whole-period account statements produced in the background as one CSV file."
+    }
+  ]
+};
+
+// StatementExportStatus is where a statement export is.
+enum StatementExportStatus {
+  // Never returned.
+  STATEMENT_EXPORT_STATUS_UNSPECIFIED = 0;
+  // Accepted. The export waits until the account history covers its period
+  // and no other export of the account is being produced.
+  STATEMENT_EXPORT_STATUS_QUEUED = 1;
+  // The file is being produced; movements and bytes count its progress.
+  STATEMENT_EXPORT_STATUS_PROCESSING = 2;
+  // The file is complete and can be downloaded until expires_at.
+  STATEMENT_EXPORT_STATUS_READY = 3;
+  // The file could not be produced; failure_reason says why.
+  STATEMENT_EXPORT_STATUS_FAILED = 4;
+  // The file was deleted at expires_at; create a new export for it.
+  STATEMENT_EXPORT_STATUS_EXPIRED = 5;
+}
+
+// StatementExportFailureReason is why a statement export failed.
+enum StatementExportFailureReason {
+  // Not failed.
+  STATEMENT_EXPORT_FAILURE_REASON_UNSPECIFIED = 0;
+  // The period holds more than 4,000,000 ledger movements, the most one file
+  // holds. Split the period into shorter exports.
+  STATEMENT_EXPORT_FAILURE_REASON_TOO_LARGE = 1;
+  // The file could not be produced in time. Create a new export.
+  STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE = 2;
+}
+
+// StatementExport is a whole-period account statement produced in the
+// background as one CSV file. The file is byte for byte the pages of
+// ExportStatement for the same account, asset and period up to
+// complete_through, concatenated: the header row, then every row, oldest
+// first, in the columns ExportStatementResponse.csv documents.
+//
+// Download a READY file with an authenticated
+// `GET /v1/statements/exports/{exportId}/file`, as the account that created
+// it or one with the same access: it returns `text/csv` and supports HTTP
+// `Range` requests. With `?redirect=true` it instead answers
+// `307 Temporary Redirect` to a URL valid for 60 seconds. An EXPIRED export's
+// file answers `410 Gone`.
+message StatementExport {
+  // Public ID of the export.
+  fixed64 export_id = 1;
+  // Public subaccount ID of the account the statement covers; unset for a
+  // root account.
+  optional fixed64 subaccount_id = 2;
+  // Start of the statement period (UTC), inclusive.
+  google.protobuf.Timestamp start_time = 3;
+  // End of the requested statement period (UTC), exclusive.
+  google.protobuf.Timestamp end_time = 4;
+  // Public unified asset ID the statement is limited to; 0 for every asset.
+  uint32 asset_id = 5;
+  // Idempotency key of the request that created the export.
+  string idempotency_key = 6;
+  // Where the export is.
+  StatementExportStatus status = 7;
+  // End of what the file covers (UTC), exclusive: the earlier of end_time and
+  // the instant the export was created. Every movement recorded before the
+  // export was created and before complete_through is in the file.
+  google.protobuf.Timestamp complete_through = 8;
+  // Ledger movements written to the file so far; the file's total when
+  // READY.
+  uint64 movements = 9;
+  // Bytes written to the file so far; the file's size when READY.
+  uint64 bytes = 10;
+  // When the export was created.
+  google.protobuf.Timestamp created_at = 11;
+  // When the file became READY; unset before.
+  google.protobuf.Timestamp ready_at = 12;
+  // When a READY file expires, 7 days after ready_at; unset before READY.
+  google.protobuf.Timestamp expires_at = 13;
+  // Why the export FAILED; unspecified otherwise.
+  StatementExportFailureReason failure_reason = 14;
+}
+
+// CreateStatementExportRequest asks for a whole-period statement file of one
+// account.
+message CreateStatementExportRequest {
+  // The period must be non-empty and at most 366 days long.
+  option (buf.validate.message).cel = {
+    id: "create_statement_export.period_valid"
+    message: "end_time must be after start_time and at most 366 days after it"
+    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= duration('8784h')"
+  };
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account. The statement covers that one account only.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Start of the statement period (UTC), inclusive: after
+  // 1970-01-01T00:00:00Z and no later than the request.
+  google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
+  // End of the statement period (UTC), exclusive, by
+  // 2262-04-11T23:47:16Z. A period still open when the export is created
+  // ends at that instant; see StatementExport.complete_through.
+  google.protobuf.Timestamp end_time = 3 [(buf.validate.field).required = true];
+  // Optional public unified asset ID. When unset/0, the statement covers
+  // every asset; an ID that names no asset is refused.
+  uint32 asset_id = 4;
+  // Client-chosen key, 1 to 64 characters of letters, digits and `.`, `_`,
+  // `:` or `-`, unique per root account. Repeating a request with the same
+  // key returns the same export; the same key with different request fields
+  // is refused.
+  string idempotency_key = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+      pattern: "^[A-Za-z0-9._:-]+$"
+    }
+  ];
+}
+
+// CreateStatementExportResponse is the created or existing export.
+message CreateStatementExportResponse {
+  // The export.
+  StatementExport export = 1;
+}
+
+// GetStatementExportRequest names one export.
+message GetStatementExportRequest {
+  // Public ID of the export.
+  fixed64 export_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetStatementExportResponse is one export.
+message GetStatementExportResponse {
+  // The export.
+  StatementExport export = 1;
+}
+
+// ListStatementExportsRequest selects one account's exports.
+message ListStatementExportsRequest {
+  // Optional public subaccount ID, selected as for
+  // CreateStatementExportRequest.subaccount_id.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Maximum exports to return; 0 means 20. At most 100.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 100];
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to the authenticated account and sub-account scope.
+  string page_token = 3 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListStatementExportsResponse is a page of exports, newest first.
+message ListStatementExportsResponse {
+  // Exports, newest first.
+  repeated StatementExport exports = 1;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// StatementExportService produces whole-period account statements in the
+// background as one CSV file each. It covers the same account, asset and
+// period choices as LedgerReadService.ExportStatement, with the same access
+// rules: API keys need the READ_STATEMENTS policy action. A root account has
+// at most 5 exports QUEUED or PROCESSING at a time, one account produces one
+// export at a time, and a READY file can be downloaded for 7 days.
+service StatementExportService {
+  option (polyester.api.docs_group) = "account";
+
+  // Create a statement export, or return the existing one for the same
+  // idempotency key.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: the period, asset or idempotency key is invalid.
+  // - FAILED_PRECONDITION (IDEMPOTENCY_KEY_REUSED): the key was used for a
+  //   request with other fields.
+  // - RESOURCE_EXHAUSTED (STATEMENT_EXPORT_LIMIT_REACHED): the root account
+  //   has 5 exports QUEUED or PROCESSING.
+  // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
+  // - UNAVAILABLE: retry the same request.
+  rpc CreateStatementExport(CreateStatementExportRequest) returns (CreateStatementExportResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {
+      post: "/v1/statements/exports"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create Statement Export"
+      description: "Create a whole-period account statement file, produced in the background. Idempotent per idempotency key."
+      tags: "Statement Exports"
+    };
+  }
+
+  // Get one statement export.
+  //
+  // Errors:
+  // - NOT_FOUND: no such export for the authenticated account.
+  // - PERMISSION_DENIED: the export's account cannot be read.
+  rpc GetStatementExport(GetStatementExportRequest) returns (GetStatementExportResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/statements/exports/{export_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Statement Export"
+      description: "Get a statement export's status, progress and expiry."
+      tags: "Statement Exports"
+    };
+  }
+
+  // List one account's statement exports, newest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: the limit or page token is invalid.
+  // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
+  rpc ListStatementExports(ListStatementExportsRequest) returns (ListStatementExportsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/statements/exports"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Statement Exports"
+      description: "List an account's statement exports, newest first."
+      tags: "Statement Exports"
+    };
+  }
+}

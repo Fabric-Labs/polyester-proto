@@ -74,10 +74,12 @@ message SocialVerification {
   // a leading "@". For Telegram, the username of the account that submitted the
   // code; empty when that account has no username.
   string handle = 2;
-  // Stable provider-side user identifier. Empty until verification succeeds,
-  // except for Telegram: while the status is STATUS_AWAITING_CONFIRMATION, it is
-  // the numeric user ID of the Telegram account that submitted the code, the
-  // value ConfirmSocialVerification takes.
+  // Stable provider-side user identifier of the linked provider account. Empty
+  // while no account is linked. A restarted X/Twitter or Discord verification
+  // keeps the current link, and this value, until the new verification succeeds
+  // and replaces it. For Telegram, while the status is
+  // STATUS_AWAITING_CONFIRMATION, it is the numeric user ID of the Telegram
+  // account that submitted the code, the value ConfirmSocialVerification takes.
   string provider_user_id = 3;
   // Provider display name of the account being verified, for showing it to the
   // user. Telegram only: the account's name, set once the code is submitted.
@@ -93,7 +95,9 @@ message SocialVerification {
   google.protobuf.Timestamp requested_at = 5;
   // Time in UTC when the current challenge code expires.
   google.protobuf.Timestamp expires_at = 6;
-  // Time in UTC when verification succeeded. Empty until status is STATUS_VERIFIED.
+  // Time in UTC when the linked provider account was last verified. Empty while
+  // no account is linked; kept, like provider_user_id, while a restarted
+  // verification runs.
   google.protobuf.Timestamp verified_at = 7;
   // Number of recorded provider-check attempts for this challenge.
   int32 attempts = 9;
@@ -105,10 +109,17 @@ message SocialVerification {
   AuthErrorCode error_code = 16;
   // Time in UTC when this verification state last changed.
   google.protobuf.Timestamp updated_at = 15;
+  // Time in UTC from which a new verification may succeed, when this one
+  // failed with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN or
+  // AUTH_SOCIAL_CHANGE_LIMIT_REACHED. Empty otherwise.
+  google.protobuf.Timestamp retry_after = 18;
 }
 
 // StartSocialVerificationRequest starts or restarts social account verification.
-// Starting again for the same provider replaces the previous challenge.
+// Starting again for the same provider replaces the previous challenge. A linked
+// X/Twitter or Discord account stays linked until the new verification
+// succeeds; then the newly verified account replaces it, which counts as the
+// provider's one change per 30 days.
 message StartSocialVerificationRequest {
   option (buf.validate.message).cel = {
     id: "twitter_handle_format"
@@ -266,13 +277,7 @@ message ConfirmSocialVerificationResponse {
 // UnlinkSocialAccountRequest removes the caller's linked provider account, or
 // cancels a link in progress.
 message UnlinkSocialAccountRequest {
-  option (buf.validate.message).cel = {
-    id: "unlink_telegram_only"
-    message: "only a telegram account can be unlinked"
-    expression: "this.provider == 3"
-  };
-
-  // Provider account to unlink. Only TELEGRAM is accepted.
+  // Provider account to unlink.
   SocialProvider provider = 1 [
     (buf.validate.field).enum = {
       defined_only: true
@@ -297,15 +302,27 @@ service SocialVerificationService {
   // For Telegram, open action_url to send the code to the Polyester bot, then
   // confirm the account with ConfirmSocialVerification.
   // AUTH_SOCIAL_VERIFICATION_INVALID_STATE for Telegram means a Telegram account is already linked; unlink it first.
+  // While an X/Twitter or Discord account is linked, starting again can change
+  // it, so the caller needs enrolled MFA and a fresh, single-use step-up proof
+  // in the X-Auth-Step-Up header: AUTH_MFA_NOT_ENROLLED means enroll MFA first;
+  // AUTH_STEP_UP_REQUIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean complete a new
+  // fresh step-up and retry. AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account
+  // changed or unlinked that provider's account less than 30 days ago; the
+  // detail's retry_after says when it may again.
+  // The new verification fails with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN when
+  // the verified account was unlinked from another Polyester account less than
+  // 30 days ago, and AUTH_SOCIAL_CHANGE_LIMIT_REACHED when it would replace a
+  // link within 30 days of the last change; retry_after says when.
   rpc StartSocialVerification(StartSocialVerificationRequest) returns (StartSocialVerificationResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       post: "/v1/auth/social/verification:start"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Start Social Verification"
-      description: "Issue a challenge code for the caller to submit through the provider-specific verification flow."
+      description: "Issue a challenge code for the caller to submit through the provider-specific verification flow. While an X/Twitter or Discord account is linked, it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header; AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after."
       tags: "Auth Service"
     };
   }
@@ -353,18 +370,27 @@ service SocialVerificationService {
     };
   }
 
-  // Unlink the caller's Telegram account, or cancel a Telegram link in progress.
-  // Unlinking again succeeds and changes nothing. To link again, start a new
-  // verification.
+  // Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link
+  // in progress. Unlinking again succeeds and changes nothing. To link again,
+  // start a new verification.
+  // Unlinking a linked X/Twitter or Discord account needs enrolled MFA and a
+  // fresh, single-use step-up proof in the X-Auth-Step-Up header
+  // (AUTH_MFA_NOT_ENROLLED, AUTH_STEP_UP_REQUIRED, AUTH_STEP_UP_PROOF_UNAVAILABLE
+  // as for StartSocialVerification), and counts as the provider's one change per
+  // 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account changed or
+  // unlinked that provider's account less than 30 days ago, and the detail's
+  // retry_after says when it may again. For 30 days after it is unlinked, the
+  // account can be linked again only to this Polyester account.
   rpc UnlinkSocialAccount(UnlinkSocialAccountRequest) returns (UnlinkSocialAccountResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       post: "/v1/auth/social/verification:unlink"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Unlink Social Account"
-      description: "Unlink the caller's Telegram account, or cancel a Telegram link in progress. Repeating it changes nothing."
+      description: "Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link in progress. Repeating it changes nothing. An X/Twitter or Discord unlink needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header, and counts as the provider's one change per 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after."
       tags: "Auth Service"
     };
   }

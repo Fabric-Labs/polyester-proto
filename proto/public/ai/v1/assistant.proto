@@ -150,6 +150,26 @@ enum AssistantKeyState {
   DISABLED = 2;
 }
 
+// AccountSelection says whether a message's run reads an account at all.
+enum AccountSelection {
+  // The default: the run reads the account subaccount_id names, or the main
+  // account when subaccount_id is omitted.
+  ACCOUNT_SELECTION_UNSPECIFIED = 0;
+  // The run reads no account: it answers about the markets and Polyester
+  // only. subaccount_id must be omitted.
+  ACCOUNT_SELECTION_NONE = 1;
+}
+
+// AssistantKeyView selects how much of each assistant key ListAssistantKeys
+// returns.
+enum AssistantKeyView {
+  // The default: each key's account, ID, public key and state, without its
+  // account's name.
+  ASSISTANT_KEY_VIEW_UNSPECIFIED = 0;
+  // Everything in the default view, plus each key's account name (label).
+  ASSISTANT_KEY_VIEW_FULL = 1;
+}
+
 // Conversation is one conversation of the caller with the assistant.
 message Conversation {
   // Public conversation ID.
@@ -1331,6 +1351,11 @@ message AssistantKey {
   bytes public_key_ed25519 = 3;
   // ACTIVE or DISABLED.
   AssistantKeyState state = 4;
+  // Name of the key's subaccount, as its owner set it. Returned only when
+  // ListAssistantKeys asks for ASSISTANT_KEY_VIEW_FULL. Empty for the main
+  // account, for a subaccount without a name, and when the name could not be
+  // read: the keys are listed either way.
+  string label = 5;
 }
 
 // AssistantKeyAccount names one account to give the assistant a key for.
@@ -1407,6 +1432,12 @@ message SendMessageRequest {
     message: "each destination id must be unique"
     expression: "this.destinations.map(d, d.id).unique()"
   };
+  // A run that reads no account names no trading account.
+  option (buf.validate.message).cel = {
+    id: "send_message.no_account_without_subaccount"
+    message: "subaccount_id must be omitted when account_selection is ACCOUNT_SELECTION_NONE"
+    expression: "this.account_selection != 1 || !has(this.subaccount_id)"
+  };
 
   // Conversation to continue. Omit to start a new conversation.
   optional fixed64 conversation_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -1421,7 +1452,8 @@ message SendMessageRequest {
   string idempotency_key = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
   // Trading account (subaccount) the run reads and acts on. It must be one
   // the caller's account owns; any other value, also one that does not
-  // exist, is INVALID_ARGUMENT. Omit it for the main account: the run then
+  // exist, is INVALID_ARGUMENT. Omit it for the main account (unless
+  // account_selection is ACCOUNT_SELECTION_NONE): the run then
   // reads the main account (its balances, funding included, every trading
   // account with its equity, API keys, price alerts, fee rates and
   // permissions) and places, changes or cancels no order, trigger or swap;
@@ -1455,6 +1487,12 @@ message SendMessageRequest {
       not_in: [0]
     }
   ];
+  // Whether the run reads an account. Omit it to read the account
+  // subaccount_id names, or the main account. ACCOUNT_SELECTION_NONE for a
+  // run that reads no account, such as a client whose user has not given the
+  // assistant access to any account: subaccount_id must then be omitted. It
+  // is part of the request the idempotency key covers.
+  AccountSelection account_selection = 8 [(buf.validate.field).enum.defined_only = true];
 }
 
 // SendMessageResponse identifies the started run.
@@ -1605,7 +1643,11 @@ message CompleteAssistantKeysResponse {
 }
 
 // ListAssistantKeysRequest lists the assistant keys the assistant holds.
-message ListAssistantKeysRequest {}
+message ListAssistantKeysRequest {
+  // How much of each key to return. Omit it for the default view, without
+  // account names; ASSISTANT_KEY_VIEW_FULL adds each key's account name.
+  AssistantKeyView view = 1 [(buf.validate.field).enum.defined_only = true];
+}
 
 // ListAssistantKeysResponse returns the assistant keys the assistant holds.
 message ListAssistantKeysResponse {

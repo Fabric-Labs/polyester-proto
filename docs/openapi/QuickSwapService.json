@@ -119,6 +119,10 @@
             "description": "Broker-chosen idempotency key, 1 to 128 characters of letters, digits, '.', '_', ':' or '-'. Scoped to the authenticated broker and retained permanently. The same key with the same request returns the same QuickSwap and deposit address; with a different request it fails with IDEMPOTENCY_CONFLICT. Requests are compared after every valid address and memo is put in its network's canonical form, so the same address in another case or encoding is the same request; affiliate order is ignored; every other field, the fees included, must be equal.",
             "type": "string"
           },
+          "referralCode": {
+            "description": "Optional referral partner code from a referral link, case-insensitive, at most 64 bytes; empty for none. Only a broker with a referral program may send one (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates (FEES_INVALID). It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's current code (REFERRAL_CODE_UNKNOWN), and the partner must be active (REFERRAL_PARTNER_INACTIVE). The program's rates for the route are applied (quote.referral) and fixed at creation. It is part of the request: the same idempotency_key with another code, or with and without one, is IDEMPOTENCY_CONFLICT.",
+            "type": "string"
+          },
           "refundAddress": {
             "description": "Recipient of refunded intermediate asset on the refund route's network, in its native text form without memo. At most 256 UTF-8 bytes.",
             "type": "string"
@@ -385,7 +389,7 @@
                 "type": "object"
               },
               "deposits": {
-                "description": "Detected deposits, oldest first, at most 50.",
+                "description": "Detected deposits, oldest first, at most 50. A deposit detected earlier can appear later and shift the others' index (see Deposit.index).",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -436,7 +440,7 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "Zero-based position in detection order; stable for the QuickSwap's life.",
+                      "description": "Zero-based position in deposits, which lists deposits oldest first. Not stable: a deposit detected earlier can appear later, for example a dropped or replaced deposit that confirms after all, and then shifts the index of every deposit after it. Identify a deposit by tx_hash with tx_occurrence_index, not by index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -823,7 +827,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -996,6 +1000,29 @@
                     "description": "When the quote was priced.",
                     "format": "date-time",
                     "type": "string"
+                  },
+                  "referral": {
+                    "additionalProperties": false,
+                    "description": "The referral applied; set only when the request carried a referral_code. A QuickSwap's quote keeps the referral fixed at creation: later changes to the referral program or partner never change it.",
+                    "properties": {
+                      "baseBrokerBps": {
+                        "description": "Broker fee without the referral: the request's broker_bps.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "commissionBps": {
+                        "description": "Commission credited to the referral partner.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "discountBps": {
+                        "description": "Discount off the end user's fee.",
+                        "format": "int32",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
                   }
                 },
                 "required": [],
@@ -1219,7 +1246,7 @@
                       "type": "object"
                     },
                     "depositIndex": {
-                      "description": "Deposit whose funds this withdrawal moves.",
+                      "description": "Index (Deposit.index), in the same response, of the deposit whose funds this withdrawal moves. Not stable across reads, like Deposit.index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -1437,7 +1464,7 @@
                 "type": "object"
               },
               "deposits": {
-                "description": "Detected deposits, oldest first, at most 50.",
+                "description": "Detected deposits, oldest first, at most 50. A deposit detected earlier can appear later and shift the others' index (see Deposit.index).",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -1488,7 +1515,7 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "Zero-based position in detection order; stable for the QuickSwap's life.",
+                      "description": "Zero-based position in deposits, which lists deposits oldest first. Not stable: a deposit detected earlier can appear later, for example a dropped or replaced deposit that confirms after all, and then shifts the index of every deposit after it. Identify a deposit by tx_hash with tx_occurrence_index, not by index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -1875,7 +1902,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -2048,6 +2075,29 @@
                     "description": "When the quote was priced.",
                     "format": "date-time",
                     "type": "string"
+                  },
+                  "referral": {
+                    "additionalProperties": false,
+                    "description": "The referral applied; set only when the request carried a referral_code. A QuickSwap's quote keeps the referral fixed at creation: later changes to the referral program or partner never change it.",
+                    "properties": {
+                      "baseBrokerBps": {
+                        "description": "Broker fee without the referral: the request's broker_bps.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "commissionBps": {
+                        "description": "Commission credited to the referral partner.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "discountBps": {
+                        "description": "Discount off the end user's fee.",
+                        "format": "int32",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
                   }
                 },
                 "required": [],
@@ -2271,7 +2321,7 @@
                       "type": "object"
                     },
                     "depositIndex": {
-                      "description": "Deposit whose funds this withdrawal moves.",
+                      "description": "Index (Deposit.index), in the same response, of the deposit whose funds this withdrawal moves. Not stable across reads, like Deposit.index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -2489,7 +2539,7 @@
                 "type": "object"
               },
               "deposits": {
-                "description": "Detected deposits, oldest first, at most 50.",
+                "description": "Detected deposits, oldest first, at most 50. A deposit detected earlier can appear later and shift the others' index (see Deposit.index).",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -2540,7 +2590,7 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "Zero-based position in detection order; stable for the QuickSwap's life.",
+                      "description": "Zero-based position in deposits, which lists deposits oldest first. Not stable: a deposit detected earlier can appear later, for example a dropped or replaced deposit that confirms after all, and then shifts the index of every deposit after it. Identify a deposit by tx_hash with tx_occurrence_index, not by index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -2927,7 +2977,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -3100,6 +3150,29 @@
                     "description": "When the quote was priced.",
                     "format": "date-time",
                     "type": "string"
+                  },
+                  "referral": {
+                    "additionalProperties": false,
+                    "description": "The referral applied; set only when the request carried a referral_code. A QuickSwap's quote keeps the referral fixed at creation: later changes to the referral program or partner never change it.",
+                    "properties": {
+                      "baseBrokerBps": {
+                        "description": "Broker fee without the referral: the request's broker_bps.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "commissionBps": {
+                        "description": "Commission credited to the referral partner.",
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "discountBps": {
+                        "description": "Discount off the end user's fee.",
+                        "format": "int32",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
                   }
                 },
                 "required": [],
@@ -3323,7 +3396,7 @@
                       "type": "object"
                     },
                     "depositIndex": {
-                      "description": "Deposit whose funds this withdrawal moves.",
+                      "description": "Index (Deposit.index), in the same response, of the deposit whose funds this withdrawal moves. Not stable across reads, like Deposit.index.",
                       "format": "int32",
                       "type": "integer"
                     },
@@ -3462,6 +3535,10 @@
             "description": "Broker fee in basis points of what each leg receives, charged on top of the service fee and credited to the broker's default vault; 0 for none. broker_bps and the affiliates' bps total at most 300. Fees outside these rules fail with FEES_INVALID.",
             "format": "int32",
             "type": "integer"
+          },
+          "referralCode": {
+            "description": "Optional referral partner code, as CreateQuickSwapRequest.referral_code: at most 64 bytes.",
+            "type": "string"
           },
           "terms": {
             "additionalProperties": false,
@@ -3764,6 +3841,29 @@
                 "description": "When the quote was priced.",
                 "format": "date-time",
                 "type": "string"
+              },
+              "referral": {
+                "additionalProperties": false,
+                "description": "The referral applied; set only when the request carried a referral_code. A QuickSwap's quote keeps the referral fixed at creation: later changes to the referral program or partner never change it.",
+                "properties": {
+                  "baseBrokerBps": {
+                    "description": "Broker fee without the referral: the request's broker_bps.",
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "commissionBps": {
+                    "description": "Commission credited to the referral partner.",
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "discountBps": {
+                    "description": "Discount off the end user's fee.",
+                    "format": "int32",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
               }
             },
             "required": [],
@@ -3950,7 +4050,7 @@
           "CONFIRMING": "Waiting for source confirmations and deposit validation before credit.",
           "CREDITED": "The deposit is credited; execution is starting.",
           "EXECUTING": "The credited deposit is being traded.",
-          "EXPIRED": "Terminal: the funding window ended without an eligible deposit (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address (DEPOSIT_ADDRESS_CONFLICT).",
+          "EXPIRED": "Terminal: the funding window ended without an eligible deposit (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address (DEPOSIT_ADDRESS_CONFLICT). With FUNDING_WINDOW_ENDED, terminal_at is funding_expires_at, also after a dropped or replaced deposit. If such a deposit confirms after all, its funds are held for review: the QuickSwap becomes HELD, with that deposit ON_HOLD, the one change of a terminal status.",
           "HELD": "Funds are held for review. Not terminal: review resumes the QuickSwap or returns the funds, or, for SOURCE_SCREENING_BLOCKED, the QuickSwap can end CLOSED. reason says why when a specific reason applies, else it is REASON_UNSPECIFIED. The broker contacts Polyester broker support with the swap_id.",
           "PAYING_OUT": "Execution finished with destination output; withdrawals, including any partial refund or return, are in progress.",
           "PREPARING_DEPOSIT": "The deposit is being prepared for credit. Retries keep this status.",
@@ -4006,6 +4106,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -4043,6 +4161,7 @@
                 "destinationAddress": "0x3333333333333333333333333333333333333333",
                 "destinationMemo": "value",
                 "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
+                "referralCode": "value",
                 "refundAddress": "value",
                 "refundMemo": "value",
                 "refundZippedAssetId": 100,
@@ -4225,7 +4344,12 @@
                         "decimals": 36
                       },
                       "minRate": "value",
-                      "quotedAt": "2025-01-01T00:00:00Z"
+                      "quotedAt": "2025-01-01T00:00:00Z",
+                      "referral": {
+                        "baseBrokerBps": 1,
+                        "commissionBps": 1,
+                        "discountBps": 1
+                      }
                     },
                     "reason": "SOURCE_SCREENING_FAILED",
                     "refundAddress": "value",
@@ -4301,7 +4425,7 @@
                 }
               }
             },
-            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID, REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN); nothing is bound to the key."
+            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID, REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID, FEES_INVALID, REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, ROUTE_SUSPENDED, PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED, AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN or REFERRAL_PARTNER_INACTIVE); nothing is bound to the key."
           },
           "401": {
             "content": {
@@ -4771,7 +4895,12 @@
                         "decimals": 36
                       },
                       "minRate": "value",
-                      "quotedAt": "2025-01-01T00:00:00Z"
+                      "quotedAt": "2025-01-01T00:00:00Z",
+                      "referral": {
+                        "baseBrokerBps": 1,
+                        "commissionBps": 1,
+                        "discountBps": 1
+                      }
                     },
                     "reason": "SOURCE_SCREENING_FAILED",
                     "refundAddress": "value",
@@ -4943,6 +5072,7 @@
                   }
                 ],
                 "brokerBps": 1,
+                "referralCode": "value",
                 "terms": {
                   "amount": {
                     "baseUnits": "value",
@@ -5007,7 +5137,12 @@
                       "decimals": 36
                     },
                     "minRate": "value",
-                    "quotedAt": "2025-01-01T00:00:00Z"
+                    "quotedAt": "2025-01-01T00:00:00Z",
+                    "referral": {
+                      "baseBrokerBps": 1,
+                      "commissionBps": 1,
+                      "discountBps": 1
+                    }
                   }
                 },
                 "schema": {
@@ -5025,7 +5160,7 @@
                 }
               }
             },
-            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH or FEES_INVALID) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or AFFILIATE_VAULT_UNKNOWN)."
+            "description": "INVALID_ARGUMENT (malformed request, AMOUNT_OUT_OF_RANGE, DECIMALS_MISMATCH, FEES_INVALID, REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED) or FAILED_PRECONDITION (ROUTE_UNSUPPORTED, ROUTE_SUSPENDED, PROTECTION_UNACHIEVABLE, AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN or REFERRAL_PARTNER_INACTIVE)."
           },
           "401": {
             "content": {

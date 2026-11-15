@@ -66,7 +66,9 @@
           "ASSISTANT_KEY_PROOF_INVALID",
           "ASSISTANT_KEY_REGISTRATION_EXPIRED",
           "ASSISTANT_KEY_DEADLINE_TOO_FAR",
-          "REPLAY_DETECTED"
+          "REPLAY_DETECTED",
+          "SOCIAL_ACCOUNT_COOLDOWN",
+          "SOCIAL_CHANGE_LIMIT_REACHED"
         ],
         "title": "AuthErrorCode",
         "type": "string"
@@ -195,7 +197,7 @@
             "title": "provider"
           },
           "providerUserId": {
-            "description": "Stable provider-side user identifier. Empty until verification succeeds,\n except for Telegram: while the status is AWAITING_CONFIRMATION, it is\n the numeric user ID of the Telegram account that submitted the code, the\n value ConfirmSocialVerification takes.",
+            "description": "Stable provider-side user identifier of the linked provider account. Empty\n while no account is linked. A restarted X/Twitter or Discord verification\n keeps the current link, and this value, until the new verification succeeds\n and replaces it. For Telegram, while the status is\n AWAITING_CONFIRMATION, it is the numeric user ID of the Telegram\n account that submitted the code, the value ConfirmSocialVerification takes.",
             "title": "provider_user_id",
             "type": "string"
           },
@@ -203,6 +205,11 @@
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "Time in UTC when the current challenge code was issued.",
             "title": "requested_at"
+          },
+          "retryAfter": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time in UTC from which a new verification may succeed, when this one\n failed with error_code SOCIAL_ACCOUNT_COOLDOWN or\n SOCIAL_CHANGE_LIMIT_REACHED. Empty otherwise.",
+            "title": "retry_after"
           },
           "status": {
             "$ref": "#/components/schemas/auth.v1.SocialVerificationStatus",
@@ -216,7 +223,7 @@
           },
           "verifiedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Time in UTC when verification succeeded. Empty until status is VERIFIED.",
+            "description": "Time in UTC when the linked provider account was last verified. Empty while\n no account is linked; kept, like provider_user_id, while a restarted\n verification runs.",
             "title": "verified_at"
           }
         },
@@ -286,7 +293,7 @@
       },
       "auth.v1.StartSocialVerificationRequest": {
         "additionalProperties": false,
-        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntelegram linking uses the direct message method\ntelegram linking does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
+        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge. A linked\n X/Twitter or Discord account stays linked until the new verification\n succeeds; then the newly verified account replaces it, which counts as the\n provider's one change per 30 days.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntelegram linking uses the direct message method\ntelegram linking does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
         "properties": {
           "handle": {
             "description": "Provider handle the user claims. Required for X/Twitter and omitted for\n Discord and Telegram, where the provider bot supplies the provider identity.\n A leading \"@\" is accepted and removed from X/Twitter handles.\nhandle must not contain '\u003c' or '\u003e'",
@@ -346,11 +353,11 @@
       },
       "auth.v1.UnlinkSocialAccountRequest": {
         "additionalProperties": false,
-        "description": "UnlinkSocialAccountRequest removes the caller's linked provider account, or\n cancels a link in progress.\nonly a telegram account can be unlinked",
+        "description": "UnlinkSocialAccountRequest removes the caller's linked provider account, or\n cancels a link in progress.",
         "properties": {
           "provider": {
             "$ref": "#/components/schemas/auth.v1.SocialProvider",
-            "description": "Provider account to unlink. Only TELEGRAM is accepted.",
+            "description": "Provider account to unlink.",
             "not": {
               "enum": [
                 0
@@ -389,6 +396,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -449,6 +474,7 @@
                     "provider": "TWITTER",
                     "providerUserId": "123456789012345678",
                     "requestedAt": "2025-01-01T00:00:00Z",
+                    "retryAfter": "2025-01-01T00:00:00Z",
                     "status": "PENDING_USER_ACTION",
                     "updatedAt": "2025-01-01T00:00:00Z",
                     "verifiedAt": "2025-01-01T00:00:00Z"
@@ -462,6 +488,16 @@
             "description": "Success"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Get Social Verification",
         "tags": [
           "Auth Service"
@@ -518,6 +554,7 @@
                     "provider": "TWITTER",
                     "providerUserId": "123456789012345678",
                     "requestedAt": "2025-01-01T00:00:00Z",
+                    "retryAfter": "2025-01-01T00:00:00Z",
                     "status": "PENDING_USER_ACTION",
                     "updatedAt": "2025-01-01T00:00:00Z",
                     "verifiedAt": "2025-01-01T00:00:00Z"
@@ -531,6 +568,11 @@
             "description": "Success"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Confirm Social Verification",
         "tags": [
           "Auth Service"
@@ -585,6 +627,7 @@
                     "provider": "TWITTER",
                     "providerUserId": "123456789012345678",
                     "requestedAt": "2025-01-01T00:00:00Z",
+                    "retryAfter": "2025-01-01T00:00:00Z",
                     "status": "PENDING_USER_ACTION",
                     "updatedAt": "2025-01-01T00:00:00Z",
                     "verifiedAt": "2025-01-01T00:00:00Z"
@@ -598,6 +641,11 @@
             "description": "Success"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Mark Social Verification Ready",
         "tags": [
           "Auth Service"
@@ -614,7 +662,7 @@
     },
     "/v1/auth/social/verification:start": {
       "post": {
-        "description": "Issue a challenge code for the caller to submit through the provider-specific verification flow.",
+        "description": "Issue a challenge code for the caller to submit through the provider-specific verification flow. While an X/Twitter or Discord account is linked, it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header; SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after.",
         "operationId": "SocialVerificationService_StartSocialVerification",
         "requestBody": {
           "content": {
@@ -657,6 +705,7 @@
                     "provider": "TWITTER",
                     "providerUserId": "123456789012345678",
                     "requestedAt": "2025-01-01T00:00:00Z",
+                    "retryAfter": "2025-01-01T00:00:00Z",
                     "status": "PENDING_USER_ACTION",
                     "updatedAt": "2025-01-01T00:00:00Z",
                     "verifiedAt": "2025-01-01T00:00:00Z"
@@ -670,6 +719,11 @@
             "description": "Success"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Start Social Verification",
         "tags": [
           "Auth Service"
@@ -679,14 +733,14 @@
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "auth.v1",
-        "x-poly-mfa-requirement": "none",
+        "x-poly-mfa-requirement": "conditional",
         "x-poly-request-type": "auth.v1.StartSocialVerificationRequest",
         "x-poly-response-type": "auth.v1.StartSocialVerificationResponse"
       }
     },
     "/v1/auth/social/verification:unlink": {
       "post": {
-        "description": "Unlink the caller's Telegram account, or cancel a Telegram link in progress. Repeating it changes nothing.",
+        "description": "Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link in progress. Repeating it changes nothing. An X/Twitter or Discord unlink needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header, and counts as the provider's one change per 30 days: SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after.",
         "operationId": "SocialVerificationService_UnlinkSocialAccount",
         "requestBody": {
           "content": {
@@ -724,6 +778,7 @@
                     "provider": "TWITTER",
                     "providerUserId": "123456789012345678",
                     "requestedAt": "2025-01-01T00:00:00Z",
+                    "retryAfter": "2025-01-01T00:00:00Z",
                     "status": "PENDING_USER_ACTION",
                     "updatedAt": "2025-01-01T00:00:00Z",
                     "verifiedAt": "2025-01-01T00:00:00Z"
@@ -737,6 +792,11 @@
             "description": "Success"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Unlink Social Account",
         "tags": [
           "Auth Service"
@@ -746,7 +806,7 @@
         ],
         "x-poly-error-catalog": "core:generic",
         "x-poly-error-proto-pkg": "auth.v1",
-        "x-poly-mfa-requirement": "none",
+        "x-poly-mfa-requirement": "conditional",
         "x-poly-request-type": "auth.v1.UnlinkSocialAccountRequest",
         "x-poly-response-type": "auth.v1.UnlinkSocialAccountResponse"
       }
