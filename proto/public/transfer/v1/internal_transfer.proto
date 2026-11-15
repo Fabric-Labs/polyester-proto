@@ -5,6 +5,7 @@ package transfer.v1;
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
 import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
 
@@ -44,7 +45,10 @@ message CreateInternalTransferRequest {
   }
 
   // Canonical public unified asset id for the asset being transferred.
-  uint32 asset_id = 5 [(buf.validate.field).uint32.gt = 0];
+  uint32 asset_id = 5 [
+    (buf.validate.field).uint32.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
 
   // Transfer amount in canonical 18-decimal unified asset units.
   // For example, 0.5 is encoded as 500000000000000000.
@@ -53,7 +57,8 @@ message CreateInternalTransferRequest {
   // Stable client-supplied idempotency key used to collapse safe retries.
   string idempotency_key = 7 [
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128
+    (buf.validate.field).string.max_len = 128,
+    (google.api.field_behavior) = REQUIRED
   ];
 }
 
@@ -128,6 +133,25 @@ enum ErrorCode {
   ERROR_CODE_NOT_FOUND = 26;
   // The request conflicts with existing state.
   ERROR_CODE_CONFLICT = 27;
+  // The dust quote is older than 30 seconds, unknown, or another account's.
+  ERROR_CODE_DUST_QUOTE_EXPIRED = 28;
+  // The dust conversion's payout fell more than 1% below its quote.
+  ERROR_CODE_DUST_PRICE_MOVED = 29;
+  // A quoted balance no longer converts as dust, or the payout rounds to zero.
+  ERROR_CODE_DUST_NOT_ELIGIBLE = 30;
+  // The account converted dust within the last 6 hours, or a conversion is
+  // still processing.
+  ERROR_CODE_DUST_WINDOW_ACTIVE = 31;
+  // The target asset's daily dust conversion limit is reached.
+  ERROR_CODE_DUST_DAILY_LIMIT = 32;
+  // Too many dust conversions are in progress. Retry shortly.
+  ERROR_CODE_DUST_BUSY = 33;
+  // The target asset cannot be paid now, or has no current price.
+  ERROR_CODE_DUST_TARGET_UNAVAILABLE = 34;
+  // A source balance moved since the quote: quote again.
+  ERROR_CODE_DUST_BALANCE_CHANGED = 35;
+  // The dust conversion could not complete. Nothing moved; quote again.
+  ERROR_CODE_DUST_CONVERSION_FAILED = 36;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.
@@ -176,6 +200,144 @@ message CreateInternalTransferResponse {
   // Authoritative lifecycle flow identifier. Use GetFlowById to read the flow;
   // its ledger settlement step links back through milestone_tx_ref.
   string flow_id = 10;
+}
+
+// InternalTransferBatchLeg is one transfer of a batch. It takes the fields of
+// CreateInternalTransferRequest except the idempotency key, which the batch
+// carries for all of its legs.
+message InternalTransferBatchLeg {
+  // Optional source public subaccount ID. When omitted, subaccount-scoped API
+  // keys use their bound subaccount; other callers use their authenticated
+  // root account. Legs of one batch may debit different source accounts.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+
+  oneof destination {
+    option (buf.validate.oneof).required = true;
+
+    // Destination root account public id.
+    fixed64 destination_account_id = 2 [(buf.validate.field).fixed64.gt = 0];
+    // Destination subaccount public id.
+    fixed64 destination_subaccount_id = 3 [(buf.validate.field).fixed64.gt = 0];
+    // Destination smart-account address.
+    string destination_smart_account_address = 4 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).string.max_len = 128
+    ];
+  }
+
+  // Canonical public unified asset id for the asset being transferred.
+  uint32 asset_id = 5 [
+    (buf.validate.field).uint32.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+
+  // Transfer amount in canonical 18-decimal unified asset units.
+  // For example, 0.5 is encoded as 500000000000000000.
+  polyester.type.v1.U128 amount_e18 = 6 [(buf.validate.field).required = true];
+}
+
+// BatchCreateInternalTransfersRequest submits up to 10 independent Trading to
+// Trading transfers under one idempotency key and one MFA check.
+message BatchCreateInternalTransfersRequest {
+  // Transfers to run, in order. At most 10 legs; each leg counts as one
+  // internal transfer against the caller's rate limit. Legs may repeat an asset,
+  // a source or a destination.
+  repeated InternalTransferBatchLeg legs = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 10
+  }];
+
+  // Stable client-supplied idempotency key used to collapse safe retries of
+  // the whole batch. It is scoped to the authenticated caller: the session's
+  // account, or the API key. A retry must send the same legs in the same
+  // order; different legs under the same key are refused.
+  string idempotency_key = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 128,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// InternalTransferBatchStatus is the outcome of a batch request as a whole.
+enum InternalTransferBatchStatus {
+  // Status was not specified.
+  BATCH_STATUS_UNSPECIFIED = 0;
+
+  // Every leg passed its checks and the batch was submitted. Legs run
+  // independently: read each leg's status.
+  BATCH_SUBMITTED = 1;
+
+  // At least one leg failed its checks, so no leg ran, no funds moved and no
+  // step-up verification was used. Failed legs carry their reason; the other
+  // legs are LEG_NOT_SUBMITTED.
+  BATCH_REFUSED = 2;
+}
+
+// InternalTransferBatchLegStatus is the outcome of one leg of a batch.
+enum InternalTransferBatchLegStatus {
+  // Status was not specified.
+  LEG_STATUS_UNSPECIFIED = 0;
+
+  // The leg's transfer was accepted and has a durable transfer identifier.
+  LEG_ACCEPTED = 1;
+
+  // The leg's outcome is not known yet. The transfer runs to its outcome
+  // without the caller: read it with GetInternalTransfer, or retry the batch
+  // with the same idempotency key.
+  LEG_PENDING = 2;
+
+  // The leg moved no funds; error_code gives the reason. A retry of the batch
+  // with the same idempotency key runs a submitted leg again.
+  LEG_REFUSED = 3;
+
+  // The leg did not run: its batch was refused, or the request ended before
+  // the leg started. A retry with the same idempotency key runs it.
+  LEG_NOT_SUBMITTED = 4;
+}
+
+// InternalTransferBatchLegResult is the outcome of one leg, in request order.
+message InternalTransferBatchLegResult {
+  // Zero-based position of the leg in the request.
+  uint32 leg_index = 1;
+  // Outcome of the leg.
+  InternalTransferBatchLegStatus status = 2;
+  // Stable server-owned request identifier of the leg's transfer. Use it with
+  // GetInternalTransfer. Empty while the leg has not been submitted.
+  string request_id = 3;
+  // Stable transfer identifier, set once the leg is accepted.
+  string transfer_id = 4;
+  // Authoritative lifecycle flow identifier, set once the leg is accepted.
+  string flow_id = 5;
+  // Acceptance timestamp in nanoseconds since epoch (server time), set once
+  // the leg is accepted.
+  uint64 accepted_at_ts_ns = 6;
+  // Echoed canonical public unified asset id.
+  uint32 asset_id = 7;
+  // Resolved asset code, set once the leg is submitted.
+  string asset_code = 8;
+  // Echoed transfer amount in canonical 18-decimal unified asset units.
+  polyester.type.v1.U128 amount_e18 = 9;
+  // Server-resolved destination summary, set once the leg is submitted.
+  ResolvedDestination destination = 10;
+  // Why the leg was refused, or why its outcome is not known yet. Unset for an
+  // accepted leg and for a leg that was not submitted.
+  ErrorCode error_code = 11;
+  // Human-readable description of error_code.
+  string error_message = 12;
+}
+
+// BatchCreateInternalTransfersResponse returns the outcome of every leg.
+message BatchCreateInternalTransfersResponse {
+  // Stable server-owned identifier of the batch request. Empty when the batch
+  // was refused.
+  string request_id = 1;
+  // Outcome of the batch as a whole.
+  InternalTransferBatchStatus status = 2;
+  // One result per requested leg, in request order.
+  repeated InternalTransferBatchLegResult legs = 3;
 }
 
 // GetInternalTransferRequest selects an accepted transfer from the source account.
@@ -244,6 +406,34 @@ service InternalTransferService {
         "root-owner transfers to explicitly whitelisted destinations "
         "accept recent MFA; delegated and other interactive transfers "
         "require fresh step-up."
+      tags: "Internal Transfers"
+    };
+  }
+
+  // Submit up to 10 Trading to Trading transfers authorized by one MFA check.
+  // Every leg passes the same checks as CreateInternalTransfer before any leg
+  // runs; if one fails, the whole batch is refused, nothing moves and no
+  // step-up is used. Legs then run independently, in order, and are not
+  // atomic: a leg can be refused, for example for insufficient balance, after
+  // earlier legs were accepted. The batch accepts recent MFA when the root
+  // owner moves funds between its own accounts or to explicitly whitelisted
+  // destinations; any other leg requires one fresh step-up for the whole
+  // batch. Each leg is its own transfer, readable with GetInternalTransfer.
+  rpc BatchCreateInternalTransfers(BatchCreateInternalTransfersRequest) returns (BatchCreateInternalTransfersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
+    option (google.api.http) = {
+      post: "/v1/trading/internal-transfers/batch"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Batch Create Internal Transfers"
+      description:
+        "Submit up to 10 independent Trading to Trading transfers "
+        "authorized by one MFA check. Every leg is checked before any "
+        "leg runs; legs then run in order and are not atomic, so a leg "
+        "can be refused after earlier legs were accepted."
       tags: "Internal Transfers"
     };
   }

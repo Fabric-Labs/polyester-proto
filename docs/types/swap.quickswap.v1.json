@@ -885,7 +885,7 @@
             "name": "index",
             "jsonName": "index",
             "number": 1,
-            "doc": "Zero-based position in detection order; stable for the QuickSwap's life.",
+            "doc": "Zero-based position in deposits, which lists deposits oldest first. Not\n stable: a deposit detected earlier can appear later, for example a\n dropped or replaced deposit that confirms after all, and then shifts the\n index of every deposit after it. Identify a deposit by tx_hash with\n tx_occurrence_index, not by index.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -1422,6 +1422,16 @@
             "name": "VAULT_ALLOWLIST_NOT_READY",
             "number": 53,
             "doc": "The vault's payout address allowlist cannot be changed yet: its\n on-chain protection is still being set up. Retry in a few minutes."
+          },
+          {
+            "name": "ROUTE_SUSPENDED",
+            "number": 54,
+            "doc": "The route is temporarily suspended: deposits on the source network or\n withdrawals on the destination network, as AssetChainVariant\n deposit_status and withdrawal_status SUSPENDED show. Quotes and creates\n are refused and nothing is bound to the key; QuickSwaps already created\n continue. Repeat the request once both are NORMAL again."
+          },
+          {
+            "name": "INVITE_VOID",
+            "number": 55,
+            "doc": "The invite is void: the member who sent it has left the broker or may no\n longer grant its role. Accepting it granted nothing and cancelled it; ask\n a member who may grant the role for a new invite. Invites voided by a\n member change are cancelled by that change and answer INVITE_NOT_FOUND."
           }
         ]
       }
@@ -3855,7 +3865,7 @@
           {
             "name": "PAYOUT_ROLLED_OVER",
             "number": 4,
-            "doc": "Nothing was paid, and the balance stays in the vault for the next run.\n reason is nothing_to_pay (no asset reached its minimum), below_minimum\n (an amount was below the least a withdrawal on its network pays),\n price_unavailable (the rule has a USD minimum and no current price\n valued an asset) or destination_cooling_down (the destination was added\n to the vault's external withdraw whitelist less than 24 hours ago). Each\n step carries the balance evaluated, its value and the minimum it was\n held to."
+            "doc": "Nothing was paid, and the balance stays in the vault for the next run.\n reason is nothing_to_pay (no asset reached its minimum), below_minimum\n (an amount was below the least a withdrawal on its network pays),\n price_unavailable (the rule has a USD minimum and no current price\n valued an asset), destination_cooling_down (the destination was added\n to the vault's external withdraw whitelist less than 24 hours ago) or\n route_suspended (withdrawals to the destination's network were\n suspended). Each\n step carries the balance evaluated, its value and the minimum it was\n held to."
           },
           {
             "name": "PAYOUT_HELD",
@@ -3913,7 +3923,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 5,
-            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
+            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), route_suspended (withdrawals to the destination's\n network were suspended; the balance stays for a later run),\n destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -4109,7 +4119,7 @@
             "name": "is_terminal",
             "jsonName": "isTerminal",
             "number": 5,
-            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Returns made directly for such deposits are not yet\n reported in withdrawals; RETURN_ONLY does not confirm a completed return.\n Read again if the end user reports such a deposit or needs the final\n retirement time.",
+            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Returns made directly for such deposits are not yet\n reported in withdrawals; RETURN_ONLY does not confirm a completed return.\n An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all\n becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user\n reports such a deposit or needs the final retirement time.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -4202,7 +4212,7 @@
             "name": "deposits",
             "jsonName": "deposits",
             "number": 17,
-            "doc": "Detected deposits, oldest first, at most 50.",
+            "doc": "Detected deposits, oldest first, at most 50. A deposit detected earlier\n can appear later and shift the others' index (see Deposit.index).",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.Deposit"
           },
@@ -4553,7 +4563,7 @@
     {
       "name": "swap.quickswap.v1.QuickSwapStatus",
       "kind": "enum",
-      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from\n any non-terminal status and is not terminal; a QuickSwap HELD with\n SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes. Accept status values added later; is_terminal is authoritative.",
+      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A deposit that is dropped\n or replaced on its network before it confirms brings no funds: the\n QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to\n AWAITING_DEPOSIT, the only status that moves back, and no longer shows\n that deposit. HELD can be\n entered from any non-terminal status and is not terminal; a QuickSwap HELD\n with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes, except that EXPIRED becomes HELD when a dropped or replaced\n deposit confirms after all (see EXPIRED). Accept status values added\n later; is_terminal is authoritative.",
       "enum": {
         "values": [
           {
@@ -4629,7 +4639,7 @@
           {
             "name": "EXPIRED",
             "number": 16,
-            "doc": "Terminal: the funding window ended without an eligible deposit\n (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address\n (DEPOSIT_ADDRESS_CONFLICT)."
+            "doc": "Terminal: the funding window ended without an eligible deposit\n (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address\n (DEPOSIT_ADDRESS_CONFLICT). With FUNDING_WINDOW_ENDED, terminal_at is\n funding_expires_at, also after a dropped or replaced deposit. If such a\n deposit confirms after all, its funds are held for review: the QuickSwap\n becomes HELD, with that deposit ON_HOLD, the one change of a terminal\n status."
           },
           {
             "name": "CLOSED",
@@ -7059,7 +7069,7 @@
             "name": "deposit_index",
             "jsonName": "depositIndex",
             "number": 3,
-            "doc": "Deposit whose funds this withdrawal moves.",
+            "doc": "Index (Deposit.index), in the same response, of the deposit whose funds\n this withdrawal moves. Not stable across reads, like Deposit.index.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"

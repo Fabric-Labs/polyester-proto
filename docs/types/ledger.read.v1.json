@@ -158,7 +158,7 @@
     {
       "name": "ledger.read.v1.BalanceSeries",
       "kind": "message",
-      "doc": "Columnar balance series payload (scaled integers).\n REST renders decimal strings from these values.",
+      "doc": "Columnar balance series payload.\n REST renders decimal strings from these values.",
       "message": {
         "fields": [
           {
@@ -178,14 +178,107 @@
             "protoRef": "ledger.v1.AccountCode"
           },
           {
-            "name": "balance_q",
-            "jsonName": "balanceQ",
-            "number": 3,
-            "doc": "Chart balance in asset units scaled by 1e7 (7 decimals).\n Values are downscaled from 18-decimal ledger balances for compact charting\n and align 1:1 with implicit timestamps.",
+            "name": "balance",
+            "jsonName": "balance",
+            "number": 4,
+            "doc": "Exact balance at each point at fixed 18-decimal ledger scale. Values align\n 1:1 with implicit timestamps.",
             "repeated": true,
-            "protoScalar": "uint64",
+            "protoRef": "polyester.type.v1.U128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.CreateStatementExportRequest",
+      "kind": "message",
+      "doc": "CreateStatementExportRequest asks for a whole-period statement file of one\n account.",
+      "message": {
+        "cel": [
+          {
+            "id": "create_statement_export.period_valid",
+            "message": "end_time must be after start_time and at most 366 days after it",
+            "expression": "this.end_time \u003e this.start_time \u0026\u0026 this.end_time - this.start_time \u003c= duration('8784h')"
+          }
+        ],
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The statement covers that one account only.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
             "jsonType": "string",
-            "format": "uint64"
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 2,
+            "doc": "Start of the statement period (UTC), inclusive: after\n 1970-01-01T00:00:00Z and no later than the request.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 3,
+            "doc": "End of the statement period (UTC), exclusive, by\n 2262-04-11T23:47:16Z. A period still open when the export is created\n ends at that instant; see StatementExport.complete_through.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time",
+            "validate": {
+              "required": true
+            }
+          },
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 4,
+            "doc": "Optional public unified asset ID. When unset/0, the statement covers\n every asset; an ID that names no asset is refused.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "idempotency_key",
+            "jsonName": "idempotencyKey",
+            "number": 5,
+            "doc": "Client-chosen key, 1 to 64 characters of letters, digits and `.`, `_`,\n `:` or `-`, unique per root account. Repeating a request with the same\n key returns the same export; the same key with different request fields\n is refused.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "required": true,
+              "string": {
+                "minLen": 1,
+                "maxLen": 64,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.CreateStatementExportResponse",
+      "kind": "message",
+      "doc": "CreateStatementExportResponse is the created or existing export.",
+      "message": {
+        "fields": [
+          {
+            "name": "export",
+            "jsonName": "export",
+            "number": 1,
+            "doc": "The export.",
+            "protoRef": "ledger.read.v1.StatementExport"
           }
         ]
       }
@@ -315,6 +408,31 @@
             "name": "ERROR_CODE_INVALID_SUBACCOUNT_ID",
             "number": 11,
             "doc": "subaccount_id is zero or not an encoded public subaccount identifier."
+          },
+          {
+            "name": "ERROR_CODE_IDEMPOTENCY_KEY_REUSED",
+            "number": 12,
+            "doc": "The idempotency key was used for a request with other fields."
+          },
+          {
+            "name": "ERROR_CODE_STATEMENT_EXPORT_LIMIT_REACHED",
+            "number": 13,
+            "doc": "The root account already has the most statement exports queued or being\n produced; wait for one to finish."
+          },
+          {
+            "name": "ERROR_CODE_STATEMENT_EXPORT_NOT_READY",
+            "number": 14,
+            "doc": "The statement export's file is not ready yet."
+          },
+          {
+            "name": "ERROR_CODE_STATEMENT_EXPORT_EXPIRED",
+            "number": 15,
+            "doc": "The statement export's file has expired and was deleted."
+          },
+          {
+            "name": "ERROR_CODE_STATEMENT_EXPORT_FAILED",
+            "number": 16,
+            "doc": "The statement export failed and has no file."
           }
         ]
       }
@@ -373,7 +491,7 @@
             "name": "end_time",
             "jsonName": "endTime",
             "number": 3,
-            "doc": "End of the statement period (UTC), exclusive. Movements recorded after\n the request are not included, so a period that has not ended yet covers\n the movements up to the time of the request.",
+            "doc": "End of the statement period (UTC), exclusive. The statement covers the\n period up to complete_through, which is at most end_time; see\n ExportStatementResponse.complete_through.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time",
@@ -394,7 +512,7 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 5,
-            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, asset filter and\n period; reuse it only with the same request fields.",
+            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, asset filter,\n period and complete_through; reuse it only with the same request fields.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -432,6 +550,15 @@
                 "maxLen": 512
               }
             }
+          },
+          {
+            "name": "complete_through",
+            "jsonName": "completeThrough",
+            "number": 3,
+            "doc": "The statement covers movements from start_time up to complete_through,\n exclusive: the earliest of end_time, the time of the first page's request\n and the time through which account history is complete when that page was\n requested, and never before start_time. Every page of one statement\n carries the same value. When it is before end_time, the movements from it\n to end_time appear in a statement requested later.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
           }
         ]
       }
@@ -854,6 +981,125 @@
       }
     },
     {
+      "name": "ledger.read.v1.GetStatementExportRequest",
+      "kind": "message",
+      "doc": "GetStatementExportRequest names one export.",
+      "message": {
+        "fields": [
+          {
+            "name": "export_id",
+            "jsonName": "exportId",
+            "number": 1,
+            "doc": "Public ID of the export.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.GetStatementExportResponse",
+      "kind": "message",
+      "doc": "GetStatementExportResponse is one export.",
+      "message": {
+        "fields": [
+          {
+            "name": "export",
+            "jsonName": "export",
+            "number": 1,
+            "doc": "The export.",
+            "protoRef": "ledger.read.v1.StatementExport"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.ListStatementExportsRequest",
+      "kind": "message",
+      "doc": "ListStatementExportsRequest selects one account's exports.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional public subaccount ID, selected as for\n CreateStatementExportRequest.subaccount_id.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 2,
+            "doc": "Maximum exports to return; 0 means 20. At most 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 3,
+            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account and sub-account scope.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.ListStatementExportsResponse",
+      "kind": "message",
+      "doc": "ListStatementExportsResponse is a page of exports, newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "exports",
+            "jsonName": "exports",
+            "number": 1,
+            "doc": "Exports, newest first.",
+            "repeated": true,
+            "protoRef": "ledger.read.v1.StatementExport"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "ledger.read.v1.ListTransfersRequest",
       "kind": "message",
       "message": {
@@ -1065,13 +1311,11 @@
             "format": "int32"
           },
           {
-            "name": "balance_q",
-            "jsonName": "balanceQ",
-            "number": 2,
-            "doc": "Combined Funding and Trading balance in asset units scaled by 1e7\n (7 decimals).",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
+            "name": "balance",
+            "jsonName": "balance",
+            "number": 4,
+            "doc": "Exact combined Funding and Trading balance across the master account and\n all owned subaccounts at fixed 18-decimal ledger scale.",
+            "protoRef": "polyester.type.v1.U128"
           },
           {
             "name": "equity_q",
@@ -1081,6 +1325,189 @@
             "protoScalar": "sint64",
             "jsonType": "string",
             "format": "sint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.StatementExport",
+      "kind": "message",
+      "doc": "StatementExport is a whole-period account statement produced in the\n background as one CSV file. The file is byte for byte the pages of\n ExportStatement for the same account, asset and period up to\n complete_through, concatenated: the header row, then every row, oldest\n first, in the columns ExportStatementResponse.csv documents.\n\n Download a READY file with an authenticated\n `GET /v1/statements/exports/{exportId}/file`, as the account that created\n it or one with the same access: it returns `text/csv` and supports HTTP\n `Range` requests. With `?redirect=true` it instead answers\n `307 Temporary Redirect` to a URL valid for 60 seconds. An EXPIRED export's\n file answers `410 Gone`.",
+      "message": {
+        "fields": [
+          {
+            "name": "export_id",
+            "jsonName": "exportId",
+            "number": 1,
+            "doc": "Public ID of the export.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Public subaccount ID of the account the statement covers; unset for a\n root account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 3,
+            "doc": "Start of the statement period (UTC), inclusive.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 4,
+            "doc": "End of the requested statement period (UTC), exclusive.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "asset_id",
+            "jsonName": "assetId",
+            "number": 5,
+            "doc": "Public unified asset ID the statement is limited to; 0 for every asset.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "idempotency_key",
+            "jsonName": "idempotencyKey",
+            "number": 6,
+            "doc": "Idempotency key of the request that created the export.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 7,
+            "doc": "Where the export is.",
+            "protoRef": "ledger.read.v1.StatementExportStatus"
+          },
+          {
+            "name": "complete_through",
+            "jsonName": "completeThrough",
+            "number": 8,
+            "doc": "End of what the file covers (UTC), exclusive: the earlier of end_time and\n the instant the export was created. Every movement recorded before the\n export was created and before complete_through is in the file.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "movements",
+            "jsonName": "movements",
+            "number": 9,
+            "doc": "Ledger movements written to the file so far; the file's total when\n READY.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "bytes",
+            "jsonName": "bytes",
+            "number": 10,
+            "doc": "Bytes written to the file so far; the file's size when READY.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "created_at",
+            "jsonName": "createdAt",
+            "number": 11,
+            "doc": "When the export was created.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "ready_at",
+            "jsonName": "readyAt",
+            "number": 12,
+            "doc": "When the file became READY; unset before.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 13,
+            "doc": "When a READY file expires, 7 days after ready_at; unset before READY.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "failure_reason",
+            "jsonName": "failureReason",
+            "number": 14,
+            "doc": "Why the export FAILED; unspecified otherwise.",
+            "protoRef": "ledger.read.v1.StatementExportFailureReason"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.StatementExportFailureReason",
+      "kind": "enum",
+      "doc": "StatementExportFailureReason is why a statement export failed.",
+      "enum": {
+        "values": [
+          {
+            "name": "STATEMENT_EXPORT_FAILURE_REASON_TOO_LARGE",
+            "number": 1,
+            "doc": "The period holds more than 4,000,000 ledger movements, the most one file\n holds. Split the period into shorter exports."
+          },
+          {
+            "name": "STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE",
+            "number": 2,
+            "doc": "The file could not be produced in time. Create a new export."
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger.read.v1.StatementExportStatus",
+      "kind": "enum",
+      "doc": "StatementExportStatus is where a statement export is.",
+      "enum": {
+        "values": [
+          {
+            "name": "STATEMENT_EXPORT_STATUS_QUEUED",
+            "number": 1,
+            "doc": "Accepted. The export waits until the account history covers its period\n and no other export of the account is being produced."
+          },
+          {
+            "name": "STATEMENT_EXPORT_STATUS_PROCESSING",
+            "number": 2,
+            "doc": "The file is being produced; movements and bytes count its progress."
+          },
+          {
+            "name": "STATEMENT_EXPORT_STATUS_READY",
+            "number": 3,
+            "doc": "The file is complete and can be downloaded until expires_at."
+          },
+          {
+            "name": "STATEMENT_EXPORT_STATUS_FAILED",
+            "number": 4,
+            "doc": "The file could not be produced; failure_reason says why."
+          },
+          {
+            "name": "STATEMENT_EXPORT_STATUS_EXPIRED",
+            "number": 5,
+            "doc": "The file was deleted at expires_at; create a new export for it."
           }
         ]
       }

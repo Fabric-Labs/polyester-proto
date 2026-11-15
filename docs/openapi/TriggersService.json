@@ -4,6 +4,10 @@
       "polyester.rest.TriggersService.Problem": {
         "description": "Trigger request error. Quota exhaustion returns HTTP 429 with RATE_LIMIT_EXCEEDED and rate-limit metadata.",
         "properties": {
+          "causeCode": {
+            "description": "For LADDER_LEVEL_REJECTED, why the refused order of the ladder can't be placed: the code that order would return as a single order, for example MAX_OPEN_ORDERS_PER_PAIR. Omitted for every other code.",
+            "type": "string"
+          },
           "code": {
             "description": "Stable trigger error code.",
             "type": "string"
@@ -11,6 +15,12 @@
           "detail": {
             "description": "Human-readable explanation using REST field names and decimal quote units for price tick sizes; clients must branch on code.",
             "type": "string"
+          },
+          "levelIndex": {
+            "description": "For LADDER_LEVEL_REJECTED, the refused order's zero-based index among the ladder's orders, the i of the violation's trigger.ladder.levels[i], so 0 is the first order. Omitted for every other code.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           },
           "status": {
             "description": "HTTP status code.",
@@ -362,7 +372,7 @@
             "description": "OCO to admit.",
             "properties": {
               "clientListId": {
-                "description": "Client OCO ID, 1 to 36 bytes, the create's idempotency key.",
+                "description": "Client OCO ID, the create's idempotency key: 1 to 36 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
                 "type": "string"
               },
               "qty": {
@@ -3340,7 +3350,7 @@
           "INTERNAL_ERROR": "An internal invariant or processing failure canceled the trigger.",
           "MARKET_HALTED": "The market was halted: the exchange ended every open trigger of the market, attached take-profit and stop-loss included, and released its reserved funds. The market's open orders were canceled at the same time. The market refuses new triggers until it trades again.",
           "MISSING_REASON_CODE": "The terminal state did not contain a cancellation reason.",
-          "OCO": "An attached leg ended because its parent order is terminal and another of the parent's legs made the last exit, leaving no position to protect.",
+          "OCO": "Another leg of the same OCO made the last exit, leaving no position to protect: a take-profit or stop-loss of an OCO created with CreateOco, once the OCO's whole quantity has traded, or an order's attached leg, once its parent order is terminal.",
           "PAIR_DRAIN_ATTACHED_LEG": "The market was disabled: the exchange ended the order's attached take-profit or stop-loss and canceled the order and its working exit.",
           "PAIR_DRAIN_LADDER": "The market was disabled: the exchange ended the ladder and canceled its resting levels, releasing their reserved funds.",
           "PAIR_DRAIN_TRIGGER": "The market was disabled: the exchange ended the stop-loss, take-profit or trailing stop and released its reserved funds. The market's open orders were canceled at the same time.",
@@ -3610,6 +3620,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -3635,7 +3663,7 @@
         "operationId": "TriggersService_ListTriggers",
         "parameters": [
           {
-            "description": "OCO client ID: lists both legs of the OCO created with it",
+            "description": "OCO client ID: lists both legs of the OCO created with it. 1 to 36 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "in": "query",
             "name": "clientListId",
             "required": false,
@@ -3660,7 +3688,7 @@
             "name": "orderListId",
             "required": false,
             "schema": {
-              "example": "2",
+              "example": "59VD7Las",
               "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "type": "string"
             }
@@ -3748,7 +3776,7 @@
                       "completedAt": "2025-01-01T00:00:00Z",
                       "createdAt": "2025-01-01T00:00:00Z",
                       "feeAsset": "QUOTE",
-                      "orderListId": "2",
+                      "orderListId": "59VD7Las",
                       "parentOrderId": "5USXJZmk",
                       "qty": "0.001",
                       "selfTradePreventionMode": "EXPIRE_MAKER",
@@ -3784,6 +3812,16 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "List Triggers",
         "tags": [
           "Triggers Service"
@@ -3858,7 +3896,7 @@
                 }
               }
             },
-            "description": "The trigger was not created: an invalid or refused request. code names the reason, and violations name the refused field, or the refused order of a ladder (LADDER_LEVEL_REJECTED)."
+            "description": "The trigger was not created: an invalid or refused request. code names the reason, and violations name the refused field, or the refused order of a ladder (LADDER_LEVEL_REJECTED), whose own code and zero-based index causeCode and levelIndex repeat."
           },
           "413": {
             "content": {
@@ -3871,6 +3909,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Create Trigger",
         "tags": [
           "Triggers Service"
@@ -3974,6 +4022,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Batch Cancel Triggers",
         "tags": [
           "Triggers Service"
@@ -4039,7 +4097,7 @@
                   "acceptedAt": "2025-01-01T00:00:00Z",
                   "acceptedAtTsNs": "1735689600000000000",
                   "clientListId": "value",
-                  "orderListId": "2",
+                  "orderListId": "59VD7Las",
                   "stopLossTriggerId": "59VD7Lar",
                   "takeProfitTriggerId": "59VD7Lar"
                 },
@@ -4071,6 +4129,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Create OCO",
         "tags": [
           "Triggers Service"
@@ -4095,7 +4163,7 @@
         "parameters": [
           {
             "description": "OCO ID (base58 public ID)\n\nPublic ID, as a base58 string.",
-            "example": "2",
+            "example": "59VD7Las",
             "in": "path",
             "name": "order_list_id",
             "required": true,
@@ -4121,7 +4189,7 @@
             "content": {
               "application/json": {
                 "example": {
-                  "orderListId": "2",
+                  "orderListId": "59VD7Las",
                   "status": "CREATED",
                   "tsNs": "1735689600000000000"
                 },
@@ -4133,6 +4201,16 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Cancel OCO",
         "tags": [
           "Triggers Service"
@@ -4195,6 +4273,16 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Cancel Trigger",
         "tags": [
           "Triggers Service"
@@ -4251,7 +4339,7 @@
                     "completedAt": "2025-01-01T00:00:00Z",
                     "createdAt": "2025-01-01T00:00:00Z",
                     "feeAsset": "QUOTE",
-                    "orderListId": "2",
+                    "orderListId": "59VD7Las",
                     "parentOrderId": "5USXJZmk",
                     "qty": "0.001",
                     "selfTradePreventionMode": "EXPIRE_MAKER",
@@ -4296,6 +4384,16 @@
             "description": "NOT_FOUND: the caller can read no trigger with this ID (none exists, it belongs to another account, or it is outside the selected subaccount)."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Get Trigger",
         "tags": [
           "Triggers Service"
@@ -4391,6 +4489,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Modify Trigger",
         "tags": [
           "Triggers Service"
@@ -4509,6 +4617,16 @@
             "description": "NOT_FOUND: the caller can read no trigger with this ID (none exists, it belongs to another account, or it is outside the selected subaccount), as for Get Trigger."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "List Trigger Events",
         "tags": [
           "Triggers Service"
@@ -4594,6 +4712,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Pause Trigger",
         "tags": [
           "Triggers Service"
@@ -4690,6 +4818,16 @@
             "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
         "summary": "Resume Trigger",
         "tags": [
           "Triggers Service"

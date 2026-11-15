@@ -1,0 +1,339 @@
+syntax = "proto3";
+
+package transfer.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+import "polyester/type/v1/u128.proto";
+import "transfer/v1/internal_transfer.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/transfer/v1;transferv1";
+
+// DustAssetEligibility says whether one Trading balance converts as dust, or
+// why not.
+enum DustAssetEligibility {
+  // No eligibility was supplied.
+  DUST_ASSET_ELIGIBILITY_UNSPECIFIED = 0;
+  // The whole available balance is dust and converts.
+  DUST_ASSET_ELIGIBILITY_ELIGIBLE = 1;
+  // The asset is the conversion's target; it is never a source.
+  DUST_ASSET_ELIGIBILITY_TARGET_ASSET = 2;
+  // An open market accepts an order for the balance at the current index price:
+  // sell it, or for an asset only quoted, spend it, instead.
+  DUST_ASSET_ELIGIBILITY_TRADABLE = 3;
+  // The balance is worth more than 10 USD.
+  DUST_ASSET_ELIGIBILITY_ABOVE_VALUE_LIMIT = 4;
+  // The asset, or the quote asset of a market it trades on, has no current
+  // index price. A balance without a price is never valued at zero.
+  DUST_ASSET_ELIGIBILITY_NO_PRICE = 5;
+  // The asset is not convertible.
+  DUST_ASSET_ELIGIBILITY_UNSUPPORTED_ASSET = 6;
+  // One conversion takes at most 20 balances, the highest-valued first; this
+  // one waits for the next conversion.
+  DUST_ASSET_ELIGIBILITY_SOURCE_LIMIT = 7;
+}
+
+// DustConversionState is a conversion's public state.
+enum DustConversionState {
+  // No state was supplied.
+  DUST_CONVERSION_STATE_UNSPECIFIED = 0;
+  // The conversion is accepted and being completed. It completes or is refused
+  // without any further request; read it again with GetDustConversion.
+  DUST_CONVERSION_STATE_PROCESSING = 1;
+  // Every source moved and the payout was credited, atomically.
+  DUST_CONVERSION_STATE_COMPLETED = 2;
+  // The conversion was refused: nothing moved. refusal_code says why. A refused
+  // conversion does not count toward the 6 hour conversion window.
+  DUST_CONVERSION_STATE_REFUSED = 3;
+}
+
+// DustBalance is one Trading balance judged for dust conversion.
+message DustBalance {
+  // Canonical public unified asset id.
+  uint32 asset_id = 1;
+  // The whole available Trading balance, in canonical 18-decimal units: what no
+  // open order or other reservation holds.
+  polyester.type.v1.U128 amount_e18 = 2;
+  // Whether the balance converts, and why not otherwise.
+  DustAssetEligibility eligibility = 3;
+  // The balance's USD value in 18-decimal fixed point, rounded down. Unset when
+  // the asset has no current price.
+  polyester.type.v1.U128 usd_value_e18 = 4;
+}
+
+// DustAssetPrice is the USD index price a quote or conversion used for one
+// asset.
+message DustAssetPrice {
+  // Canonical public unified asset id.
+  uint32 asset_id = 1;
+  // USD per whole asset unit: price_ticks / 10^price_scale.
+  int64 price_ticks = 2;
+  // Decimal scale of price_ticks.
+  uint32 price_scale = 3;
+  // Time of the oldest index observation the price used.
+  google.protobuf.Timestamp as_of = 4;
+}
+
+// DustSource is one balance a conversion moves.
+message DustSource {
+  // Canonical public unified asset id.
+  uint32 asset_id = 1;
+  // The whole quoted balance, in canonical 18-decimal units.
+  polyester.type.v1.U128 amount_e18 = 2;
+}
+
+// DustConversion is one conversion of an account's dust into a target asset.
+message DustConversion {
+  // Stable conversion identifier.
+  string conversion_id = 1;
+  // The quote the conversion converted.
+  string quote_id = 2;
+  // Current state.
+  DustConversionState state = 3;
+  // Why the conversion was refused; unspecified unless state is
+  // DUST_CONVERSION_STATE_REFUSED.
+  ErrorCode refusal_code = 4;
+  // Target asset id.
+  uint32 target_asset_id = 5;
+  // Sources, in asset id order.
+  repeated DustSource sources = 6;
+  // Payout in canonical 18-decimal target units, after the fee: the sources'
+  // value at the index prices current when the conversion was created.
+  polyester.type.v1.U128 payout_e18 = 7;
+  // The payout the quote showed, in canonical 18-decimal target units.
+  polyester.type.v1.U128 quoted_payout_e18 = 8;
+  // The fee taken from the payout, in canonical 18-decimal target units.
+  polyester.type.v1.U128 fee_e18 = 9;
+  // The fee in basis points.
+  uint32 fee_bps = 10;
+  // When the conversion was created.
+  google.protobuf.Timestamp created_at = 11;
+  // When the conversion completed; unset until state is
+  // DUST_CONVERSION_STATE_COMPLETED.
+  google.protobuf.Timestamp completed_at = 12;
+}
+
+// ListDustBalancesRequest judges the account's Trading balances for
+// conversion into one target.
+message ListDustBalancesRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys use
+  // their bound subaccount; other callers use their authenticated root account.
+  fixed64 subaccount_id = 1;
+  // Target asset id, one of the response's targets; 0 means the first target.
+  uint32 target_asset_id = 2;
+}
+
+// ListDustBalancesResponse lists every nonzero available Trading balance with
+// its eligibility and the payout the eligible ones would bring now. It
+// reserves nothing; QuoteDustConversion prices a conversion.
+message ListDustBalancesResponse {
+  // Target asset id the balances were judged for.
+  uint32 target_asset_id = 1;
+  // Every asset id the account can convert dust into, in preference order.
+  repeated uint32 targets = 2;
+  // The fee in basis points, taken from the payout.
+  uint32 fee_bps = 3;
+  // Every nonzero available Trading balance, in asset id order.
+  repeated DustBalance balances = 4;
+  // The eligible balances' total USD value in 18-decimal fixed point, rounded
+  // down.
+  polyester.type.v1.U128 gross_usd_e18 = 5;
+  // The payout they would bring now, in canonical 18-decimal target units,
+  // after the fee.
+  polyester.type.v1.U128 payout_e18 = 6;
+  // Whether the target can be paid now. When false, QuoteDustConversion is
+  // refused with ERROR_CODE_DUST_TARGET_UNAVAILABLE.
+  bool target_available = 7;
+}
+
+// QuoteDustConversionRequest prices the account's dust into one target.
+message QuoteDustConversionRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys use
+  // their bound subaccount; other callers use their authenticated root account.
+  fixed64 subaccount_id = 1;
+  // Target asset id, one of ListDustBalances' targets.
+  uint32 target_asset_id = 2 [(buf.validate.field).uint32.gt = 0];
+}
+
+// QuoteDustConversionResponse is a quote valid for 30 seconds.
+message QuoteDustConversionResponse {
+  // Quote identifier CreateDustConversion takes. Empty when no balance is
+  // eligible or their payout rounds to zero; balances still says why.
+  string quote_id = 1;
+  // After this time CreateDustConversion refuses the quote with
+  // ERROR_CODE_DUST_QUOTE_EXPIRED.
+  google.protobuf.Timestamp expires_at = 2;
+  // Target asset id.
+  uint32 target_asset_id = 3;
+  // The fee in basis points, taken from the payout.
+  uint32 fee_bps = 4;
+  // The sources' total USD value in 18-decimal fixed point, rounded down.
+  polyester.type.v1.U128 gross_usd_e18 = 5;
+  // Payout in canonical 18-decimal target units, after the fee, rounded down
+  // to the target's quantity precision.
+  polyester.type.v1.U128 payout_e18 = 6;
+  // Every nonzero available Trading balance, sources and others, in asset id
+  // order.
+  repeated DustBalance balances = 7;
+  // Prices of the sources and the target, in asset id order.
+  repeated DustAssetPrice prices = 8;
+}
+
+// CreateDustConversionRequest converts one quote.
+message CreateDustConversionRequest {
+  // Optional public subaccount ID; it must select the quote's account.
+  fixed64 subaccount_id = 1;
+  // Stable client-supplied key collapsing retries for the account.
+  string idempotency_key = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // Quote from QuoteDustConversion, at most 30 seconds old. A quote converts
+  // once.
+  string quote_id = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+}
+
+// CreateDustConversionResponse returns the conversion.
+message CreateDustConversionResponse {
+  // The conversion: completed, or still processing when its outcome is not
+  // known yet.
+  DustConversion conversion = 1;
+}
+
+// GetDustConversionRequest reads one of the account's conversions.
+message GetDustConversionRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys use
+  // their bound subaccount; other callers use their authenticated root account.
+  fixed64 subaccount_id = 1;
+  // Conversion identifier.
+  string conversion_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 39
+    pattern: "^[1-9][0-9]*$"
+  }];
+}
+
+// GetDustConversionResponse returns one conversion.
+message GetDustConversionResponse {
+  // The conversion.
+  DustConversion conversion = 1;
+}
+
+// ListDustConversionsRequest lists the account's conversions, newest first.
+message ListDustConversionsRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys use
+  // their bound subaccount; other callers use their authenticated root account.
+  fixed64 subaccount_id = 1;
+  // Maximum number of conversions to return: 0 means 20, at most 100.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, exclusive, keyset-backed cursor from a previous response, bound to
+  // the caller's account or subaccount and the newest-first creation order.
+  // Empty for the first page.
+  string page_token = 3 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListDustConversionsResponse returns one page of conversions, newest first.
+message ListDustConversionsResponse {
+  // Conversions ordered by creation time, newest first.
+  repeated DustConversion conversions = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// DustConversionService converts dust, Trading balances too small to trade, into
+// one target asset at index prices less a disclosed fee. A conversion moves
+// every source and credits the payout atomically, or moves nothing.
+//
+// Limits: a balance converts when no open market accepts an order for it and it
+// is worth at most 10 USD; one conversion takes at most 20 balances worth at
+// most 200 USD together; an account converts once every 6 hours, refused
+// conversions excepted; each target has a daily conversion limit.
+//
+// Quoting, converting and reading conversions need the CONVERT_DUST permission;
+// listing balances needs READ_BALANCES. Sessions have both for the root
+// account. On a subaccount, the role must be owner, admin, trader or leveraged
+// trader, and the subaccount's policy must grant CONVERT_DUST, which its
+// default policy does not. An API key's policy must grant CONVERT_DUST, and a
+// subaccount-scoped key's subaccount policy too. No step-up is required: the
+// value stays in the account.
+service DustConversionService {
+  option (polyester.api.docs_group) = "account";
+
+  // List the account's available Trading balances with their eligibility and
+  // the payout the eligible ones would bring now. Reserves nothing.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: INVALID_REQUEST (target_asset_id is not a target) or
+  //   INVALID_SUBACCOUNT_ID.
+  // - NOT_FOUND: SUBACCOUNT_NOT_FOUND.
+  // - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  rpc ListDustBalances(ListDustBalancesRequest) returns (ListDustBalancesResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+
+  // Price the account's dust into a target. The quote is valid for 30 seconds
+  // and reserves nothing.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: INVALID_REQUEST (target_asset_id is not a target) or
+  //   INVALID_SUBACCOUNT_ID.
+  // - FAILED_PRECONDITION: DUST_TARGET_UNAVAILABLE (the target cannot be paid
+  //   now or has no current price) or SOURCE_ACCOUNT_INACTIVE.
+  // - NOT_FOUND: SUBACCOUNT_NOT_FOUND.
+  // - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  rpc QuoteDustConversion(QuoteDustConversionRequest) returns (QuoteDustConversionResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+
+  // Convert a quote at current index prices, or return the conversion already
+  // made under the idempotency key. Every source must still be the whole
+  // available balance the quote showed. A refused conversion moves nothing.
+  //
+  // Errors:
+  // - FAILED_PRECONDITION: DUST_QUOTE_EXPIRED, DUST_PRICE_MOVED (the payout fell
+  //   more than 1% below the quote), DUST_NOT_ELIGIBLE (a quoted balance is no
+  //   longer dust), DUST_TARGET_UNAVAILABLE, DUST_BALANCE_CHANGED (a source
+  //   balance moved since the quote) or DUST_CONVERSION_FAILED.
+  // - RESOURCE_EXHAUSTED: DUST_WINDOW_ACTIVE (the account converted within the
+  //   last 6 hours or a conversion is still processing), DUST_DAILY_LIMIT or
+  //   DUST_BUSY (retry shortly).
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT (the key or the quote was used for
+  //   another conversion).
+  // - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE or ACCOUNT_SHARD_UNAVAILABLE; retry the
+  //   same request.
+  rpc CreateDustConversion(CreateDustConversionRequest) returns (CreateDustConversionResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+
+  // Read one of the account's conversions.
+  //
+  // Errors:
+  // - NOT_FOUND: NOT_FOUND.
+  // - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  rpc GetDustConversion(GetDustConversionRequest) returns (GetDustConversionResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+
+  // List the account's conversions, newest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: INVALID_REQUEST (malformed page_token).
+  // - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  rpc ListDustConversions(ListDustConversionsRequest) returns (ListDustConversionsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+  }
+}

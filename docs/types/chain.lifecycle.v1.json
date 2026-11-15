@@ -704,19 +704,10 @@
       "message": {
         "fields": [
           {
-            "name": "owner_account_id",
-            "jsonName": "ownerAccountId",
-            "number": 1,
-            "doc": "Public account identifier for the root account or subaccount the flow belongs to.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64"
-          },
-          {
             "name": "smart_account_address",
             "jsonName": "smartAccountAddress",
             "number": 34,
-            "doc": "Smart-account address for the account the flow belongs to. This is the\n stable address selector equivalent of `owner_account_id`; do not derive it\n from source or destination display addresses.",
+            "doc": "Smart-account address for the account the flow belongs to: the account's\n public identity, and the value of the ListFlows account selector. Do not\n derive it from source or destination display addresses.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -945,7 +936,7 @@
             "name": "participation",
             "jsonName": "participation",
             "number": 37,
-            "doc": "How the account selected by a ListFlows request takes part in this flow:\n `PARTICIPATION_OWNER` for a flow it owns, including a transfer it sent, or\n `PARTICIPATION_RECIPIENT` for a transfer it received from another account.\n Each flow appears once with one participation. Unspecified when the\n response is not scoped to an account, such as ListFlows without an account\n selector, flow detail, and realtime updates.",
+            "doc": "How the selected account takes part in this flow: `PARTICIPATION_OWNER`\n for a flow it owns, including a transfer it sent, or\n `PARTICIPATION_RECIPIENT` for a transfer it received from another account.\n Set by ListFlows with an account selector, ListAccountFlows and\n GetAccountFlow; each flow appears once with one participation.\n Unspecified when the response is not scoped to an account, such as\n ListFlows without an account selector, GetFlowById, ListFlowsByTx, and\n realtime updates.",
             "protoRef": "chain.lifecycle.v1.FlowParticipation"
           }
         ]
@@ -1155,15 +1146,6 @@
             "format": "uint64"
           },
           {
-            "name": "owner_account_id",
-            "jsonName": "ownerAccountId",
-            "number": 19,
-            "doc": "Public account or subaccount identifier that owns this flow.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64"
-          },
-          {
             "name": "smart_account_address",
             "jsonName": "smartAccountAddress",
             "number": 20,
@@ -1177,6 +1159,55 @@
             "number": 21,
             "doc": "Specific reason details when a notable outcome has a catalog entry.",
             "protoRef": "chain.zipper.v1.ZipperReasonDetails"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.lifecycle.v1.GetAccountFlowRequest",
+      "kind": "message",
+      "doc": "GetAccountFlowRequest selects one lifecycle flow of the authenticated\n account by its public flow id.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "flow_id",
+            "jsonName": "flowId",
+            "number": 2,
+            "doc": "Public, URL-safe lifecycle identifier returned by list responses.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 6,
+                "maxLen": 64,
+                "pattern": "^flow_[1-9A-HJ-NP-Za-km-z]+$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.lifecycle.v1.GetAccountFlowResponse",
+      "kind": "message",
+      "doc": "GetAccountFlowResponse returns one lifecycle flow of the account.",
+      "message": {
+        "fields": [
+          {
+            "name": "flow",
+            "jsonName": "flow",
+            "number": 1,
+            "doc": "Lifecycle flow detail for the requested flow id. Its summary's\n `participation` says whether the account owns the flow or receives it.",
+            "protoRef": "chain.lifecycle.v1.FlowDetailView"
           }
         ]
       }
@@ -1251,6 +1282,11 @@
             "name": "ZIPPER_COMPLIANCE_TRANSFERRED",
             "number": 105,
             "doc": "Zipper's compliance screening blocked the deposit (zipper_reason_code\n COMPLIANCE_ADDRESS_BLOCKED), and Zipper's compliance team then\n transferred the funds out on the deposit's source chain to an address of\n its choosing, not necessarily the depositor's. The flow ends FAILED, and\n its FAILED step's transaction is that transfer. Polyester records\n neither the recipient nor the amount. This is not a return or a refund."
+          },
+          {
+            "name": "ZIPPER_DEPOSIT_DELIVERED_TO_WALLET",
+            "number": 106,
+            "doc": "The deposit was delivered as zTokens to the account's own Polyester\n Chain wallet, the flow's `smart_account_address`, instead of its Funding\n or Trading balance: the destination did not accept the credit, for\n example because deposits into it were paused. The flow ends COMPLETED at\n the wallet, its destination domain is DOMAIN_ZIPPER, and its final\n step's transaction is the delivery. No Funding or Trading balance was\n credited; `destination_address` stays the deposit address."
           },
           {
             "name": "LEDGER_MIRROR_REJECTED",
@@ -1330,6 +1366,209 @@
             "name": "SOURCE_LIFECYCLE",
             "number": 5,
             "doc": "Lifecycle tracking itself, for an outcome it concludes when expected\n progress does not arrive in time, such as an unconfirmed deposit source\n transaction."
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.lifecycle.v1.ListAccountFlowsRequest",
+      "kind": "message",
+      "doc": "ListAccountFlowsRequest filters and paginates the authenticated account's\n lifecycle flow summaries.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The list covers that one account only.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 2,
+            "doc": "Maximum number of flows to return. Defaults to 100 when omitted; maximum is\n 500.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "500"
+              }
+            }
+          },
+          {
+            "name": "sort",
+            "jsonName": "sort",
+            "number": 3,
+            "doc": "Sort direction for the selected ordering timestamp.",
+            "protoRef": "chain.lifecycle.v1.Sort",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "flow_kind",
+            "jsonName": "flowKind",
+            "number": 4,
+            "doc": "Optional product flow kind filter. Unspecified includes all kinds.",
+            "protoRef": "chain.lifecycle.v1.FlowKind",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "flow_state",
+            "jsonName": "flowState",
+            "number": 5,
+            "doc": "Optional lifecycle state filter. Unspecified includes all states permitted\n by the selected scope.",
+            "protoRef": "chain.lifecycle.v1.FlowState",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "tx_ref",
+            "jsonName": "txRef",
+            "number": 6,
+            "doc": "Optional transaction reference filter. Matches source or latest activity\n transaction identifiers across supported chains.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "scope",
+            "jsonName": "scope",
+            "number": 7,
+            "doc": "Selects open, terminal, or all lifecycle flows.",
+            "protoRef": "chain.lifecycle.v1.ListScope",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "polyester_chain_ids",
+            "jsonName": "polyesterChainIds",
+            "number": 8,
+            "doc": "Optional Polyester Chain ids to include. Maximum 100 unique ids.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 100,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "zipped_asset_ids",
+            "jsonName": "zippedAssetIds",
+            "number": 9,
+            "doc": "Optional chain asset mapping ids to include. Maximum 100 unique ids.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 100,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "unified_asset_ids",
+            "jsonName": "unifiedAssetIds",
+            "number": 10,
+            "doc": "Optional unified asset ids to include. Maximum 100 unique ids.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 100,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 11,
+            "doc": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the authenticated account and the request it was\n returned for: the subaccount, participation, every filter including\n scope, sort direction, and ordering timestamp. Send it with that same\n request; only `limit` may change. A cursor sent with any other request or\n by another account is rejected as invalid.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
+          },
+          {
+            "name": "order_by",
+            "jsonName": "orderBy",
+            "number": 12,
+            "doc": "Timestamp used for ordering and pagination. Defaults to last activity.",
+            "protoRef": "chain.lifecycle.v1.ListOrderBy",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "participation",
+            "jsonName": "participation",
+            "number": 13,
+            "doc": "Optional participation filter. Unspecified returns the flows the account\n owns and the transfers it receives. `PARTICIPATION_OWNER` returns only the\n flows it owns, and `PARTICIPATION_RECIPIENT` only the transfers it\n receives from another account.",
+            "protoRef": "chain.lifecycle.v1.FlowParticipation",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.lifecycle.v1.ListAccountFlowsResponse",
+      "kind": "message",
+      "doc": "ListAccountFlowsResponse returns one page of the account's flow summaries.",
+      "message": {
+        "fields": [
+          {
+            "name": "flows",
+            "jsonName": "flows",
+            "number": 1,
+            "doc": "Flow summaries ordered by the selected timestamp, then public flow id. Sort\n direction is controlled by the request `sort` field.",
+            "repeated": true,
+            "protoRef": "chain.lifecycle.v1.FlowSummaryView"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
           }
         ]
       }
@@ -1436,15 +1675,14 @@
         "cel": [
           {
             "id": "chain_lifecycle.list_flows_participation_selector",
-            "message": "participation requires owner_account_id or smart_account_address",
-            "expression": "this.participation == 0 || has(this.owner_account_id) || has(this.smart_account_address)"
+            "message": "participation requires smart_account_address",
+            "expression": "this.participation == 0 || has(this.smart_account_address)"
           }
         ],
         "oneofs": [
           {
             "name": "account_selector",
             "fields": [
-              "owner_account_id",
               "smart_account_address"
             ]
           }
@@ -1519,21 +1757,6 @@
                 "definedOnly": true
               }
             }
-          },
-          {
-            "name": "owner_account_id",
-            "jsonName": "ownerAccountId",
-            "number": 7,
-            "doc": "Public account identifier for a main account or subaccount.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
-            "protoScalar": "fixed64",
-            "jsonType": "string",
-            "format": "fixed64",
-            "validate": {
-              "number": {
-                "gt": "0"
-              }
-            },
-            "oneof": "account_selector"
           },
           {
             "name": "smart_account_address",
@@ -1621,7 +1844,7 @@
             "name": "participation",
             "jsonName": "participation",
             "number": 14,
-            "doc": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `PARTICIPATION_OWNER` returns only the flows it owns, and\n `PARTICIPATION_RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+            "doc": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `PARTICIPATION_OWNER` returns only the flows it owns, and\n `PARTICIPATION_RECIPIENT` only the transfers it receives from another\n account. Requires `smart_account_address`.",
             "protoRef": "chain.lifecycle.v1.FlowParticipation",
             "validate": {
               "enum": {

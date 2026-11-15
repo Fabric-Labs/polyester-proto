@@ -390,6 +390,25 @@
                         ],
                         "type": "object"
                       },
+                      "referralFee": {
+                        "additionalProperties": false,
+                        "description": "Referral commissions, credited to referral partners rather than to a vault of the broker, in base units of 18 decimals.",
+                        "properties": {
+                          "baseUnits": {
+                            "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                            "type": "string"
+                          },
+                          "decimals": {
+                            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                            "format": "int32",
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "baseUnits"
+                        ],
+                        "type": "object"
+                      },
                       "serviceFee": {
                         "additionalProperties": false,
                         "description": "Service fees, credited to Polyester, in base units of 18 decimals.",
@@ -686,7 +705,7 @@
                       "type": "object"
                     },
                     "reason": {
-                      "description": "Machine-readable reason of a skipped or failed step: below_minimum, price_unavailable, rule_superseded, destination_not_whitelisted, destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago; the balance stays for a later run), destination_invalid, authority_revoked, withdrawal_refused, gateway_capacity_insufficient, withdrawal_released (the withdrawal was released before it was sent; nothing left the vault) or withdrawal_failed (the withdrawal ended without paying; close says where its funds went, see PAYOUT_FAILED); empty otherwise.",
+                      "description": "Machine-readable reason of a skipped or failed step: below_minimum, price_unavailable, rule_superseded, destination_not_whitelisted, destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago; the balance stays for a later run), route_suspended (withdrawals to the destination's network were suspended; the balance stays for a later run), destination_invalid, authority_revoked, withdrawal_refused, gateway_capacity_insufficient, withdrawal_released (the withdrawal was released before it was sent; nothing left the vault) or withdrawal_failed (the withdrawal ended without paying; close says where its funds went, see PAYOUT_FAILED); empty otherwise.",
                       "type": "string"
                     },
                     "refundedAmount": {
@@ -1276,7 +1295,7 @@
                         "type": "object"
                       },
                       "reason": {
-                        "description": "Machine-readable reason of a skipped or failed step: below_minimum, price_unavailable, rule_superseded, destination_not_whitelisted, destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago; the balance stays for a later run), destination_invalid, authority_revoked, withdrawal_refused, gateway_capacity_insufficient, withdrawal_released (the withdrawal was released before it was sent; nothing left the vault) or withdrawal_failed (the withdrawal ended without paying; close says where its funds went, see PAYOUT_FAILED); empty otherwise.",
+                        "description": "Machine-readable reason of a skipped or failed step: below_minimum, price_unavailable, rule_superseded, destination_not_whitelisted, destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago; the balance stays for a later run), route_suspended (withdrawals to the destination's network were suspended; the balance stays for a later run), destination_invalid, authority_revoked, withdrawal_refused, gateway_capacity_insufficient, withdrawal_released (the withdrawal was released before it was sent; nothing left the vault) or withdrawal_failed (the withdrawal ended without paying; close says where its funds went, see PAYOUT_FAILED); empty otherwise.",
                         "type": "string"
                       },
                       "refundedAmount": {
@@ -3270,7 +3289,7 @@
           "PAYOUT_IN_PROGRESS": "The run is under way; stage says where.",
           "PAYOUT_PAID": "The run paid: every asset with a payable amount was withdrawn and its withdrawal completed on its destination network.",
           "PAYOUT_PARTIALLY_PAID": "Some assets were paid and at least one failed; reason is the first failed asset's, and each step shows its own outcome.",
-          "PAYOUT_ROLLED_OVER": "Nothing was paid, and the balance stays in the vault for the next run. reason is nothing_to_pay (no asset reached its minimum), below_minimum (an amount was below the least a withdrawal on its network pays), price_unavailable (the rule has a USD minimum and no current price valued an asset) or destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago). Each step carries the balance evaluated, its value and the minimum it was held to."
+          "PAYOUT_ROLLED_OVER": "Nothing was paid, and the balance stays in the vault for the next run. reason is nothing_to_pay (no asset reached its minimum), below_minimum (an amount was below the least a withdrawal on its network pays), price_unavailable (the rule has a USD minimum and no current price valued an asset), destination_cooling_down (the destination was added to the vault's external withdraw whitelist less than 24 hours ago) or route_suspended (withdrawals to the destination's network were suspended). Each step carries the balance evaluated, its value and the minimum it was held to."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.PayoutStepState": {
@@ -3365,7 +3384,7 @@
           "CONFIRMING": "Waiting for source confirmations and deposit validation before credit.",
           "CREDITED": "The deposit is credited; execution is starting.",
           "EXECUTING": "The credited deposit is being traded.",
-          "EXPIRED": "Terminal: the funding window ended without an eligible deposit (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address (DEPOSIT_ADDRESS_CONFLICT).",
+          "EXPIRED": "Terminal: the funding window ended without an eligible deposit (FUNDING_WINDOW_ENDED), or the QuickSwap never got a deposit address (DEPOSIT_ADDRESS_CONFLICT). With FUNDING_WINDOW_ENDED, terminal_at is funding_expires_at, also after a dropped or replaced deposit. If such a deposit confirms after all, its funds are held for review: the QuickSwap becomes HELD, with that deposit ON_HOLD, the one change of a terminal status.",
           "HELD": "Funds are held for review. Not terminal: review resumes the QuickSwap or returns the funds, or, for SOURCE_SCREENING_BLOCKED, the QuickSwap can end CLOSED. reason says why when a specific reason applies, else it is REASON_UNSPECIFIED. The broker contacts Polyester broker support with the swap_id.",
           "PAYING_OUT": "Execution finished with destination output; withdrawals, including any partial refund or return, are in progress.",
           "PREPARING_DEPOSIT": "The deposit is being prepared for credit. Retries keep this status.",
@@ -3424,6 +3443,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -3563,6 +3600,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get broker",
         "tags": [
           "QuickSwap Broker"
@@ -3739,6 +3784,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get fee totals",
         "tags": [
           "QuickSwap Broker"
@@ -3889,6 +3942,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List API keys",
         "tags": [
           "QuickSwap Broker"
@@ -4039,6 +4100,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Create API key",
         "tags": [
           "QuickSwap Broker"
@@ -4177,6 +4243,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Revoke API key",
         "tags": [
           "QuickSwap Broker"
@@ -4359,6 +4430,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Rotate API key",
         "tags": [
           "QuickSwap Broker"
@@ -4404,7 +4483,7 @@
                       "broker": "value",
                       "brokerDisplayName": "value",
                       "createdAt": "2025-01-01T00:00:00Z",
-                      "inviteId": "1",
+                      "inviteId": "4338150126842797747",
                       "invitedByAccountId": "7563897446546",
                       "role": "OWNER"
                     }
@@ -4495,6 +4574,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List members",
         "tags": [
           "QuickSwap Broker"
@@ -4550,7 +4634,7 @@
                     "broker": "value",
                     "brokerDisplayName": "value",
                     "createdAt": "2025-01-01T00:00:00Z",
-                    "inviteId": "1",
+                    "inviteId": "4338150126842797747",
                     "invitedByAccountId": "7563897446546",
                     "role": "OWNER"
                   }
@@ -4653,6 +4737,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Invite member",
         "tags": [
           "QuickSwap Broker"
@@ -4779,6 +4868,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Remove member",
         "tags": [
           "QuickSwap Broker"
@@ -4926,6 +5020,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Set member role",
         "tags": [
           "QuickSwap Broker"
@@ -5065,6 +5164,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Transfer ownership",
         "tags": [
           "QuickSwap Broker"
@@ -5270,6 +5374,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List vault payout rules",
         "tags": [
           "QuickSwap Broker"
@@ -5509,6 +5621,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List payouts",
         "tags": [
           "QuickSwap Broker"
@@ -5687,6 +5807,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get payout",
         "tags": [
           "QuickSwap Broker"
@@ -5920,6 +6048,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List QuickSwaps",
         "tags": [
           "QuickSwap Broker"
@@ -6261,6 +6397,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get broker QuickSwap",
         "tags": [
           "QuickSwap Broker"
@@ -6366,6 +6510,10 @@
                             "baseUnits": "value",
                             "decimals": 36
                           },
+                          "referralFee": {
+                            "baseUnits": "value",
+                            "decimals": 36
+                          },
                           "serviceFee": {
                             "baseUnits": "value",
                             "decimals": 36
@@ -6460,6 +6608,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get broker stats",
         "tags": [
           "QuickSwap Broker"
@@ -6661,6 +6817,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List upcoming payouts",
         "tags": [
           "QuickSwap Broker"
@@ -6818,6 +6982,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List vault balances",
         "tags": [
           "QuickSwap Broker"
@@ -7024,6 +7196,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List vault ledger",
         "tags": [
           "QuickSwap Broker"
@@ -7171,6 +7351,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List affiliate vaults",
         "tags": [
           "QuickSwap Broker"
@@ -7328,6 +7516,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Create affiliate vault",
         "tags": [
           "QuickSwap Broker"
@@ -7463,6 +7659,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get affiliate vault",
         "tags": [
           "QuickSwap Broker"
@@ -7613,6 +7817,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List vault payout addresses",
         "tags": [
           "QuickSwap Broker"
@@ -7777,6 +7989,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List vault payout address changes",
         "tags": [
           "QuickSwap Broker"
@@ -7963,6 +8183,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Request vault payout address change",
         "tags": [
           "QuickSwap Broker"
@@ -8130,6 +8355,14 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BrokerApiKeyAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Set affiliate vault status",
         "tags": [
           "QuickSwap Broker"
@@ -8154,7 +8387,7 @@
         "parameters": [
           {
             "description": "Public invite ID, as a decimal string.",
-            "example": "1",
+            "example": "4338150126842797747",
             "in": "path",
             "name": "invite_id",
             "required": true,
@@ -8202,7 +8435,7 @@
                 }
               }
             },
-            "description": "INVALID_ARGUMENT: malformed request."
+            "description": "INVALID_ARGUMENT (malformed request) or FAILED_PRECONDITION (INVITE_VOID: the member who sent the invite has left the broker or may no longer grant its role; accepting it cancelled it)."
           },
           "401": {
             "content": {
@@ -8285,6 +8518,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Respond to invite",
         "tags": [
           "QuickSwap Broker"
@@ -8316,7 +8554,7 @@
                       "broker": "value",
                       "brokerDisplayName": "value",
                       "createdAt": "2025-01-01T00:00:00Z",
-                      "inviteId": "1",
+                      "inviteId": "4338150126842797747",
                       "invitedByAccountId": "7563897446546",
                       "role": "OWNER"
                     }
@@ -8387,6 +8625,11 @@
             "description": "DEADLINE_EXCEEDED: outcome unknown; retry the same request."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List my brokers",
         "tags": [
           "QuickSwap Broker"

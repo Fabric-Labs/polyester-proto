@@ -133,8 +133,8 @@ enum FlowParticipation {
 message ListFlowsRequest {
   option (buf.validate.message).cel = {
     id: "chain_lifecycle.list_flows_participation_selector"
-    message: "participation requires owner_account_id or smart_account_address"
-    expression: "this.participation == 0 || has(this.owner_account_id) || has(this.smart_account_address)"
+    message: "participation requires smart_account_address"
+    expression: "this.participation == 0 || has(this.smart_account_address)"
   };
 
   // Maximum number of flows to return. Defaults to 100 when omitted; maximum is
@@ -161,14 +161,11 @@ message ListFlowsRequest {
   // Selects open, terminal, or all lifecycle flows.
   ListScope scope = 6 [(buf.validate.field).enum.defined_only = true];
 
-  // Optional account selector. Omit to list across accounts the caller is
-  // allowed to inspect. A selected account matches the flows it owns and the
-  // transfers it receives from other accounts; use `participation` to narrow
-  // to one of them.
+  // Optional account selector. Omit to list the flows of every account. A
+  // selected smart account matches the flows it owns and the transfers it
+  // receives from other accounts; use `participation` to narrow to one of
+  // them.
   oneof account_selector {
-    // Public account identifier for a main account or subaccount.
-    fixed64 owner_account_id = 7 [(buf.validate.field).fixed64.gt = 0];
-
     // Smart account address on Polyester Chain.
     string smart_account_address = 8 [(buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true];
   }
@@ -214,7 +211,7 @@ message ListFlowsRequest {
   // returns the flows the account owns and the transfers it receives.
   // `PARTICIPATION_OWNER` returns only the flows it owns, and
   // `PARTICIPATION_RECIPIENT` only the transfers it receives from another
-  // account. Requires `owner_account_id` or `smart_account_address`.
+  // account. Requires `smart_account_address`.
   FlowParticipation participation = 14 [(buf.validate.field).enum.defined_only = true];
 }
 
@@ -226,6 +223,116 @@ message ListFlowsResponse {
 
   // Opaque cursor for the next page. Empty when no more results exist.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListAccountFlowsRequest filters and paginates the authenticated account's
+// lifecycle flow summaries.
+message ListAccountFlowsRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account. The list covers that one account only.
+  optional fixed64 subaccount_id = 1;
+
+  // Maximum number of flows to return. Defaults to 100 when omitted; maximum is
+  // 500.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 500];
+
+  // Sort direction for the selected ordering timestamp.
+  Sort sort = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional product flow kind filter. Unspecified includes all kinds.
+  FlowKind flow_kind = 4 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional lifecycle state filter. Unspecified includes all states permitted
+  // by the selected scope.
+  FlowState flow_state = 5 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional transaction reference filter. Matches source or latest activity
+  // transaction identifiers across supported chains.
+  string tx_ref = 6 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.(polyester.api.validation.v1.chain_tx_identifier) = true
+  ];
+
+  // Selects open, terminal, or all lifecycle flows.
+  ListScope scope = 7 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional Polyester Chain ids to include. Maximum 100 unique ids.
+  repeated uint32 polyester_chain_ids = 8 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Optional chain asset mapping ids to include. Maximum 100 unique ids.
+  repeated uint32 zipped_asset_ids = 9 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Optional unified asset ids to include. Maximum 100 unique ids.
+  repeated uint32 unified_asset_ids = 10 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 100
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+
+  // Opaque keyset cursor returned by a previous response. The cursor is
+  // exclusive and bound to the authenticated account and the request it was
+  // returned for: the subaccount, participation, every filter including
+  // scope, sort direction, and ordering timestamp. Send it with that same
+  // request; only `limit` may change. A cursor sent with any other request or
+  // by another account is rejected as invalid.
+  string page_token = 11 [(buf.validate.field).string.max_len = 512];
+
+  // Timestamp used for ordering and pagination. Defaults to last activity.
+  ListOrderBy order_by = 12 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional participation filter. Unspecified returns the flows the account
+  // owns and the transfers it receives. `PARTICIPATION_OWNER` returns only the
+  // flows it owns, and `PARTICIPATION_RECIPIENT` only the transfers it
+  // receives from another account.
+  FlowParticipation participation = 13 [(buf.validate.field).enum.defined_only = true];
+}
+
+// ListAccountFlowsResponse returns one page of the account's flow summaries.
+message ListAccountFlowsResponse {
+  // Flow summaries ordered by the selected timestamp, then public flow id. Sort
+  // direction is controlled by the request `sort` field.
+  repeated FlowSummaryView flows = 1;
+
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// GetAccountFlowRequest selects one lifecycle flow of the authenticated
+// account by its public flow id.
+message GetAccountFlowRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
+  optional fixed64 subaccount_id = 1;
+
+  // Public, URL-safe lifecycle identifier returned by list responses.
+  string flow_id = 2 [(buf.validate.field).string = {
+    min_len: 6
+    max_len: 64
+    pattern: "^flow_[1-9A-HJ-NP-Za-km-z]+$"
+  }];
+}
+
+// GetAccountFlowResponse returns one lifecycle flow of the account.
+message GetAccountFlowResponse {
+  // Lifecycle flow detail for the requested flow id. Its summary's
+  // `participation` says whether the account owns the flow or receives it.
+  FlowDetailView flow = 1;
 }
 
 // FlowTxMatchView is one lifecycle flow matched by a transaction-hash search.
@@ -282,9 +389,6 @@ message FlowTxMatchView {
 
   // Timestamp used for list ordering in milliseconds since epoch (UTC).
   uint64 last_activity_at_unix_ms = 18;
-
-  // Public account or subaccount identifier that owns this flow.
-  fixed64 owner_account_id = 19;
 
   // Smart account address on Polyester Chain when known.
   string smart_account_address = 20;
@@ -352,12 +456,9 @@ enum FlowStep {
 // FlowSummaryView is the compact lifecycle representation used by lists,
 // realtime updates, and the header of a detail view.
 message FlowSummaryView {
-  // Public account identifier for the root account or subaccount the flow belongs to.
-  fixed64 owner_account_id = 1;
-
-  // Smart-account address for the account the flow belongs to. This is the
-  // stable address selector equivalent of `owner_account_id`; do not derive it
-  // from source or destination display addresses.
+  // Smart-account address for the account the flow belongs to: the account's
+  // public identity, and the value of the ListFlows account selector. Do not
+  // derive it from source or destination display addresses.
   string smart_account_address = 34 [
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.(polyester.api.validation.v1.evm_address) = true
@@ -465,12 +566,14 @@ message FlowSummaryView {
   // flows.
   bool is_delayed = 36;
 
-  // How the account selected by a ListFlows request takes part in this flow:
-  // `PARTICIPATION_OWNER` for a flow it owns, including a transfer it sent, or
+  // How the selected account takes part in this flow: `PARTICIPATION_OWNER`
+  // for a flow it owns, including a transfer it sent, or
   // `PARTICIPATION_RECIPIENT` for a transfer it received from another account.
-  // Each flow appears once with one participation. Unspecified when the
-  // response is not scoped to an account, such as ListFlows without an account
-  // selector, flow detail, and realtime updates.
+  // Set by ListFlows with an account selector, ListAccountFlows and
+  // GetAccountFlow; each flow appears once with one participation.
+  // Unspecified when the response is not scoped to an account, such as
+  // ListFlows without an account selector, GetFlowById, ListFlowsByTx, and
+  // realtime updates.
   FlowParticipation participation = 37;
 }
 
@@ -720,36 +823,73 @@ message FlowDetailView {
 service LifecycleReadService {
   option (polyester.api.docs_group) = "chain";
 
-  // GetFlowById retrieves one lifecycle flow by public flow id.
+  // GetFlowById retrieves one lifecycle flow by public flow id. It finds only
+  // flows a chain transaction started, which carry `source_tx_hash`; a flow
+  // settled without one, such as a transfer between Trading accounts or a
+  // Trading withdrawal not yet sent to a chain, is not found. Its account
+  // reads it with GetAccountFlow.
   rpc GetFlowById(GetFlowByIdRequest) returns (GetFlowResponse) {
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/chain/flows/{flow_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Flow By Id"
-      description: "Retrieve one lifecycle flow by public flow id."
+      description: "Retrieve one lifecycle flow a chain transaction started by public flow id."
       tags: "Lifecycle"
     };
   }
 
   // ListFlows lists lifecycle flows with optional filters and keyset
-  // pagination.
+  // pagination. It lists only flows a chain transaction started, which carry
+  // `source_tx_hash`, and identifies accounts by smart account address. An
+  // account lists all of its own flows with ListAccountFlows.
   rpc ListFlows(ListFlowsRequest) returns (ListFlowsResponse) {
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/chain/flows"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Flows"
-      description: "List lifecycle flows with optional account, chain, asset, and state filters."
+      description: "List lifecycle flows a chain transaction started, with optional smart account, chain, asset, and state filters."
       tags: "Lifecycle"
     };
   }
 
-  // ListFlowsByTx lists lifecycle flows that reference a transaction hash.
+  // ListFlowsByTx lists lifecycle flows that reference a transaction hash. It
+  // finds only flows a chain transaction started.
   rpc ListFlowsByTx(ListFlowsByTxRequest) returns (ListFlowsByTxResponse) {
     option (polyester.api.public) = true;
     option (google.api.http) = {get: "/v1/chain/flows/by-tx/{tx_hash}/matches"};
     option (gnostic.openapi.v3.operation) = {
       summary: "List Flows By Tx"
-      description: "List lifecycle flows that reference a transaction hash."
+      description: "List lifecycle flows a chain transaction started that reference a transaction hash."
+      tags: "Lifecycle"
+    };
+  }
+
+  // ListAccountFlows lists the authenticated account's lifecycle flows with
+  // optional filters and keyset pagination: the flows it owns and the
+  // transfers it receives, including those no chain transaction started. API
+  // keys need the READ_FUNDING_FLOWS policy action.
+  rpc ListAccountFlows(ListAccountFlowsRequest) returns (ListAccountFlowsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/chain/account-flows"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Account Flows"
+      description: "List the account's own and received lifecycle flows, including those no chain transaction started. API keys need READ_FUNDING_FLOWS."
+      tags: "Lifecycle"
+    };
+  }
+
+  // GetAccountFlow retrieves one lifecycle flow the authenticated account owns
+  // or receives, including one no chain transaction started. A flow the
+  // account takes no part in is not found. API keys need the
+  // READ_FUNDING_FLOWS policy action.
+  rpc GetAccountFlow(GetAccountFlowRequest) returns (GetAccountFlowResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/chain/account-flows/{flow_id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Account Flow"
+      description: "Retrieve one lifecycle flow the account owns or receives by public flow id. API keys need READ_FUNDING_FLOWS."
       tags: "Lifecycle"
     };
   }

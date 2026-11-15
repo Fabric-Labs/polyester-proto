@@ -92,15 +92,14 @@ message GetBalanceHistoryRequest {
   repeated ledger.v1.AccountCode account_codes = 4;
 }
 
-// Columnar balance series payload (scaled integers).
+// Columnar balance series payload.
 // REST renders decimal strings from these values.
 message BalanceSeries {
   uint32 asset_id = 1; // public unified asset id
   ledger.v1.AccountCode account_code = 2; // account bucket
-  // Chart balance in asset units scaled by 1e7 (7 decimals).
-  // Values are downscaled from 18-decimal ledger balances for compact charting
-  // and align 1:1 with implicit timestamps.
-  repeated uint64 balance_q = 3;
+  // Exact balance at each point at fixed 18-decimal ledger scale. Values align
+  // 1:1 with implicit timestamps.
+  repeated polyester.type.v1.U128 balance = 4;
 }
 
 // GetBalanceHistoryResponse returns aligned balance chart series.
@@ -243,9 +242,9 @@ message PortfolioAccountEquity {
 message PortfolioAssetEquity {
   // Public unified asset ID.
   uint32 asset_id = 1;
-  // Combined Funding and Trading balance in asset units scaled by 1e7
-  // (7 decimals).
-  uint64 balance_q = 2;
+  // Exact combined Funding and Trading balance across the master account and
+  // all owned subaccounts at fixed 18-decimal ledger scale.
+  polyester.type.v1.U128 balance = 4;
   // Current equity in USDT scaled by 1e4 (4 decimals).
   sint64 equity_q = 3;
 }
@@ -413,16 +412,16 @@ message ExportStatementRequest {
   optional fixed64 subaccount_id = 1;
   // Start of the statement period (UTC), inclusive.
   google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
-  // End of the statement period (UTC), exclusive. Movements recorded after
-  // the request are not included, so a period that has not ended yet covers
-  // the movements up to the time of the request.
+  // End of the statement period (UTC), exclusive. The statement covers the
+  // period up to complete_through, which is at most end_time; see
+  // ExportStatementResponse.complete_through.
   google.protobuf.Timestamp end_time = 3 [(buf.validate.field).required = true];
   // Optional public unified asset ID. When unset/0, the statement covers every
   // asset.
   uint32 asset_id = 4;
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
-  // bound to the authenticated account, sub-account scope, asset filter and
-  // period; reuse it only with the same request fields.
+  // bound to the authenticated account, sub-account scope, asset filter,
+  // period and complete_through; reuse it only with the same request fields.
   string page_token = 5 [(buf.validate.field).string.max_len = 512];
 }
 
@@ -468,6 +467,13 @@ message ExportStatementResponse {
   string csv = 1;
   // Opaque cursor for the next page. Empty when no more results exist.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+  // The statement covers movements from start_time up to complete_through,
+  // exclusive: the earliest of end_time, the time of the first page's request
+  // and the time through which account history is complete when that page was
+  // requested, and never before start_time. Every page of one statement
+  // carries the same value. When it is before end_time, the movements from it
+  // to end_time appear in a statement requested later.
+  google.protobuf.Timestamp complete_through = 3;
 }
 
 // LedgerReadService exposes read-only ledger endpoints (balances, history, transfers).
@@ -545,6 +551,17 @@ enum ErrorCode {
   ERROR_CODE_UPSTREAM_ERROR = 10;
   // subaccount_id is zero or not an encoded public subaccount identifier.
   ERROR_CODE_INVALID_SUBACCOUNT_ID = 11;
+  // The idempotency key was used for a request with other fields.
+  ERROR_CODE_IDEMPOTENCY_KEY_REUSED = 12;
+  // The root account already has the most statement exports queued or being
+  // produced; wait for one to finish.
+  ERROR_CODE_STATEMENT_EXPORT_LIMIT_REACHED = 13;
+  // The statement export's file is not ready yet.
+  ERROR_CODE_STATEMENT_EXPORT_NOT_READY = 14;
+  // The statement export's file has expired and was deleted.
+  ERROR_CODE_STATEMENT_EXPORT_EXPIRED = 15;
+  // The statement export failed and has no file.
+  ERROR_CODE_STATEMENT_EXPORT_FAILED = 16;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.

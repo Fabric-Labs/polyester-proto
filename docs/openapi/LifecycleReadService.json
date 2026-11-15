@@ -507,15 +507,9 @@
             "description": "Product-facing reason for failed, dropped, or otherwise notable flows.",
             "title": "lifecycle_reason"
           },
-          "ownerAccountId": {
-            "description": "Public account identifier for the root account or subaccount the flow belongs to.\n\nPublic ID, as a base58 string.",
-            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
-            "title": "owner_account_id",
-            "type": "string"
-          },
           "participation": {
             "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
-            "description": "How the account selected by a ListFlows request takes part in this flow:\n `OWNER` for a flow it owns, including a transfer it sent, or\n `RECIPIENT` for a transfer it received from another account.\n Each flow appears once with one participation. Unspecified when the\n response is not scoped to an account, such as ListFlows without an account\n selector, flow detail, and realtime updates.",
+            "description": "How the selected account takes part in this flow: `OWNER`\n for a flow it owns, including a transfer it sent, or\n `RECIPIENT` for a transfer it received from another account.\n Set by ListFlows with an account selector, ListAccountFlows and\n GetAccountFlow; each flow appears once with one participation.\n Unspecified when the response is not scoped to an account, such as\n ListFlows without an account selector, GetFlowById, ListFlowsByTx, and\n realtime updates.",
             "title": "participation"
           },
           "polyesterChainId": {
@@ -537,7 +531,7 @@
             "title": "request_fee"
           },
           "smartAccountAddress": {
-            "description": "Smart-account address for the account the flow belongs to. This is the\n stable address selector equivalent of `owner_account_id`; do not derive it\n from source or destination display addresses.\naddress must be a valid 0x-prefixed account address",
+            "description": "Smart-account address for the account the flow belongs to: the account's\n public identity, and the value of the ListFlows account selector. Do not\n derive it from source or destination display addresses.\naddress must be a valid 0x-prefixed account address",
             "title": "smart_account_address",
             "type": "string"
           },
@@ -712,12 +706,6 @@
             "description": "Product-facing reason for failed, dropped, or otherwise notable flows.",
             "title": "lifecycle_reason"
           },
-          "ownerAccountId": {
-            "description": "Public account or subaccount identifier that owns this flow.\n\nPublic ID, as a base58 string.",
-            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
-            "title": "owner_account_id",
-            "type": "string"
-          },
           "polyesterChainId": {
             "description": "Polyester Chain id associated with this flow.",
             "title": "polyester_chain_id",
@@ -761,6 +749,19 @@
         "title": "FlowTxMatchView",
         "type": "object"
       },
+      "chain.lifecycle.v1.GetAccountFlowResponse": {
+        "additionalProperties": false,
+        "description": "GetAccountFlowResponse returns one lifecycle flow of the account.",
+        "properties": {
+          "flow": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowDetailView",
+            "description": "Lifecycle flow detail for the requested flow id. Its summary's\n `participation` says whether the account owns the flow or receives it.",
+            "title": "flow"
+          }
+        },
+        "title": "GetAccountFlowResponse",
+        "type": "object"
+      },
       "chain.lifecycle.v1.GetFlowResponse": {
         "additionalProperties": false,
         "description": "GetFlowResponse returns one lifecycle flow with summary, factual steps, and\n estimated timeline data when available.",
@@ -783,6 +784,7 @@
           "ZIPPER_WITHDRAW_EXECUTION_FAILED",
           "ZIPPER_DEPOSIT_REFUND_FAILED",
           "ZIPPER_COMPLIANCE_TRANSFERRED",
+          "ZIPPER_DEPOSIT_DELIVERED_TO_WALLET",
           "LEDGER_MIRROR_REJECTED",
           "LEDGER_MIRROR_TRANSFER_EXCEEDS_CREDITS",
           "LEDGER_MIRROR_TRANSFER_EXISTS",
@@ -808,6 +810,28 @@
         ],
         "title": "LifecycleSource",
         "type": "string"
+      },
+      "chain.lifecycle.v1.ListAccountFlowsResponse": {
+        "additionalProperties": false,
+        "description": "ListAccountFlowsResponse returns one page of the account's flow summaries.",
+        "properties": {
+          "flows": {
+            "description": "Flow summaries ordered by the selected timestamp, then public flow id. Sort\n direction is controlled by the request `sort` field.",
+            "items": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowSummaryView"
+            },
+            "title": "flows",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "maxLength": 512,
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListAccountFlowsResponse",
+        "type": "object"
       },
       "chain.lifecycle.v1.ListFlowsByTxResponse": {
         "additionalProperties": false,
@@ -1055,6 +1079,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -1074,9 +1116,521 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/chain/account-flows": {
+      "get": {
+        "description": "List the account's own and received lifecycle flows, including those no chain transaction started. API keys need READ_FUNDING_FLOWS.",
+        "operationId": "LifecycleReadService_ListAccountFlows",
+        "parameters": [
+          {
+            "description": "Optional product flow kind filter. Unspecified includes all kinds.",
+            "in": "query",
+            "name": "flowKind",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowKind",
+              "description": "Optional product flow kind filter. Unspecified includes all kinds.",
+              "example": "DEPOSIT",
+              "title": "flow_kind"
+            }
+          },
+          {
+            "description": "Optional lifecycle state filter. Unspecified includes all states permitted\n by the selected scope.",
+            "in": "query",
+            "name": "flowState",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowState",
+              "description": "Optional lifecycle state filter. Unspecified includes all states permitted\n by the selected scope.",
+              "example": "PENDING_SOURCE",
+              "title": "flow_state"
+            }
+          },
+          {
+            "description": "Maximum number of flows to return. Defaults to 100 when omitted; maximum is\n 500.",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "description": "Maximum number of flows to return. Defaults to 100 when omitted; maximum is\n 500.",
+              "example": 100,
+              "maximum": 500,
+              "title": "limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Timestamp used for ordering and pagination. Defaults to last activity.",
+            "in": "query",
+            "name": "orderBy",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.ListOrderBy",
+              "description": "Timestamp used for ordering and pagination. Defaults to last activity.",
+              "example": "LAST_ACTIVITY",
+              "title": "order_by"
+            }
+          },
+          {
+            "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the authenticated account and the request it was\n returned for: the subaccount, participation, every filter including\n scope, sort direction, and ordering timestamp. Send it with that same\n request; only `limit` may change. A cursor sent with any other request or\n by another account is rejected as invalid.",
+            "in": "query",
+            "name": "pageToken",
+            "schema": {
+              "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the authenticated account and the request it was\n returned for: the subaccount, participation, every filter including\n scope, sort direction, and ordering timestamp. Send it with that same\n request; only `limit` may change. A cursor sent with any other request or\n by another account is rejected as invalid.",
+              "maxLength": 512,
+              "title": "page_token",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional participation filter. Unspecified returns the flows the account\n owns and the transfers it receives. `OWNER` returns only the\n flows it owns, and `RECIPIENT` only the transfers it\n receives from another account.",
+            "in": "query",
+            "name": "participation",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
+              "description": "Optional participation filter. Unspecified returns the flows the account\n owns and the transfers it receives. `OWNER` returns only the\n flows it owns, and `RECIPIENT` only the transfers it\n receives from another account.",
+              "example": "OWNER",
+              "title": "participation"
+            }
+          },
+          {
+            "description": "Optional Polyester Chain ids to include. Maximum 100 unique ids.",
+            "in": "query",
+            "name": "polyesterChainIds",
+            "schema": {
+              "description": "Optional Polyester Chain ids to include. Maximum 100 unique ids.",
+              "example": [
+                1
+              ],
+              "items": {
+                "exclusiveMinimum": 0,
+                "maxItems": 100,
+                "type": "integer",
+                "uniqueItems": true
+              },
+              "maxItems": 100,
+              "title": "polyester_chain_ids",
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          {
+            "description": "Selects open, terminal, or all lifecycle flows.",
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.ListScope",
+              "description": "Selects open, terminal, or all lifecycle flows.",
+              "example": "ALL",
+              "title": "scope"
+            }
+          },
+          {
+            "description": "Sort direction for the selected ordering timestamp.",
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.Sort",
+              "description": "Sort direction for the selected ordering timestamp.",
+              "example": "NEWEST",
+              "title": "sort"
+            }
+          },
+          {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The list covers that one account only.\n\nPublic ID, as a base58 string.",
+            "in": "query",
+            "name": "subaccountId",
+            "schema": {
+              "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The list covers that one account only.",
+              "example": "45LUmqjT",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "title": "subaccount_id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional transaction reference filter. Matches source or latest activity\n transaction identifiers across supported chains.",
+            "in": "query",
+            "name": "txRef",
+            "schema": {
+              "description": "Optional transaction reference filter. Matches source or latest activity\n transaction identifiers across supported chains.\ntransaction identifier must be a valid EVM hash or chain-native printable id",
+              "example": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+              "title": "tx_ref",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional unified asset ids to include. Maximum 100 unique ids.",
+            "in": "query",
+            "name": "unifiedAssetIds",
+            "schema": {
+              "description": "Optional unified asset ids to include. Maximum 100 unique ids.",
+              "example": [
+                100
+              ],
+              "items": {
+                "exclusiveMinimum": 0,
+                "maxItems": 100,
+                "type": "integer",
+                "uniqueItems": true
+              },
+              "maxItems": 100,
+              "title": "unified_asset_ids",
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          {
+            "description": "Optional chain asset mapping ids to include. Maximum 100 unique ids.",
+            "in": "query",
+            "name": "zippedAssetIds",
+            "schema": {
+              "description": "Optional chain asset mapping ids to include. Maximum 100 unique ids.",
+              "example": [
+                100
+              ],
+              "items": {
+                "exclusiveMinimum": 0,
+                "maxItems": 100,
+                "type": "integer",
+                "uniqueItems": true
+              },
+              "maxItems": 100,
+              "title": "zipped_asset_ids",
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "flows": [
+                    {
+                      "amountE18": {
+                        "hi": "1",
+                        "lo": "1"
+                      },
+                      "assetIds": {
+                        "unifiedAssetId": 100,
+                        "zippedAssetId": 100
+                      },
+                      "currentProgress": {
+                        "approveCount": 1,
+                        "currentConfirmations": 1,
+                        "currentStepExpectedDurationMs": "1",
+                        "currentStepStartedAtUnixMs": "1",
+                        "rejectCount": 1,
+                        "requiredApprovals": 1,
+                        "requiredConfirmations": 1,
+                        "requiredRejections": 1,
+                        "validatorCount": 1
+                      },
+                      "currentStep": "SOURCE",
+                      "currentStepSequence": 1,
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "destinationDomain": "EXTERNAL_CHAIN",
+                      "estimatedCompletionUnixMs": "1",
+                      "flowId": "flow_7YWHMfk9JZeLMgZauHuiSxhJ",
+                      "flowKind": "DEPOSIT",
+                      "isDelayed": false,
+                      "isOpen": false,
+                      "isTerminal": false,
+                      "lastActivityAtUnixMs": "1",
+                      "latestLifecycleSource": "RELAYER",
+                      "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                      "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
+                      "participation": "OWNER",
+                      "polyesterChainId": 1,
+                      "progressTimeline": [
+                        {
+                          "expectedDurationMs": "1",
+                          "sequence": 1,
+                          "status": "COMPLETED",
+                          "step": "SOURCE"
+                        }
+                      ],
+                      "requestFee": {
+                        "amountE18": {
+                          "hi": "1",
+                          "lo": "1"
+                        },
+                        "assetIds": {
+                          "unifiedAssetId": 100,
+                          "zippedAssetId": 100
+                        },
+                        "recipientAddress": "0x3333333333333333333333333333333333333333",
+                        "status": "LOCKED"
+                      },
+                      "smartAccountAddress": "0x2222222222222222222222222222222222222222",
+                      "sourceAddress": "0x4444444444444444444444444444444444444444",
+                      "sourceDomain": "EXTERNAL_CHAIN",
+                      "sourceTxHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                      "startedAtUnixMs": "1",
+                      "terminalAtUnixMs": "1",
+                      "txOccurrenceIndex": "1",
+                      "updatedAtUnixMs": "1",
+                      "zipperReason": {
+                        "code": "DEPOSIT_WAIT_EXPIRED",
+                        "message": "value",
+                        "reasonId": "value"
+                      }
+                    }
+                  ],
+                  "nextPageToken": "eyJvZmZzZXQiOjIwMH0"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.ListAccountFlowsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
+        "summary": "List Account Flows",
+        "tags": [
+          "Lifecycle"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "chain.lifecycle.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "chain.lifecycle.v1.ListAccountFlowsRequest",
+        "x-poly-response-type": "chain.lifecycle.v1.ListAccountFlowsResponse"
+      }
+    },
+    "/v1/chain/account-flows/{flow_id}": {
+      "get": {
+        "description": "Retrieve one lifecycle flow the account owns or receives by public flow id. API keys need READ_FUNDING_FLOWS.",
+        "operationId": "LifecycleReadService_GetAccountFlow",
+        "parameters": [
+          {
+            "description": "Public, URL-safe lifecycle identifier returned by list responses.",
+            "example": "flow_7YWHMfk9JZeLMgZauHuiSxhJ",
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "description": "Public, URL-safe lifecycle identifier returned by list responses.",
+              "maxLength": 64,
+              "minLength": 6,
+              "pattern": "^flow_[1-9A-HJ-NP-Za-km-z]+$",
+              "title": "flow_id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.\n\nPublic ID, as a base58 string.",
+            "in": "query",
+            "name": "subaccountId",
+            "schema": {
+              "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
+              "example": "45LUmqjT",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "title": "subaccount_id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "flow": {
+                    "fromLiveState": false,
+                    "observedSteps": [
+                      {
+                        "activities": [
+                          {
+                            "amountE18": {
+                              "hi": "1",
+                              "lo": "1"
+                            },
+                            "approveCount": 1,
+                            "currentConfirmations": 1,
+                            "kind": "MINTED",
+                            "ledgerTransferId": "9155001234568",
+                            "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
+                            "lifecycleSource": "RELAYER",
+                            "occurredAtUnixMs": "1",
+                            "rejectCount": 1,
+                            "requiredApprovals": 1,
+                            "requiredConfirmations": 1,
+                            "requiredRejections": 1,
+                            "sequence": 1,
+                            "txChainId": 1,
+                            "txRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                            "validatorCount": 1,
+                            "zipperReason": {
+                              "code": "DEPOSIT_WAIT_EXPIRED",
+                              "message": "value",
+                              "reasonId": "value"
+                            }
+                          }
+                        ],
+                        "amountE18": {
+                          "hi": "1",
+                          "lo": "1"
+                        },
+                        "approveCount": 1,
+                        "assetIds": {
+                          "unifiedAssetId": 100,
+                          "zippedAssetId": 100
+                        },
+                        "blockTimeMovingAverageMs": "1",
+                        "currentConfirmations": 1,
+                        "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
+                        "lifecycleSource": "RELAYER",
+                        "milestoneTxChainId": 1,
+                        "milestoneTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                        "occurredAtUnixMs": "1",
+                        "polyesterChainId": 1,
+                        "refundAddress": "value",
+                        "rejectCount": 1,
+                        "requestFee": {
+                          "amountE18": {
+                            "hi": "1",
+                            "lo": "1"
+                          },
+                          "assetIds": {
+                            "unifiedAssetId": 100,
+                            "zippedAssetId": 100
+                          },
+                          "recipientAddress": "0x3333333333333333333333333333333333333333",
+                          "status": "LOCKED"
+                        },
+                        "requiredApprovals": 1,
+                        "requiredConfirmations": 1,
+                        "requiredRejections": 1,
+                        "sequence": 1,
+                        "step": "SOURCE",
+                        "validatorCount": 1,
+                        "zipperReason": {
+                          "code": "DEPOSIT_WAIT_EXPIRED",
+                          "message": "value",
+                          "reasonId": "value"
+                        }
+                      }
+                    ],
+                    "summary": {
+                      "amountE18": {
+                        "hi": "1",
+                        "lo": "1"
+                      },
+                      "assetIds": {
+                        "unifiedAssetId": 100,
+                        "zippedAssetId": 100
+                      },
+                      "currentProgress": {
+                        "approveCount": 1,
+                        "currentConfirmations": 1,
+                        "currentStepExpectedDurationMs": "1",
+                        "currentStepStartedAtUnixMs": "1",
+                        "rejectCount": 1,
+                        "requiredApprovals": 1,
+                        "requiredConfirmations": 1,
+                        "requiredRejections": 1,
+                        "validatorCount": 1
+                      },
+                      "currentStep": "SOURCE",
+                      "currentStepSequence": 1,
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "destinationDomain": "EXTERNAL_CHAIN",
+                      "estimatedCompletionUnixMs": "1",
+                      "flowId": "flow_7YWHMfk9JZeLMgZauHuiSxhJ",
+                      "flowKind": "DEPOSIT",
+                      "isDelayed": false,
+                      "isOpen": false,
+                      "isTerminal": false,
+                      "lastActivityAtUnixMs": "1",
+                      "latestLifecycleSource": "RELAYER",
+                      "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                      "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
+                      "participation": "OWNER",
+                      "polyesterChainId": 1,
+                      "progressTimeline": [
+                        {
+                          "expectedDurationMs": "1",
+                          "sequence": 1,
+                          "status": "COMPLETED",
+                          "step": "SOURCE"
+                        }
+                      ],
+                      "requestFee": {
+                        "amountE18": {
+                          "hi": "1",
+                          "lo": "1"
+                        },
+                        "assetIds": {
+                          "unifiedAssetId": 100,
+                          "zippedAssetId": 100
+                        },
+                        "recipientAddress": "0x3333333333333333333333333333333333333333",
+                        "status": "LOCKED"
+                      },
+                      "smartAccountAddress": "0x2222222222222222222222222222222222222222",
+                      "sourceAddress": "0x4444444444444444444444444444444444444444",
+                      "sourceDomain": "EXTERNAL_CHAIN",
+                      "sourceTxHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+                      "startedAtUnixMs": "1",
+                      "terminalAtUnixMs": "1",
+                      "txOccurrenceIndex": "1",
+                      "updatedAtUnixMs": "1",
+                      "zipperReason": {
+                        "code": "DEPOSIT_WAIT_EXPIRED",
+                        "message": "value",
+                        "reasonId": "value"
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.GetAccountFlowResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
+        "summary": "Get Account Flow",
+        "tags": [
+          "Lifecycle"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "chain.lifecycle.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "chain.lifecycle.v1.GetAccountFlowRequest",
+        "x-poly-response-type": "chain.lifecycle.v1.GetAccountFlowResponse"
+      }
+    },
     "/v1/chain/flows": {
       "get": {
-        "description": "List lifecycle flows with optional account, chain, asset, and state filters.",
+        "description": "List lifecycle flows a chain transaction started, with optional smart account, chain, asset, and state filters.",
         "operationId": "LifecycleReadService_ListFlows",
         "parameters": [
           {
@@ -1125,18 +1679,6 @@
             }
           },
           {
-            "description": "Public account identifier for a main account or subaccount.\n\nPublic ID, as a base58 string.",
-            "in": "query",
-            "name": "ownerAccountId",
-            "schema": {
-              "description": "Public account identifier for a main account or subaccount.",
-              "example": "4Rh4iXdT",
-              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
-              "title": "owner_account_id",
-              "type": "string"
-            }
-          },
-          {
             "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the request it was returned for: the account\n selector, participation, every filter including scope, sort direction,\n and ordering timestamp. Send it with that same request; only `limit` may\n change. A cursor sent with any other request is rejected as invalid.",
             "in": "query",
             "name": "pageToken",
@@ -1148,12 +1690,12 @@
             }
           },
           {
-            "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+            "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `smart_account_address`.",
             "in": "query",
             "name": "participation",
             "schema": {
               "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
-              "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+              "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `OWNER` returns only the flows it owns, and\n `RECIPIENT` only the transfers it receives from another\n account. Requires `smart_account_address`.",
               "example": "OWNER",
               "title": "participation"
             }
@@ -1196,6 +1738,7 @@
             "name": "smartAccountAddress",
             "schema": {
               "description": "Smart account address on Polyester Chain.\naddress must be a valid 0x-prefixed account address",
+              "example": "0x2222222222222222222222222222222222222222",
               "title": "smart_account_address",
               "type": "string"
             }
@@ -1305,7 +1848,6 @@
                       "latestLifecycleSource": "RELAYER",
                       "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
-                      "ownerAccountId": "3CoG5WFgvKE",
                       "participation": "OWNER",
                       "polyesterChainId": 1,
                       "progressTimeline": [
@@ -1368,7 +1910,7 @@
     },
     "/v1/chain/flows/by-tx/{tx_hash}/matches": {
       "get": {
-        "description": "List lifecycle flows that reference a transaction hash.",
+        "description": "List lifecycle flows a chain transaction started that reference a transaction hash.",
         "operationId": "LifecycleReadService_ListFlowsByTx",
         "parameters": [
           {
@@ -1443,7 +1985,6 @@
                       "lastActivityAtUnixMs": "1",
                       "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
-                      "ownerAccountId": "3FzEKXwQ36p",
                       "polyesterChainId": 1,
                       "smartAccountAddress": "0x2222222222222222222222222222222222222222",
                       "sourceAddress": "0x4444444444444444444444444444444444444444",
@@ -1483,7 +2024,7 @@
     },
     "/v1/chain/flows/{flow_id}": {
       "get": {
-        "description": "Retrieve one lifecycle flow by public flow id.",
+        "description": "Retrieve one lifecycle flow a chain transaction started by public flow id.",
         "operationId": "LifecycleReadService_GetFlowById",
         "parameters": [
           {
@@ -1617,7 +2158,6 @@
                       "latestLifecycleSource": "RELAYER",
                       "latestTxRef": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "lifecycleReason": "ZIPPER_VALIDATION_REJECTED",
-                      "ownerAccountId": "3Lp9vhxH2NP",
                       "participation": "OWNER",
                       "polyesterChainId": 1,
                       "progressTimeline": [

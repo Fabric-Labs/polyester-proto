@@ -1,6 +1,20 @@
 {
   "types": [
     {
+      "name": "ai.v1.AccountSelection",
+      "kind": "enum",
+      "doc": "AccountSelection says whether a message's run reads an account at all.",
+      "enum": {
+        "values": [
+          {
+            "name": "ACCOUNT_SELECTION_NONE",
+            "number": 1,
+            "doc": "The run reads no account: it answers about the markets and Polyester\n only. subaccount_id must be omitted."
+          }
+        ]
+      }
+    },
+    {
       "name": "ai.v1.ApprovalDecision",
       "kind": "enum",
       "doc": "ApprovalDecision is the user's answer to an approval request.",
@@ -258,6 +272,14 @@
             "number": 4,
             "doc": "ACTIVE or DISABLED.",
             "protoRef": "ai.v1.AssistantKeyState"
+          },
+          {
+            "name": "label",
+            "jsonName": "label",
+            "number": 5,
+            "doc": "Name of the key's subaccount, as its owner set it. Returned only when\n ListAssistantKeys asks for ASSISTANT_KEY_VIEW_FULL. Empty for the main\n account, for a subaccount without a name, and when the name could not be\n read: the keys are listed either way.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -300,6 +322,20 @@
             "name": "DISABLED",
             "number": 2,
             "doc": "The key was disabled when the assistant last checked it. The assistant\n keeps it and uses it again once it is enabled."
+          }
+        ]
+      }
+    },
+    {
+      "name": "ai.v1.AssistantKeyView",
+      "kind": "enum",
+      "doc": "AssistantKeyView selects how much of each assistant key ListAssistantKeys\n returns.",
+      "enum": {
+        "values": [
+          {
+            "name": "ASSISTANT_KEY_VIEW_FULL",
+            "number": 1,
+            "doc": "Everything in the default view, plus each key's account name (label)."
           }
         ]
       }
@@ -1413,7 +1449,20 @@
       "kind": "message",
       "doc": "ListAssistantKeysRequest lists the assistant keys the assistant holds.",
       "message": {
-        "fields": []
+        "fields": [
+          {
+            "name": "view",
+            "jsonName": "view",
+            "number": 1,
+            "doc": "How much of each key to return. Omit it for the default view, without\n account names; ASSISTANT_KEY_VIEW_FULL adds each key's account name.",
+            "protoRef": "ai.v1.AssistantKeyView",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -2947,6 +2996,11 @@
             "id": "send_message.unique_destinations",
             "message": "each destination id must be unique",
             "expression": "this.destinations.map(d, d.id).unique()"
+          },
+          {
+            "id": "send_message.no_account_without_subaccount",
+            "message": "subaccount_id must be omitted when account_selection is ACCOUNT_SELECTION_NONE",
+            "expression": "this.account_selection != 1 || !has(this.subaccount_id)"
           }
         ],
         "fields": [
@@ -2995,7 +3049,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 4,
-            "doc": "Trading account (subaccount) the run reads and acts on. It must be one\n the caller's account owns; any other value, also one that does not\n exist, is INVALID_ARGUMENT. Omit it for the main account: the run then\n reads the main account (its balances, funding included, every trading\n account with its equity, API keys, price alerts, fee rates and\n permissions) and places, changes or cancels no order, trigger or swap;\n asked to trade, it asks the user to select a trading account. It is part\n of the request the idempotency key covers.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Trading account (subaccount) the run reads and acts on. It must be one\n the caller's account owns; any other value, also one that does not\n exist, is INVALID_ARGUMENT. Omit it for the main account (unless\n account_selection is ACCOUNT_SELECTION_NONE): the run then\n reads the main account (its balances, funding included, every trading\n account with its equity, API keys, price alerts, fee rates and\n permissions) and places, changes or cancels no order, trigger or swap;\n asked to trade, it asks the user to select a trading account. It is part\n of the request the idempotency key covers.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -3036,6 +3090,18 @@
               "repeated": {
                 "maxItems": 8,
                 "unique": true
+              }
+            }
+          },
+          {
+            "name": "account_selection",
+            "jsonName": "accountSelection",
+            "number": 8,
+            "doc": "Whether the run reads an account. Omit it to read the account\n subaccount_id names, or the main account. ACCOUNT_SELECTION_NONE for a\n run that reads no account, such as a client whose user has not given the\n assistant access to any account: subaccount_id must then be omitted. It\n is part of the request the idempotency key covers.",
+            "protoRef": "ai.v1.AccountSelection",
+            "validate": {
+              "enum": {
+                "definedOnly": true
               }
             }
           }

@@ -1,6 +1,15 @@
 {
   "components": {
     "schemas": {
+      "ai.v1.AccountSelection": {
+        "description": "AccountSelection says whether a message's run reads an account at all.",
+        "enum": [
+          "ACCOUNT_SELECTION_UNSPECIFIED",
+          "ACCOUNT_SELECTION_NONE"
+        ],
+        "title": "AccountSelection",
+        "type": "string"
+      },
       "ai.v1.ApprovalDecision": {
         "description": "ApprovalDecision is the user's answer to an approval request.",
         "enum": [
@@ -236,6 +245,11 @@
             "title": "key_id",
             "type": "string"
           },
+          "label": {
+            "description": "Name of the key's subaccount, as its owner set it. Returned only when\n ListAssistantKeys asks for ASSISTANT_KEY_VIEW_FULL. Empty for the main\n account, for a subaccount without a name, and when the name could not be\n read: the keys are listed either way.",
+            "title": "label",
+            "type": "string"
+          },
           "publicKeyEd25519": {
             "description": "Ed25519 public key, 32 bytes.",
             "format": "byte",
@@ -288,6 +302,15 @@
           "DISABLED"
         ],
         "title": "AssistantKeyState",
+        "type": "string"
+      },
+      "ai.v1.AssistantKeyView": {
+        "description": "AssistantKeyView selects how much of each assistant key ListAssistantKeys\n returns.",
+        "enum": [
+          "ASSISTANT_KEY_VIEW_UNSPECIFIED",
+          "ASSISTANT_KEY_VIEW_FULL"
+        ],
+        "title": "AssistantKeyView",
         "type": "string"
       },
       "ai.v1.AttachedExit": {
@@ -1041,6 +1064,13 @@
       "ai.v1.ListAssistantKeysRequest": {
         "additionalProperties": false,
         "description": "ListAssistantKeysRequest lists the assistant keys the assistant holds.",
+        "properties": {
+          "view": {
+            "$ref": "#/components/schemas/ai.v1.AssistantKeyView",
+            "description": "How much of each key to return. Omit it for the default view, without\n account names; ASSISTANT_KEY_VIEW_FULL adds each key's account name.",
+            "title": "view"
+          }
+        },
         "title": "ListAssistantKeysRequest",
         "type": "object"
       },
@@ -2373,8 +2403,13 @@
       },
       "ai.v1.SendMessageRequest": {
         "additionalProperties": false,
-        "description": "SendMessageRequest sends the caller's message and starts a run that answers\n it.\neach destination id must be unique",
+        "description": "SendMessageRequest sends the caller's message and starts a run that answers\n it.\nsubaccount_id must be omitted when account_selection is ACCOUNT_SELECTION_NONE\neach destination id must be unique",
         "properties": {
+          "accountSelection": {
+            "$ref": "#/components/schemas/ai.v1.AccountSelection",
+            "description": "Whether the run reads an account. Omit it to read the account\n subaccount_id names, or the main account. ACCOUNT_SELECTION_NONE for a\n run that reads no account, such as a client whose user has not given the\n assistant access to any account: subaccount_id must then be omitted. It\n is part of the request the idempotency key covers.",
+            "title": "account_selection"
+          },
           "conversationId": {
             "description": "Conversation to continue. Omit to start a new conversation.",
             "exclusiveMinimum": 0,
@@ -2417,7 +2452,7 @@
             "title": "page"
           },
           "subaccountId": {
-            "description": "Trading account (subaccount) the run reads and acts on. It must be one\n the caller's account owns; any other value, also one that does not\n exist, is INVALID_ARGUMENT. Omit it for the main account: the run then\n reads the main account (its balances, funding included, every trading\n account with its equity, API keys, price alerts, fee rates and\n permissions) and places, changes or cancels no order, trigger or swap;\n asked to trade, it asks the user to select a trading account. It is part\n of the request the idempotency key covers.",
+            "description": "Trading account (subaccount) the run reads and acts on. It must be one\n the caller's account owns; any other value, also one that does not\n exist, is INVALID_ARGUMENT. Omit it for the main account (unless\n account_selection is ACCOUNT_SELECTION_NONE): the run then\n reads the main account (its balances, funding included, every trading\n account with its equity, API keys, price alerts, fee rates and\n permissions) and places, changes or cancels no order, trigger or swap;\n asked to trade, it asks the user to select a trading account. It is part\n of the request the idempotency key covers.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -4883,7 +4918,9 @@
           "AUTH_ASSISTANT_KEY_PROOF_INVALID",
           "AUTH_ASSISTANT_KEY_REGISTRATION_EXPIRED",
           "AUTH_ASSISTANT_KEY_DEADLINE_TOO_FAR",
-          "AUTH_REPLAY_DETECTED"
+          "AUTH_REPLAY_DETECTED",
+          "AUTH_SOCIAL_ACCOUNT_COOLDOWN",
+          "AUTH_SOCIAL_CHANGE_LIMIT_REACHED"
         ],
         "title": "AuthErrorCode",
         "type": "string"
@@ -5592,7 +5629,7 @@
             "type": "string"
           },
           "polyesterChainId": {
-            "description": "Polyester EIP-155 chain ID used for smart-account derivation and verification.",
+            "description": "Polyester EIP-155 chain ID used for smart-account derivation and verification.\n It differs per environment, so read it from this response rather than\n assuming a fixed value.",
             "format": "int64",
             "title": "polyester_chain_id",
             "type": [
@@ -8027,7 +8064,9 @@
           "READ_GUARD_SIGNER_STATUS",
           "READ_PRICE_ALERTS",
           "MANAGE_PRICE_ALERTS",
-          "READ_STATEMENTS"
+          "READ_STATEMENTS",
+          "CONVERT_DUST",
+          "READ_FUNDING_FLOWS"
         ],
         "title": "PolicyAction",
         "type": "string"
@@ -8570,7 +8609,7 @@
             "title": "provider"
           },
           "providerUserId": {
-            "description": "Stable provider-side user identifier. Empty until verification succeeds,\n except for Telegram: while the status is STATUS_AWAITING_CONFIRMATION, it is\n the numeric user ID of the Telegram account that submitted the code, the\n value ConfirmSocialVerification takes.",
+            "description": "Stable provider-side user identifier of the linked provider account. Empty\n while no account is linked. A restarted X/Twitter or Discord verification\n keeps the current link, and this value, until the new verification succeeds\n and replaces it. For Telegram, while the status is\n STATUS_AWAITING_CONFIRMATION, it is the numeric user ID of the Telegram\n account that submitted the code, the value ConfirmSocialVerification takes.",
             "title": "provider_user_id",
             "type": "string"
           },
@@ -8578,6 +8617,11 @@
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "Time in UTC when the current challenge code was issued.",
             "title": "requested_at"
+          },
+          "retryAfter": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time in UTC from which a new verification may succeed, when this one\n failed with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN or\n AUTH_SOCIAL_CHANGE_LIMIT_REACHED. Empty otherwise.",
+            "title": "retry_after"
           },
           "status": {
             "$ref": "#/components/schemas/auth.v1.SocialVerificationStatus",
@@ -8591,7 +8635,7 @@
           },
           "verifiedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Time in UTC when verification succeeded. Empty until status is STATUS_VERIFIED.",
+            "description": "Time in UTC when the linked provider account was last verified. Empty while\n no account is linked; kept, like provider_user_id, while a restarted\n verification runs.",
             "title": "verified_at"
           }
         },
@@ -8688,7 +8732,7 @@
       },
       "auth.v1.StartSocialVerificationRequest": {
         "additionalProperties": false,
-        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntelegram linking uses the direct message method\ntelegram linking does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
+        "description": "StartSocialVerificationRequest starts or restarts social account verification.\n Starting again for the same provider replaces the previous challenge. A linked\n X/Twitter or Discord account stays linked until the new verification\n succeeds; then the newly verified account replaces it, which counts as the\n provider's one change per 30 days.\ndiscord verification uses the channel method\ndiscord verification does not accept a handle\ntelegram linking uses the direct message method\ntelegram linking does not accept a handle\ntwitter handle must be 1-15 chars [A-Za-z0-9_], optionally prefixed with '@'",
         "properties": {
           "handle": {
             "description": "Provider handle the user claims. Required for X/Twitter and omitted for\n Discord and Telegram, where the provider bot supplies the provider identity.\n A leading \"@\" is accepted and removed from X/Twitter handles.\nhandle must not contain '<' or '>'",
@@ -9061,7 +9105,9 @@
           "SUBACCOUNT_PERMISSION_READ_AUTO_WITHDRAW",
           "SUBACCOUNT_PERMISSION_MANAGE_AUTO_WITHDRAW",
           "SUBACCOUNT_PERMISSION_SWAP",
-          "SUBACCOUNT_PERMISSION_READ_STATEMENTS"
+          "SUBACCOUNT_PERMISSION_READ_STATEMENTS",
+          "SUBACCOUNT_PERMISSION_CONVERT_DUST",
+          "SUBACCOUNT_PERMISSION_READ_FUNDING_FLOWS"
         ],
         "title": "SubaccountPermission",
         "type": "string"
@@ -9616,11 +9662,11 @@
       },
       "auth.v1.UnlinkSocialAccountRequest": {
         "additionalProperties": false,
-        "description": "UnlinkSocialAccountRequest removes the caller's linked provider account, or\n cancels a link in progress.\nonly a telegram account can be unlinked",
+        "description": "UnlinkSocialAccountRequest removes the caller's linked provider account, or\n cancels a link in progress.",
         "properties": {
           "provider": {
             "$ref": "#/components/schemas/auth.v1.SocialProvider",
-            "description": "Provider account to unlink. Only TELEGRAM is accepted.",
+            "description": "Provider account to unlink.",
             "not": {
               "enum": [
                 0
@@ -10104,14 +10150,14 @@
             "title": "next_username_change_at"
           },
           "twitter": {
-            "description": "X/Twitter handle without \"@\". Maximum length is 15 characters.",
+            "description": "Handle of the account's verified X/Twitter account, without \"@\", as X\n reports it at the latest successful verification. Empty while no X account\n is linked. Only SocialVerificationService sets it; UpdateProfile cannot.\n Maximum length is 15 characters.",
             "maxLength": 15,
             "pattern": "^[A-Za-z0-9_]{1,15}$",
             "title": "twitter",
             "type": "string"
           },
           "twitterVerified": {
-            "description": "Whether the X/Twitter handle for this account has been verified.",
+            "description": "Whether an X/Twitter account is linked: true exactly when twitter is set.",
             "title": "twitter_verified",
             "type": "boolean"
           },
@@ -10157,12 +10203,6 @@
             "description": "Short public bio. Use an empty string to clear it. Non-empty values must be\n at most 256 characters and cannot contain \"<\" or \">\".\nbio must be empty or <= 256 characters and must not contain '<' or '>'",
             "nullable": true,
             "title": "bio",
-            "type": "string"
-          },
-          "twitter": {
-            "description": "X/Twitter handle without \"@\". Use an empty string to clear it. Non-empty\n values must be 1 to 15 letters, digits, or underscores.\ntwitter must be empty or a valid handle (letters, digits, underscore; without '@')",
-            "nullable": true,
-            "title": "twitter",
             "type": "string"
           },
           "username": {
@@ -11657,18 +11697,9 @@
             "description": "Product-facing reason for failed, dropped, or otherwise notable flows.",
             "title": "lifecycle_reason"
           },
-          "ownerAccountId": {
-            "description": "Public account identifier for the root account or subaccount the flow belongs to.",
-            "format": "int64",
-            "title": "owner_account_id",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
           "participation": {
             "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
-            "description": "How the account selected by a ListFlows request takes part in this flow:\n `PARTICIPATION_OWNER` for a flow it owns, including a transfer it sent, or\n `PARTICIPATION_RECIPIENT` for a transfer it received from another account.\n Each flow appears once with one participation. Unspecified when the\n response is not scoped to an account, such as ListFlows without an account\n selector, flow detail, and realtime updates.",
+            "description": "How the selected account takes part in this flow: `PARTICIPATION_OWNER`\n for a flow it owns, including a transfer it sent, or\n `PARTICIPATION_RECIPIENT` for a transfer it received from another account.\n Set by ListFlows with an account selector, ListAccountFlows and\n GetAccountFlow; each flow appears once with one participation.\n Unspecified when the response is not scoped to an account, such as\n ListFlows without an account selector, GetFlowById, ListFlowsByTx, and\n realtime updates.",
             "title": "participation"
           },
           "polyesterChainId": {
@@ -11690,7 +11721,7 @@
             "title": "request_fee"
           },
           "smartAccountAddress": {
-            "description": "Smart-account address for the account the flow belongs to. This is the\n stable address selector equivalent of `owner_account_id`; do not derive it\n from source or destination display addresses.\naddress must be a valid 0x-prefixed account address",
+            "description": "Smart-account address for the account the flow belongs to: the account's\n public identity, and the value of the ListFlows account selector. Do not\n derive it from source or destination display addresses.\naddress must be a valid 0x-prefixed account address",
             "title": "smart_account_address",
             "type": "string"
           },
@@ -11865,15 +11896,6 @@
             "description": "Product-facing reason for failed, dropped, or otherwise notable flows.",
             "title": "lifecycle_reason"
           },
-          "ownerAccountId": {
-            "description": "Public account or subaccount identifier that owns this flow.",
-            "format": "int64",
-            "title": "owner_account_id",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
           "polyesterChainId": {
             "description": "Polyester Chain id associated with this flow.",
             "title": "polyester_chain_id",
@@ -11917,6 +11939,45 @@
         "title": "FlowTxMatchView",
         "type": "object"
       },
+      "chain.lifecycle.v1.GetAccountFlowRequest": {
+        "additionalProperties": false,
+        "description": "GetAccountFlowRequest selects one lifecycle flow of the authenticated\n account by its public flow id.",
+        "properties": {
+          "flowId": {
+            "description": "Public, URL-safe lifecycle identifier returned by list responses.",
+            "maxLength": 64,
+            "minLength": 6,
+            "pattern": "^flow_[1-9A-HJ-NP-Za-km-z]+$",
+            "title": "flow_id",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account.",
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetAccountFlowRequest",
+        "type": "object"
+      },
+      "chain.lifecycle.v1.GetAccountFlowResponse": {
+        "additionalProperties": false,
+        "description": "GetAccountFlowResponse returns one lifecycle flow of the account.",
+        "properties": {
+          "flow": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowDetailView",
+            "description": "Lifecycle flow detail for the requested flow id. Its summary's\n `participation` says whether the account owns the flow or receives it.",
+            "title": "flow"
+          }
+        },
+        "title": "GetAccountFlowResponse",
+        "type": "object"
+      },
       "chain.lifecycle.v1.GetFlowByIdRequest": {
         "additionalProperties": false,
         "description": "GetFlowByIdRequest selects one lifecycle flow by its public flow id.",
@@ -11955,6 +12016,7 @@
           "ZIPPER_WITHDRAW_EXECUTION_FAILED",
           "ZIPPER_DEPOSIT_REFUND_FAILED",
           "ZIPPER_COMPLIANCE_TRANSFERRED",
+          "ZIPPER_DEPOSIT_DELIVERED_TO_WALLET",
           "LEDGER_MIRROR_REJECTED",
           "LEDGER_MIRROR_TRANSFER_EXCEEDS_CREDITS",
           "LEDGER_MIRROR_TRANSFER_EXISTS",
@@ -11980,6 +12042,132 @@
         ],
         "title": "LifecycleSource",
         "type": "string"
+      },
+      "chain.lifecycle.v1.ListAccountFlowsRequest": {
+        "additionalProperties": false,
+        "description": "ListAccountFlowsRequest filters and paginates the authenticated account's\n lifecycle flow summaries.",
+        "properties": {
+          "flowKind": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowKind",
+            "description": "Optional product flow kind filter. Unspecified includes all kinds.",
+            "title": "flow_kind"
+          },
+          "flowState": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowState",
+            "description": "Optional lifecycle state filter. Unspecified includes all states permitted\n by the selected scope.",
+            "title": "flow_state"
+          },
+          "limit": {
+            "description": "Maximum number of flows to return. Defaults to 100 when omitted; maximum is\n 500.",
+            "maximum": 500,
+            "title": "limit",
+            "type": "integer"
+          },
+          "orderBy": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.ListOrderBy",
+            "description": "Timestamp used for ordering and pagination. Defaults to last activity.",
+            "title": "order_by"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the authenticated account and the request it was\n returned for: the subaccount, participation, every filter including\n scope, sort direction, and ordering timestamp. Send it with that same\n request; only `limit` may change. A cursor sent with any other request or\n by another account is rejected as invalid.",
+            "maxLength": 512,
+            "title": "page_token",
+            "type": "string"
+          },
+          "participation": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
+            "description": "Optional participation filter. Unspecified returns the flows the account\n owns and the transfers it receives. `PARTICIPATION_OWNER` returns only the\n flows it owns, and `PARTICIPATION_RECIPIENT` only the transfers it\n receives from another account.",
+            "title": "participation"
+          },
+          "polyesterChainIds": {
+            "description": "Optional Polyester Chain ids to include. Maximum 100 unique ids.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 100,
+              "type": "integer",
+              "uniqueItems": true
+            },
+            "maxItems": 100,
+            "title": "polyester_chain_ids",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "scope": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.ListScope",
+            "description": "Selects open, terminal, or all lifecycle flows.",
+            "title": "scope"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/chain.lifecycle.v1.Sort",
+            "description": "Sort direction for the selected ordering timestamp.",
+            "title": "sort"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The list covers that one account only.",
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "txRef": {
+            "description": "Optional transaction reference filter. Matches source or latest activity\n transaction identifiers across supported chains.\ntransaction identifier must be a valid EVM hash or chain-native printable id",
+            "title": "tx_ref",
+            "type": "string"
+          },
+          "unifiedAssetIds": {
+            "description": "Optional unified asset ids to include. Maximum 100 unique ids.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 100,
+              "type": "integer",
+              "uniqueItems": true
+            },
+            "maxItems": 100,
+            "title": "unified_asset_ids",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "zippedAssetIds": {
+            "description": "Optional chain asset mapping ids to include. Maximum 100 unique ids.",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maxItems": 100,
+              "type": "integer",
+              "uniqueItems": true
+            },
+            "maxItems": 100,
+            "title": "zipped_asset_ids",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "title": "ListAccountFlowsRequest",
+        "type": "object"
+      },
+      "chain.lifecycle.v1.ListAccountFlowsResponse": {
+        "additionalProperties": false,
+        "description": "ListAccountFlowsResponse returns one page of the account's flow summaries.",
+        "properties": {
+          "flows": {
+            "description": "Flow summaries ordered by the selected timestamp, then public flow id. Sort\n direction is controlled by the request `sort` field.",
+            "items": {
+              "$ref": "#/components/schemas/chain.lifecycle.v1.FlowSummaryView"
+            },
+            "title": "flows",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "maxLength": 512,
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListAccountFlowsResponse",
+        "type": "object"
       },
       "chain.lifecycle.v1.ListFlowsByTxRequest": {
         "additionalProperties": false,
@@ -12040,14 +12228,8 @@
       },
       "chain.lifecycle.v1.ListFlowsRequest": {
         "additionalProperties": false,
-        "description": "ListFlowsRequest filters and paginates lifecycle flow summaries.\nparticipation requires owner_account_id or smart_account_address",
+        "description": "ListFlowsRequest filters and paginates lifecycle flow summaries.\nparticipation requires smart_account_address",
         "oneOf": [
-          {
-            "required": [
-              "ownerAccountId"
-            ],
-            "title": "owner_account_id"
-          },
           {
             "required": [
               "smartAccountAddress"
@@ -12057,11 +12239,6 @@
           {
             "not": {
               "anyOf": [
-                {
-                  "required": [
-                    "ownerAccountId"
-                  ]
-                },
                 {
                   "required": [
                     "smartAccountAddress"
@@ -12093,16 +12270,6 @@
             "description": "Timestamp used for ordering and pagination. Defaults to last activity.",
             "title": "order_by"
           },
-          "ownerAccountId": {
-            "description": "Public account identifier for a main account or subaccount.",
-            "exclusiveMinimum": 0,
-            "format": "int64",
-            "title": "owner_account_id",
-            "type": [
-              "integer",
-              "string"
-            ]
-          },
           "pageToken": {
             "description": "Opaque keyset cursor returned by a previous response. The cursor is\n exclusive and bound to the request it was returned for: the account\n selector, participation, every filter including scope, sort direction,\n and ordering timestamp. Send it with that same request; only `limit` may\n change. A cursor sent with any other request is rejected as invalid.",
             "maxLength": 512,
@@ -12111,7 +12278,7 @@
           },
           "participation": {
             "$ref": "#/components/schemas/chain.lifecycle.v1.FlowParticipation",
-            "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `PARTICIPATION_OWNER` returns only the flows it owns, and\n `PARTICIPATION_RECIPIENT` only the transfers it receives from another\n account. Requires `owner_account_id` or `smart_account_address`.",
+            "description": "Optional participation filter for the selected account. Unspecified\n returns the flows the account owns and the transfers it receives.\n `PARTICIPATION_OWNER` returns only the flows it owns, and\n `PARTICIPATION_RECIPIENT` only the transfers it receives from another\n account. Requires `smart_account_address`.",
             "title": "participation"
           },
           "polyesterChainIds": {
@@ -12680,7 +12847,7 @@
             "title": "network_fee_e18"
           },
           "reason": {
-            "description": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, destination_cooling_down\n (a broker vault's destination added to its external withdraw whitelist\n less than 24 hours ago; the funds stay for a later run),\n authority_revoked, gateway_capacity_insufficient (the funds stay for a\n later run), withdrawal_released or withdrawal_failed; empty otherwise.",
+            "description": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, destination_cooling_down\n (a broker vault's destination added to its external withdraw whitelist\n less than 24 hours ago; the funds stay for a later run), route_suspended\n (withdrawals of the asset to the destination network are suspended, as\n its withdrawal_status SUSPENDED in the deposit and withdraw config shows;\n the funds stay for a later run), authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
             "title": "reason",
             "type": "string"
           },
@@ -13292,7 +13459,7 @@
           },
           "depositStatus": {
             "$ref": "#/components/schemas/chain.zipper.v1.RouteStatus",
-            "description": "Whether this route currently accepts new deposits. Funds sent to a\n deposit address while deposits are suspended are delayed, not lost: they\n can be processed only after deposits resume.",
+            "description": "Whether this route currently accepts new deposits. While it is\n SUSPENDED, do not send funds to a deposit address on this route; wait\n until it returns to NORMAL.",
             "title": "deposit_status"
           },
           "isNativeAsset": {
@@ -13331,7 +13498,7 @@
           },
           "withdrawalStatus": {
             "$ref": "#/components/schemas/chain.zipper.v1.RouteStatus",
-            "description": "Whether this route currently accepts new withdrawals.",
+            "description": "Whether this route currently accepts new withdrawals. A Trading\n withdrawal accepted before the route became SUSPENDED and not yet sent\n stays pending, with its funds held, and is sent once the route returns\n to NORMAL. One already being sent when the suspension takes effect may\n fail instead; its funds then return to the account.",
             "title": "withdrawal_status"
           },
           "zippedAssetId": {
@@ -16399,7 +16566,7 @@
       },
       "ledger.read.v1.BalanceSeries": {
         "additionalProperties": false,
-        "description": "Columnar balance series payload (scaled integers).\n REST renders decimal strings from these values.",
+        "description": "Columnar balance series payload.\n REST renders decimal strings from these values.",
         "properties": {
           "accountCode": {
             "$ref": "#/components/schemas/ledger.v1.AccountCode",
@@ -16411,20 +16578,76 @@
             "title": "asset_id",
             "type": "integer"
           },
-          "balanceQ": {
-            "description": "Chart balance in asset units scaled by 1e7 (7 decimals).\n Values are downscaled from 18-decimal ledger balances for compact charting\n and align 1:1 with implicit timestamps.",
+          "balance": {
+            "description": "Exact balance at each point at fixed 18-decimal ledger scale. Values align\n 1:1 with implicit timestamps.",
             "items": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "string"
-              ]
+              "$ref": "#/components/schemas/polyester.type.v1.U128"
             },
-            "title": "balance_q",
+            "title": "balance",
             "type": "array"
           }
         },
         "title": "BalanceSeries",
+        "type": "object"
+      },
+      "ledger.read.v1.CreateStatementExportRequest": {
+        "additionalProperties": false,
+        "description": "CreateStatementExportRequest asks for a whole-period statement file of one\n account.\nend_time must be after start_time and at most 366 days after it",
+        "properties": {
+          "assetId": {
+            "description": "Optional public unified asset ID. When unset/0, the statement covers\n every asset; an ID that names no asset is refused.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the statement period (UTC), exclusive, by\n 2262-04-11T23:47:16Z. A period still open when the export is created\n ends at that instant; see StatementExport.complete_through.",
+            "title": "end_time"
+          },
+          "idempotencyKey": {
+            "description": "Client-chosen key, 1 to 64 characters of letters, digits and `.`, `_`,\n `:` or `-`, unique per root account. Repeating a request with the same\n key returns the same export; the same key with different request fields\n is refused.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the statement period (UTC), inclusive: after\n 1970-01-01T00:00:00Z and no later than the request.",
+            "title": "start_time"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys\n use their bound subaccount; other callers use their authenticated root\n account. The statement covers that one account only.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "startTime",
+          "endTime",
+          "idempotencyKey"
+        ],
+        "title": "CreateStatementExportRequest",
+        "type": "object"
+      },
+      "ledger.read.v1.CreateStatementExportResponse": {
+        "additionalProperties": false,
+        "description": "CreateStatementExportResponse is the created or existing export.",
+        "properties": {
+          "export": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExport",
+            "description": "The export.",
+            "title": "export"
+          }
+        },
+        "title": "CreateStatementExportResponse",
         "type": "object"
       },
       "ledger.read.v1.EquityGroupBy": {
@@ -16524,11 +16747,11 @@
           },
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "End of the statement period (UTC), exclusive. Movements recorded after\n the request are not included, so a period that has not ended yet covers\n the movements up to the time of the request.",
+            "description": "End of the statement period (UTC), exclusive. The statement covers the\n period up to complete_through, which is at most end_time; see\n ExportStatementResponse.complete_through.",
             "title": "end_time"
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, asset filter and\n period; reuse it only with the same request fields.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, asset filter,\n period and complete_through; reuse it only with the same request fields.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -16560,6 +16783,11 @@
         "additionalProperties": false,
         "description": "ExportStatementResponse is one page of an account statement in CSV.",
         "properties": {
+          "completeThrough": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "The statement covers movements from start_time up to complete_through,\n exclusive: the earliest of end_time, the time of the first page's request\n and the time through which account history is complete when that page was\n requested, and never before start_time. Every page of one statement\n carries the same value. When it is before end_time, the movements from it\n to end_time appear in a statement requested later.",
+            "title": "complete_through"
+          },
           "csv": {
             "description": "Statement rows as RFC 4180 CSV in UTF-8, with CRLF line endings. The first\n page starts with the header row and later pages carry rows only, so\n concatenating the pages in order yields the complete statement; a period\n without movements yields the header row alone. A page holds at most 2000\n ledger movements, and an entry is never split across pages.\n\n Rows are ordered oldest first. Each row is the effect of one entry on one\n account bucket in one asset. An entry is one ledger operation, such as a\n trade with its fees, a deposit, a withdrawal step or an internal transfer.\n\n Columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: stable entry identifier, an unsigned 128-bit integer as a\n   decimal string. It is the `transfer_id` of the entry's first transfer leg\n   on the account, as ListTransfers returns it.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   as ListTransfers returns it; empty otherwise.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.",
             "title": "csv",
@@ -16901,6 +17129,90 @@
         "title": "GetPortfolioEquitySnapshotResponse",
         "type": "object"
       },
+      "ledger.read.v1.GetStatementExportRequest": {
+        "additionalProperties": false,
+        "description": "GetStatementExportRequest names one export.",
+        "properties": {
+          "exportId": {
+            "description": "Public ID of the export.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "export_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetStatementExportRequest",
+        "type": "object"
+      },
+      "ledger.read.v1.GetStatementExportResponse": {
+        "additionalProperties": false,
+        "description": "GetStatementExportResponse is one export.",
+        "properties": {
+          "export": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExport",
+            "description": "The export.",
+            "title": "export"
+          }
+        },
+        "title": "GetStatementExportResponse",
+        "type": "object"
+      },
+      "ledger.read.v1.ListStatementExportsRequest": {
+        "additionalProperties": false,
+        "description": "ListStatementExportsRequest selects one account's exports.",
+        "properties": {
+          "limit": {
+            "description": "Maximum exports to return; 0 means 20. At most 100.",
+            "maximum": 100,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account and sub-account scope.",
+            "maxLength": 512,
+            "title": "page_token",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID, selected as for\n CreateStatementExportRequest.subaccount_id.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "ListStatementExportsRequest",
+        "type": "object"
+      },
+      "ledger.read.v1.ListStatementExportsResponse": {
+        "additionalProperties": false,
+        "description": "ListStatementExportsResponse is a page of exports, newest first.",
+        "properties": {
+          "exports": {
+            "description": "Exports, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ledger.read.v1.StatementExport"
+            },
+            "title": "exports",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Opaque cursor for the next page. Empty when no more results exist.",
+            "maxLength": 512,
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListStatementExportsResponse",
+        "type": "object"
+      },
       "ledger.read.v1.ListTransfersRequest": {
         "additionalProperties": false,
         "description": "ts_max_us must be >= ts_min_us when both are set",
@@ -17055,14 +17367,10 @@
             "title": "asset_id",
             "type": "integer"
           },
-          "balanceQ": {
-            "description": "Combined Funding and Trading balance in asset units scaled by 1e7\n (7 decimals).",
-            "format": "int64",
-            "title": "balance_q",
-            "type": [
-              "integer",
-              "string"
-            ]
+          "balance": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Exact combined Funding and Trading balance across the master account and\n all owned subaccounts at fixed 18-decimal ledger scale.",
+            "title": "balance"
           },
           "equityQ": {
             "description": "Current equity in USDT scaled by 1e4 (4 decimals).",
@@ -17076,6 +17384,124 @@
         },
         "title": "PortfolioAssetEquity",
         "type": "object"
+      },
+      "ledger.read.v1.StatementExport": {
+        "additionalProperties": false,
+        "description": "StatementExport is a whole-period account statement produced in the\n background as one CSV file. The file is byte for byte the pages of\n ExportStatement for the same account, asset and period up to\n complete_through, concatenated: the header row, then every row, oldest\n first, in the columns ExportStatementResponse.csv documents.\n\n Download a READY file with an authenticated\n `GET /v1/statements/exports/{exportId}/file`, as the account that created\n it or one with the same access: it returns `text/csv` and supports HTTP\n `Range` requests. With `?redirect=true` it instead answers\n `307 Temporary Redirect` to a URL valid for 60 seconds. An EXPIRED export's\n file answers `410 Gone`.",
+        "properties": {
+          "assetId": {
+            "description": "Public unified asset ID the statement is limited to; 0 for every asset.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "bytes": {
+            "description": "Bytes written to the file so far; the file's size when READY.",
+            "format": "int64",
+            "title": "bytes",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "completeThrough": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of what the file covers (UTC), exclusive: the earlier of end_time and\n the instant the export was created. Every movement recorded before the\n export was created and before complete_through is in the file.",
+            "title": "complete_through"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the export was created.",
+            "title": "created_at"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "End of the requested statement period (UTC), exclusive.",
+            "title": "end_time"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When a READY file expires, 7 days after ready_at; unset before READY.",
+            "title": "expires_at"
+          },
+          "exportId": {
+            "description": "Public ID of the export.",
+            "format": "int64",
+            "title": "export_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "failureReason": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportFailureReason",
+            "description": "Why the export FAILED; unspecified otherwise.",
+            "title": "failure_reason"
+          },
+          "idempotencyKey": {
+            "description": "Idempotency key of the request that created the export.",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "movements": {
+            "description": "Ledger movements written to the file so far; the file's total when\n READY.",
+            "format": "int64",
+            "title": "movements",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "readyAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the file became READY; unset before.",
+            "title": "ready_at"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Start of the statement period (UTC), inclusive.",
+            "title": "start_time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportStatus",
+            "description": "Where the export is.",
+            "title": "status"
+          },
+          "subaccountId": {
+            "description": "Public subaccount ID of the account the statement covers; unset for a\n root account.",
+            "format": "int64",
+            "nullable": true,
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "StatementExport",
+        "type": "object"
+      },
+      "ledger.read.v1.StatementExportFailureReason": {
+        "description": "StatementExportFailureReason is why a statement export failed.",
+        "enum": [
+          "STATEMENT_EXPORT_FAILURE_REASON_UNSPECIFIED",
+          "STATEMENT_EXPORT_FAILURE_REASON_TOO_LARGE",
+          "STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE"
+        ],
+        "title": "StatementExportFailureReason",
+        "type": "string"
+      },
+      "ledger.read.v1.StatementExportStatus": {
+        "description": "StatementExportStatus is where a statement export is.",
+        "enum": [
+          "STATEMENT_EXPORT_STATUS_UNSPECIFIED",
+          "STATEMENT_EXPORT_STATUS_QUEUED",
+          "STATEMENT_EXPORT_STATUS_PROCESSING",
+          "STATEMENT_EXPORT_STATUS_READY",
+          "STATEMENT_EXPORT_STATUS_FAILED",
+          "STATEMENT_EXPORT_STATUS_EXPIRED"
+        ],
+        "title": "StatementExportStatus",
+        "type": "string"
       },
       "ledger.read.v1.TransferRow": {
         "additionalProperties": false,
@@ -21550,6 +21976,11 @@
         "additionalProperties": false,
         "description": "ErrorDetail is attached to ConnectRPC errors for structured error handling.\n Clients can inspect this to get a stable machine-readable error code.",
         "properties": {
+          "causeCode": {
+            "$ref": "#/components/schemas/orders.v1.ErrorCode",
+            "description": "Why the refused order of a ladder can't be placed, when a trigger create\n is rejected with LADDER_LEVEL_REJECTED: the code that order would return\n as a single order, for example MAX_OPEN_ORDERS_PER_PAIR. Unspecified for\n every other error.",
+            "title": "cause_code"
+          },
           "code": {
             "$ref": "#/components/schemas/orders.v1.ErrorCode",
             "description": "Stable error code matching the REST problem+json \"code\" field.",
@@ -21564,6 +21995,12 @@
               "integer",
               "string"
             ]
+          },
+          "levelIndex": {
+            "description": "The refused order of a ladder, when a trigger create is rejected with\n LADDER_LEVEL_REJECTED: its zero-based index among the ladder's orders, the\n i of the violation's trigger.strategy.ladder.levels[i], so 0 is the first\n order. Omitted for every other error.",
+            "nullable": true,
+            "title": "level_index",
+            "type": "integer"
           },
           "rateLimit": {
             "$ref": "#/components/schemas/polyester.ratelimit.v1.RateLimitDetail",
@@ -22232,7 +22669,7 @@
         "description": "LimitGtc configures a good-til-canceled limit order.",
         "properties": {
           "displayQtyScaled": {
-            "description": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps\n it.",
+            "description": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified. Lowering the\n order's quantity in place to the display or below is allowed: the order\n then shows all of its remaining quantity. A replace keeps the display\n while the new quantity is above it; otherwise the new order is a plain\n order with no display.",
             "format": "int64",
             "minimum": 0,
             "title": "display_qty_scaled",
@@ -22265,7 +22702,7 @@
         "description": "LimitGtd configures a limit order that may remain active only before an\n exact expiry time.\nexpire_at must be between 1 second and 30 days after validation time",
         "properties": {
           "displayQtyScaled": {
-            "description": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified; a replace keeps\n it.",
+            "description": "Optional iceberg display quantity, scaled by the pair's\n base_quantity_scale from GetSpotConfig. Zero places a plain order. When\n positive, the order book shows at most this quantity of the order; once\n that shown part is fully executed, the next part is shown at the same\n price, behind the orders already resting there. It must be below\n base_qty_scaled, a multiple of the pair's quantity step, at least the\n pair's minimum quantity, and at least base_qty_scaled divided by 100,\n rounded up, so the order splits into at most 100 parts: otherwise the\n order is refused with ICEBERG_DISPLAY_TOO_SMALL or\n ICEBERG_DISPLAY_INVALID. An iceberg order cannot carry attached_risk\n (ICEBERG_NOT_ALLOWED). The display cannot be modified. Lowering the\n order's quantity in place to the display or below is allowed: the order\n then shows all of its remaining quantity. A replace keeps the display\n while the new quantity is above it; otherwise the new order is a plain\n order with no display.",
             "format": "int64",
             "minimum": 0,
             "title": "display_qty_scaled",
@@ -22660,7 +23097,7 @@
             ]
           },
           "displayQtyScaled": {
-            "description": "Iceberg display quantity the order was placed with, scaled by the pair's\n base_quantity_scale from GetSpotConfig for symbol_id: the most of the\n order the order book shows at once. Zero for a plain order. A replace\n keeps it.",
+            "description": "Iceberg display quantity the order was placed with, scaled by the pair's\n base_quantity_scale from GetSpotConfig for symbol_id: the most of the\n order the order book shows at once. Zero for a plain order. A replace\n keeps it while the new quantity is above it; a replace to the display or\n below it is a plain order, zero here.",
             "format": "int64",
             "title": "display_qty_scaled",
             "type": [
@@ -24012,10 +24449,10 @@
       },
       "ratelimit.v1.GetTradingRateLimitsResponse": {
         "additionalProperties": false,
-        "description": "GetTradingRateLimitsResponse contains every placement and cancellation\n policy enforced for the selected account target and caller.",
+        "description": "GetTradingRateLimitsResponse contains the placement and cancellation limits\n enforced for the selected account target. Trading limits apply per account:\n the root account and each subaccount have their own limits, and every API\n key and session that trades for an account shares that account's limits.",
         "properties": {
           "apiKeyRules": {
-            "description": "API-key-scoped placement and cancellation rules, ordered with placement\n first and cancellation second. Present only when the caller authenticated\n with an API key. Both this scope and the account scope are enforced.",
+            "description": "Placement and cancellation rules resolved for the calling API key, ordered\n with placement first and cancellation second. Present only when the caller\n authenticated with an API key. These rules are informational: trading\n requests are not limited per API key, and only the account rules in\n `rules` are enforced.",
             "items": {
               "$ref": "#/components/schemas/ratelimit.v1.TradingRateLimitRule"
             },
@@ -24039,7 +24476,7 @@
             ]
           },
           "rules": {
-            "description": "Account-scoped placement and cancellation rules for the selected account,\n ordered with placement first and cancellation second.",
+            "description": "Placement and cancellation rules enforced for the selected account,\n ordered with placement first and cancellation second. All of the\n account's API keys and sessions draw on these limits together.",
             "items": {
               "$ref": "#/components/schemas/ratelimit.v1.TradingRateLimitRule"
             },
@@ -24976,7 +25413,7 @@
             "type": "string"
           },
           "index": {
-            "description": "Zero-based position in detection order; stable for the QuickSwap's life.",
+            "description": "Zero-based position in deposits, which lists deposits oldest first. Not\n stable: a deposit detected earlier can appear later, for example a\n dropped or replaced deposit that confirms after all, and then shifts the\n index of every deposit after it. Identify a deposit by tx_hash with\n tx_occurrence_index, not by index.",
             "title": "index",
             "type": "integer"
           },
@@ -26880,7 +27317,7 @@
             "title": "minimum"
           },
           "reason": {
-            "description": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
+            "description": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), route_suspended (withdrawals to the destination's\n network were suspended; the balance stays for a later run),\n destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
             "title": "reason",
             "type": "string"
           },
@@ -26979,7 +27416,7 @@
             "title": "deposit_instructions"
           },
           "deposits": {
-            "description": "Detected deposits, oldest first, at most 50.",
+            "description": "Detected deposits, oldest first, at most 50. A deposit detected earlier\n can appear later and shift the others' index (see Deposit.index).",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.Deposit"
             },
@@ -27026,7 +27463,7 @@
             "type": "string"
           },
           "isTerminal": {
-            "description": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Returns made directly for such deposits are not yet\n reported in withdrawals; RETURN_ONLY does not confirm a completed return.\n Read again if the end user reports such a deposit or needs the final\n retirement time.",
+            "description": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Returns made directly for such deposits are not yet\n reported in withdrawals; RETURN_ONLY does not confirm a completed return.\n An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all\n becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user\n reports such a deposit or needs the final retirement time.",
             "title": "is_terminal",
             "type": "boolean"
           },
@@ -27256,7 +27693,7 @@
         "type": "string"
       },
       "swap.quickswap.v1.QuickSwapStatus": {
-        "description": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING \u2192 AWAITING_DEPOSIT \u2192 (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) \u2192 CREDITED \u2192 EXECUTING (skipped for a\n bridge) \u2192 PAYING_OUT | REFUNDING | RETURNING \u2192 a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). HELD can be entered from\n any non-terminal status and is not terminal; a QuickSwap HELD with\n SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes. Accept status values added later; is_terminal is authoritative.",
+        "description": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING \u2192 AWAITING_DEPOSIT \u2192 (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) \u2192 CREDITED \u2192 EXECUTING (skipped for a\n bridge) \u2192 PAYING_OUT | REFUNDING | RETURNING \u2192 a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A deposit that is dropped\n or replaced on its network before it confirms brings no funds: the\n QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to\n AWAITING_DEPOSIT, the only status that moves back, and no longer shows\n that deposit. HELD can be\n entered from any non-terminal status and is not terminal; a QuickSwap HELD\n with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes, except that EXPIRED becomes HELD when a dropped or replaced\n deposit confirms after all (see EXPIRED). Accept status values added\n later; is_terminal is authoritative.",
         "enum": [
           "STATUS_UNSPECIFIED",
           "ALLOCATING",
@@ -28988,7 +29425,7 @@
             "title": "amount"
           },
           "depositIndex": {
-            "description": "Deposit whose funds this withdrawal moves.",
+            "description": "Index (Deposit.index), in the same response, of the deposit whose funds\n this withdrawal moves. Not stable across reads, like Deposit.index.",
             "title": "deposit_index",
             "type": "integer"
           },
@@ -29821,6 +30258,104 @@
         "title": "StatusEventUpdate",
         "type": "object"
       },
+      "transfer.v1.BatchCreateInternalTransfersRequest": {
+        "additionalProperties": false,
+        "description": "BatchCreateInternalTransfersRequest submits up to 10 independent Trading to\n Trading transfers under one idempotency key and one MFA check.",
+        "properties": {
+          "idempotencyKey": {
+            "description": "Stable client-supplied idempotency key used to collapse safe retries of\n the whole batch. It is scoped to the authenticated caller: the session's\n account, or the API key. A retry must send the same legs in the same\n order; different legs under the same key are refused.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "legs": {
+            "description": "Transfers to run, in order. At most 10 legs; each leg counts as one\n internal transfer against the caller's rate limit. Legs may repeat an asset,\n a source or a destination.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.InternalTransferBatchLeg"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "legs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "idempotencyKey"
+        ],
+        "title": "BatchCreateInternalTransfersRequest",
+        "type": "object"
+      },
+      "transfer.v1.BatchCreateInternalTransfersResponse": {
+        "additionalProperties": false,
+        "description": "BatchCreateInternalTransfersResponse returns the outcome of every leg.",
+        "properties": {
+          "legs": {
+            "description": "One result per requested leg, in request order.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.InternalTransferBatchLegResult"
+            },
+            "title": "legs",
+            "type": "array"
+          },
+          "requestId": {
+            "description": "Stable server-owned identifier of the batch request. Empty when the batch\n was refused.",
+            "title": "request_id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/transfer.v1.InternalTransferBatchStatus",
+            "description": "Outcome of the batch as a whole.",
+            "title": "status"
+          }
+        },
+        "title": "BatchCreateInternalTransfersResponse",
+        "type": "object"
+      },
+      "transfer.v1.CreateDustConversionRequest": {
+        "additionalProperties": false,
+        "description": "CreateDustConversionRequest converts one quote.",
+        "properties": {
+          "idempotencyKey": {
+            "description": "Stable client-supplied key collapsing retries for the account.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "quoteId": {
+            "description": "Quote from QuoteDustConversion, at most 30 seconds old. A quote converts\n once.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "quote_id",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID; it must select the quote's account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "CreateDustConversionRequest",
+        "type": "object"
+      },
+      "transfer.v1.CreateDustConversionResponse": {
+        "additionalProperties": false,
+        "description": "CreateDustConversionResponse returns the conversion.",
+        "properties": {
+          "conversion": {
+            "$ref": "#/components/schemas/transfer.v1.DustConversion",
+            "description": "The conversion: completed, or still processing when its outcome is not\n known yet.",
+            "title": "conversion"
+          }
+        },
+        "title": "CreateDustConversionResponse",
+        "type": "object"
+      },
       "transfer.v1.CreateInternalTransferRequest": {
         "additionalProperties": false,
         "description": "CreateInternalTransferRequest creates or returns one accepted Trading\n to Trading internal transfer for the authenticated source account.",
@@ -29902,7 +30437,9 @@
           }
         },
         "required": [
-          "amountE18"
+          "assetId",
+          "amountE18",
+          "idempotencyKey"
         ],
         "title": "CreateInternalTransferRequest",
         "type": "object"
@@ -29967,6 +30504,263 @@
           }
         },
         "title": "CreateInternalTransferResponse",
+        "type": "object"
+      },
+      "transfer.v1.DustAssetEligibility": {
+        "description": "DustAssetEligibility says whether one Trading balance converts as dust, or\n why not.",
+        "enum": [
+          "DUST_ASSET_ELIGIBILITY_UNSPECIFIED",
+          "DUST_ASSET_ELIGIBILITY_ELIGIBLE",
+          "DUST_ASSET_ELIGIBILITY_TARGET_ASSET",
+          "DUST_ASSET_ELIGIBILITY_TRADABLE",
+          "DUST_ASSET_ELIGIBILITY_ABOVE_VALUE_LIMIT",
+          "DUST_ASSET_ELIGIBILITY_NO_PRICE",
+          "DUST_ASSET_ELIGIBILITY_UNSUPPORTED_ASSET",
+          "DUST_ASSET_ELIGIBILITY_SOURCE_LIMIT"
+        ],
+        "title": "DustAssetEligibility",
+        "type": "string"
+      },
+      "transfer.v1.DustAssetPrice": {
+        "additionalProperties": false,
+        "description": "DustAssetPrice is the USD index price a quote or conversion used for one\n asset.",
+        "properties": {
+          "asOf": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Time of the oldest index observation the price used.",
+            "title": "as_of"
+          },
+          "assetId": {
+            "description": "Canonical public unified asset id.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "priceScale": {
+            "description": "Decimal scale of price_ticks.",
+            "title": "price_scale",
+            "type": "integer"
+          },
+          "priceTicks": {
+            "description": "USD per whole asset unit: price_ticks / 10^price_scale.",
+            "format": "int64",
+            "title": "price_ticks",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "DustAssetPrice",
+        "type": "object"
+      },
+      "transfer.v1.DustBalance": {
+        "additionalProperties": false,
+        "description": "DustBalance is one Trading balance judged for dust conversion.",
+        "properties": {
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The whole available Trading balance, in canonical 18-decimal units: what no\n open order or other reservation holds.",
+            "title": "amount_e18"
+          },
+          "assetId": {
+            "description": "Canonical public unified asset id.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "eligibility": {
+            "$ref": "#/components/schemas/transfer.v1.DustAssetEligibility",
+            "description": "Whether the balance converts, and why not otherwise.",
+            "title": "eligibility"
+          },
+          "usdValueE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The balance's USD value in 18-decimal fixed point, rounded down. Unset when\n the asset has no current price.",
+            "title": "usd_value_e18"
+          }
+        },
+        "title": "DustBalance",
+        "type": "object"
+      },
+      "transfer.v1.DustConversion": {
+        "additionalProperties": false,
+        "description": "DustConversion is one conversion of an account's dust into a target asset.",
+        "properties": {
+          "completedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the conversion completed; unset until state is\n DUST_CONVERSION_STATE_COMPLETED.",
+            "title": "completed_at"
+          },
+          "conversionId": {
+            "description": "Stable conversion identifier.",
+            "title": "conversion_id",
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the conversion was created.",
+            "title": "created_at"
+          },
+          "feeBps": {
+            "description": "The fee in basis points.",
+            "title": "fee_bps",
+            "type": "integer"
+          },
+          "feeE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The fee taken from the payout, in canonical 18-decimal target units.",
+            "title": "fee_e18"
+          },
+          "payoutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Payout in canonical 18-decimal target units, after the fee: the sources'\n value at the index prices current when the conversion was created.",
+            "title": "payout_e18"
+          },
+          "quoteId": {
+            "description": "The quote the conversion converted.",
+            "title": "quote_id",
+            "type": "string"
+          },
+          "quotedPayoutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The payout the quote showed, in canonical 18-decimal target units.",
+            "title": "quoted_payout_e18"
+          },
+          "refusalCode": {
+            "$ref": "#/components/schemas/transfer.v1.ErrorCode",
+            "description": "Why the conversion was refused; unspecified unless state is\n DUST_CONVERSION_STATE_REFUSED.",
+            "title": "refusal_code"
+          },
+          "sources": {
+            "description": "Sources, in asset id order.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.DustSource"
+            },
+            "title": "sources",
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/transfer.v1.DustConversionState",
+            "description": "Current state.",
+            "title": "state"
+          },
+          "targetAssetId": {
+            "description": "Target asset id.",
+            "title": "target_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "DustConversion",
+        "type": "object"
+      },
+      "transfer.v1.DustConversionState": {
+        "description": "DustConversionState is a conversion's public state.",
+        "enum": [
+          "DUST_CONVERSION_STATE_UNSPECIFIED",
+          "DUST_CONVERSION_STATE_PROCESSING",
+          "DUST_CONVERSION_STATE_COMPLETED",
+          "DUST_CONVERSION_STATE_REFUSED"
+        ],
+        "title": "DustConversionState",
+        "type": "string"
+      },
+      "transfer.v1.DustSource": {
+        "additionalProperties": false,
+        "description": "DustSource is one balance a conversion moves.",
+        "properties": {
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The whole quoted balance, in canonical 18-decimal units.",
+            "title": "amount_e18"
+          },
+          "assetId": {
+            "description": "Canonical public unified asset id.",
+            "title": "asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "DustSource",
+        "type": "object"
+      },
+      "transfer.v1.ErrorCode": {
+        "description": "ErrorCode identifies stable, machine-readable Internal Transfer API errors.\n Values mirror the REST problem+json code field.",
+        "enum": [
+          "ERROR_CODE_UNSPECIFIED",
+          "ERROR_CODE_INSUFFICIENT_FUNDS",
+          "ERROR_CODE_INVALID_REQUEST",
+          "ERROR_CODE_UNAUTHENTICATED",
+          "ERROR_CODE_PERMISSION_DENIED",
+          "ERROR_CODE_RATE_LIMIT_EXCEEDED",
+          "ERROR_CODE_SERVICE_UNAVAILABLE",
+          "ERROR_CODE_INTERNAL_ERROR",
+          "ERROR_CODE_INVALID_SUBACCOUNT_ID",
+          "ERROR_CODE_SUBACCOUNT_NOT_FOUND",
+          "ERROR_CODE_SOURCE_ACCOUNT_INACTIVE",
+          "ERROR_CODE_UNSUPPORTED_ASSET",
+          "ERROR_CODE_INVALID_AMOUNT",
+          "ERROR_CODE_INVALID_DESTINATION",
+          "ERROR_CODE_DESTINATION_NOT_FOUND",
+          "ERROR_CODE_DESTINATION_INACTIVE",
+          "ERROR_CODE_SAME_SOURCE_DESTINATION",
+          "ERROR_CODE_DESTINATION_NOT_WHITELISTED",
+          "ERROR_CODE_SMART_ACCOUNT_UNAVAILABLE",
+          "ERROR_CODE_STEP_UP_UNAVAILABLE",
+          "ERROR_CODE_IDEMPOTENCY_CONFLICT",
+          "ERROR_CODE_FUNDS_LOCK_CONFLICT",
+          "ERROR_CODE_CAPITAL_VIEW_UNAVAILABLE",
+          "ERROR_CODE_ACCOUNT_SHARD_UNAVAILABLE",
+          "ERROR_CODE_POLICY_DENIED",
+          "ERROR_CODE_FAILED_PRECONDITION",
+          "ERROR_CODE_NOT_FOUND",
+          "ERROR_CODE_CONFLICT",
+          "ERROR_CODE_DUST_QUOTE_EXPIRED",
+          "ERROR_CODE_DUST_PRICE_MOVED",
+          "ERROR_CODE_DUST_NOT_ELIGIBLE",
+          "ERROR_CODE_DUST_WINDOW_ACTIVE",
+          "ERROR_CODE_DUST_DAILY_LIMIT",
+          "ERROR_CODE_DUST_BUSY",
+          "ERROR_CODE_DUST_TARGET_UNAVAILABLE",
+          "ERROR_CODE_DUST_BALANCE_CHANGED",
+          "ERROR_CODE_DUST_CONVERSION_FAILED"
+        ],
+        "title": "ErrorCode",
+        "type": "string"
+      },
+      "transfer.v1.GetDustConversionRequest": {
+        "additionalProperties": false,
+        "description": "GetDustConversionRequest reads one of the account's conversions.",
+        "properties": {
+          "conversionId": {
+            "description": "Conversion identifier.",
+            "maxLength": 39,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "title": "conversion_id",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use\n their bound subaccount; other callers use their authenticated root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetDustConversionRequest",
+        "type": "object"
+      },
+      "transfer.v1.GetDustConversionResponse": {
+        "additionalProperties": false,
+        "description": "GetDustConversionResponse returns one conversion.",
+        "properties": {
+          "conversion": {
+            "$ref": "#/components/schemas/transfer.v1.DustConversion",
+            "description": "The conversion.",
+            "title": "conversion"
+          }
+        },
+        "title": "GetDustConversionResponse",
         "type": "object"
       },
       "transfer.v1.GetInternalTransferRequest": {
@@ -30047,6 +30841,180 @@
         "title": "GetInternalTransferResponse",
         "type": "object"
       },
+      "transfer.v1.InternalTransferBatchLeg": {
+        "additionalProperties": false,
+        "description": "InternalTransferBatchLeg is one transfer of a batch. It takes the fields of\n CreateInternalTransferRequest except the idempotency key, which the batch\n carries for all of its legs.",
+        "oneOf": [
+          {
+            "required": [
+              "destinationAccountId"
+            ],
+            "title": "destination_account_id"
+          },
+          {
+            "required": [
+              "destinationSubaccountId"
+            ],
+            "title": "destination_subaccount_id"
+          },
+          {
+            "required": [
+              "destinationSmartAccountAddress"
+            ],
+            "title": "destination_smart_account_address"
+          }
+        ],
+        "properties": {
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Transfer amount in canonical 18-decimal unified asset units.\n For example, 0.5 is encoded as 500000000000000000.",
+            "title": "amount_e18"
+          },
+          "assetId": {
+            "description": "Canonical public unified asset id for the asset being transferred.",
+            "exclusiveMinimum": 0,
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "destinationAccountId": {
+            "description": "Destination root account public id.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "destination_account_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "destinationSmartAccountAddress": {
+            "description": "Destination smart-account address.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "destination_smart_account_address",
+            "type": "string"
+          },
+          "destinationSubaccountId": {
+            "description": "Destination subaccount public id.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "destination_subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "subaccountId": {
+            "description": "Optional source public subaccount ID. When omitted, subaccount-scoped API\n keys use their bound subaccount; other callers use their authenticated\n root account. Legs of one batch may debit different source accounts.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "assetId",
+          "amountE18"
+        ],
+        "title": "InternalTransferBatchLeg",
+        "type": "object"
+      },
+      "transfer.v1.InternalTransferBatchLegResult": {
+        "additionalProperties": false,
+        "description": "InternalTransferBatchLegResult is the outcome of one leg, in request order.",
+        "properties": {
+          "acceptedAtTsNs": {
+            "description": "Acceptance timestamp in nanoseconds since epoch (server time), set once\n the leg is accepted.",
+            "format": "int64",
+            "title": "accepted_at_ts_ns",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "amountE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Echoed transfer amount in canonical 18-decimal unified asset units.",
+            "title": "amount_e18"
+          },
+          "assetCode": {
+            "description": "Resolved asset code, set once the leg is submitted.",
+            "title": "asset_code",
+            "type": "string"
+          },
+          "assetId": {
+            "description": "Echoed canonical public unified asset id.",
+            "title": "asset_id",
+            "type": "integer"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/transfer.v1.ResolvedDestination",
+            "description": "Server-resolved destination summary, set once the leg is submitted.",
+            "title": "destination"
+          },
+          "errorCode": {
+            "$ref": "#/components/schemas/transfer.v1.ErrorCode",
+            "description": "Why the leg was refused, or why its outcome is not known yet. Unset for an\n accepted leg and for a leg that was not submitted.",
+            "title": "error_code"
+          },
+          "errorMessage": {
+            "description": "Human-readable description of error_code.",
+            "title": "error_message",
+            "type": "string"
+          },
+          "flowId": {
+            "description": "Authoritative lifecycle flow identifier, set once the leg is accepted.",
+            "title": "flow_id",
+            "type": "string"
+          },
+          "legIndex": {
+            "description": "Zero-based position of the leg in the request.",
+            "title": "leg_index",
+            "type": "integer"
+          },
+          "requestId": {
+            "description": "Stable server-owned request identifier of the leg's transfer. Use it with\n GetInternalTransfer. Empty while the leg has not been submitted.",
+            "title": "request_id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/transfer.v1.InternalTransferBatchLegStatus",
+            "description": "Outcome of the leg.",
+            "title": "status"
+          },
+          "transferId": {
+            "description": "Stable transfer identifier, set once the leg is accepted.",
+            "title": "transfer_id",
+            "type": "string"
+          }
+        },
+        "title": "InternalTransferBatchLegResult",
+        "type": "object"
+      },
+      "transfer.v1.InternalTransferBatchLegStatus": {
+        "description": "InternalTransferBatchLegStatus is the outcome of one leg of a batch.",
+        "enum": [
+          "LEG_STATUS_UNSPECIFIED",
+          "LEG_ACCEPTED",
+          "LEG_PENDING",
+          "LEG_REFUSED",
+          "LEG_NOT_SUBMITTED"
+        ],
+        "title": "InternalTransferBatchLegStatus",
+        "type": "string"
+      },
+      "transfer.v1.InternalTransferBatchStatus": {
+        "description": "InternalTransferBatchStatus is the outcome of a batch request as a whole.",
+        "enum": [
+          "BATCH_STATUS_UNSPECIFIED",
+          "BATCH_SUBMITTED",
+          "BATCH_REFUSED"
+        ],
+        "title": "InternalTransferBatchStatus",
+        "type": "string"
+      },
       "transfer.v1.InternalTransferStatus": {
         "description": "InternalTransferStatus is the public user-facing status for an internal\n transfer request.",
         "enum": [
@@ -30057,6 +31025,204 @@
         ],
         "title": "InternalTransferStatus",
         "type": "string"
+      },
+      "transfer.v1.ListDustBalancesRequest": {
+        "additionalProperties": false,
+        "description": "ListDustBalancesRequest judges the account's Trading balances for\n conversion into one target.",
+        "properties": {
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use\n their bound subaccount; other callers use their authenticated root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "targetAssetId": {
+            "description": "Target asset id, one of the response's targets; 0 means the first target.",
+            "title": "target_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "ListDustBalancesRequest",
+        "type": "object"
+      },
+      "transfer.v1.ListDustBalancesResponse": {
+        "additionalProperties": false,
+        "description": "ListDustBalancesResponse lists every nonzero available Trading balance with\n its eligibility and the payout the eligible ones would bring now. It\n reserves nothing; QuoteDustConversion prices a conversion.",
+        "properties": {
+          "balances": {
+            "description": "Every nonzero available Trading balance, in asset id order.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.DustBalance"
+            },
+            "title": "balances",
+            "type": "array"
+          },
+          "feeBps": {
+            "description": "The fee in basis points, taken from the payout.",
+            "title": "fee_bps",
+            "type": "integer"
+          },
+          "grossUsdE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The eligible balances' total USD value in 18-decimal fixed point, rounded\n down.",
+            "title": "gross_usd_e18"
+          },
+          "payoutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The payout they would bring now, in canonical 18-decimal target units,\n after the fee.",
+            "title": "payout_e18"
+          },
+          "targetAssetId": {
+            "description": "Target asset id the balances were judged for.",
+            "title": "target_asset_id",
+            "type": "integer"
+          },
+          "targetAvailable": {
+            "description": "Whether the target can be paid now. When false, QuoteDustConversion is\n refused with ERROR_CODE_DUST_TARGET_UNAVAILABLE.",
+            "title": "target_available",
+            "type": "boolean"
+          },
+          "targets": {
+            "description": "Every asset id the account can convert dust into, in preference order.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "targets",
+            "type": "array"
+          }
+        },
+        "title": "ListDustBalancesResponse",
+        "type": "object"
+      },
+      "transfer.v1.ListDustConversionsRequest": {
+        "additionalProperties": false,
+        "description": "ListDustConversionsRequest lists the account's conversions, newest first.",
+        "properties": {
+          "limit": {
+            "description": "Maximum number of conversions to return: 0 means 20, at most 100.",
+            "maximum": 100,
+            "title": "limit",
+            "type": "integer"
+          },
+          "pageToken": {
+            "description": "Opaque, exclusive, keyset-backed cursor from a previous response, bound to\n the caller's account or subaccount and the newest-first creation order.\n Empty for the first page.",
+            "maxLength": 256,
+            "title": "page_token",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use\n their bound subaccount; other callers use their authenticated root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "ListDustConversionsRequest",
+        "type": "object"
+      },
+      "transfer.v1.ListDustConversionsResponse": {
+        "additionalProperties": false,
+        "description": "ListDustConversionsResponse returns one page of conversions, newest first.",
+        "properties": {
+          "conversions": {
+            "description": "Conversions ordered by creation time, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.DustConversion"
+            },
+            "title": "conversions",
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Cursor for the next page. Empty when no more results exist.",
+            "title": "next_page_token",
+            "type": "string"
+          }
+        },
+        "title": "ListDustConversionsResponse",
+        "type": "object"
+      },
+      "transfer.v1.QuoteDustConversionRequest": {
+        "additionalProperties": false,
+        "description": "QuoteDustConversionRequest prices the account's dust into one target.",
+        "properties": {
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use\n their bound subaccount; other callers use their authenticated root account.",
+            "format": "int64",
+            "title": "subaccount_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "targetAssetId": {
+            "description": "Target asset id, one of ListDustBalances' targets.",
+            "exclusiveMinimum": 0,
+            "title": "target_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "QuoteDustConversionRequest",
+        "type": "object"
+      },
+      "transfer.v1.QuoteDustConversionResponse": {
+        "additionalProperties": false,
+        "description": "QuoteDustConversionResponse is a quote valid for 30 seconds.",
+        "properties": {
+          "balances": {
+            "description": "Every nonzero available Trading balance, sources and others, in asset id\n order.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.DustBalance"
+            },
+            "title": "balances",
+            "type": "array"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "After this time CreateDustConversion refuses the quote with\n ERROR_CODE_DUST_QUOTE_EXPIRED.",
+            "title": "expires_at"
+          },
+          "feeBps": {
+            "description": "The fee in basis points, taken from the payout.",
+            "title": "fee_bps",
+            "type": "integer"
+          },
+          "grossUsdE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "The sources' total USD value in 18-decimal fixed point, rounded down.",
+            "title": "gross_usd_e18"
+          },
+          "payoutE18": {
+            "$ref": "#/components/schemas/polyester.type.v1.U128",
+            "description": "Payout in canonical 18-decimal target units, after the fee, rounded down\n to the target's quantity precision.",
+            "title": "payout_e18"
+          },
+          "prices": {
+            "description": "Prices of the sources and the target, in asset id order.",
+            "items": {
+              "$ref": "#/components/schemas/transfer.v1.DustAssetPrice"
+            },
+            "title": "prices",
+            "type": "array"
+          },
+          "quoteId": {
+            "description": "Quote identifier CreateDustConversion takes. Empty when no balance is\n eligible or their payout rounds to zero; balances still says why.",
+            "title": "quote_id",
+            "type": "string"
+          },
+          "targetAssetId": {
+            "description": "Target asset id.",
+            "title": "target_asset_id",
+            "type": "integer"
+          }
+        },
+        "title": "QuoteDustConversionResponse",
+        "type": "object"
       },
       "transfer.v1.ResolvedDestination": {
         "additionalProperties": false,
@@ -30800,9 +31966,11 @@
         "description": "ListTriggersRequest lists triggers for an account.",
         "properties": {
           "clientListId": {
-            "description": "Optional filter by OCO client ID: the take-profit and the stop-loss of\n the OCO created with this client_list_id, 1 to 36 bytes in UTF-8. Use it\n to find an OCO whose create failed with TRIGGER_CREATE_OUTCOME_UNKNOWN.",
+            "description": "Optional filter by OCO client ID: the take-profit and the stop-loss of\n the OCO created with this client_list_id, which follows the same rule as\n OcoIntent.client_list_id. Use it to find an OCO whose create failed with\n TRIGGER_CREATE_OUTCOME_UNKNOWN.",
+            "maxLength": 36,
             "minLength": 1,
             "nullable": true,
+            "pattern": "^[A-Za-z0-9._:/-]+$",
             "title": "client_list_id",
             "type": "string"
           },
@@ -31101,8 +32269,10 @@
         "description": "OcoIntent configures an OCO over a quantity the account already holds: a\n take-profit and a stop-loss that both trade `side` for `qty_scaled`. The\n quantity is reserved once, when the OCO is created, and both legs share it,\n so it can be sold or bought only once. A SELL OCO protects a held base\n position: its take-profit is above the last price and its stop-loss below\n it. A BUY OCO buys with held quote: its take-profit is below the last price\n and its stop-loss above it.\n\n The first leg to reach its trigger price places its order for the OCO's\n remaining quantity. If that order fills only partly, the other leg keeps\n protecting the rest: when its own trigger price is reached it cancels the\n working order and places its own for what is left. When the whole quantity\n has been traded, the leg whose order traded last ends COMPLETED and the\n other ends CANCELED with reason OCO. Cancelling either leg, or the OCO with\n CancelOco, cancels both.",
         "properties": {
           "clientListId": {
-            "description": "Client-provided OCO ID for idempotency, unique per sub-account and pair\n among OCOs. While the OCO is active and for 60 seconds after both legs\n ended, retrying the create with the identical intent returns the same\n OCO, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. At most 36 bytes in UTF-8.",
+            "description": "Client-provided OCO ID for idempotency, unique per sub-account and pair\n among OCOs. While the OCO is active and for 60 seconds after both legs\n ended, retrying the create with the identical intent returns the same\n OCO, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. 1 to 36 ASCII characters using\n letters, digits, period, underscore, colon, slash, or hyphen, as a\n client_order_id; other IDs are rejected with INVALID_ARGUMENT.",
+            "maxLength": 36,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:/-]+$",
             "title": "client_list_id",
             "type": "string"
           },
@@ -32839,6 +34009,24 @@
       }
     },
     "securitySchemes": {
+      "ApiKeyIdAuth": {
+        "description": "ID of the API key that signs the request. An API-key request sends it with X-API-TIMESTAMP and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-KEY-ID",
+        "type": "apiKey"
+      },
+      "ApiKeySignatureAuth": {
+        "description": "Ed25519 signature of the request, made with the API key's private key and encoded as hex or base64. An API-key request sends it with X-API-KEY-ID and X-API-TIMESTAMP.",
+        "in": "header",
+        "name": "X-API-SIGNATURE",
+        "type": "apiKey"
+      },
+      "ApiKeyTimestampAuth": {
+        "description": "Time the request was signed, in Unix milliseconds. An API-key request sends it with X-API-KEY-ID and X-API-SIGNATURE.",
+        "in": "header",
+        "name": "X-API-TIMESTAMP",
+        "type": "apiKey"
+      },
       "BearerAuth": {
         "bearerFormat": "JWT",
         "scheme": "bearer",
@@ -38905,7 +40093,7 @@
     },
     "/auth.v1.SocialVerificationService/StartSocialVerification": {
       "post": {
-        "description": "Issue a challenge code for the caller to submit through the provider-specific verification flow.",
+        "description": "Issue a challenge code for the caller to submit through the provider-specific verification flow. While an X/Twitter or Discord account is linked, it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header; AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after.",
         "operationId": "SocialVerificationService_StartSocialVerification",
         "parameters": [
           {
@@ -38975,7 +40163,7 @@
     },
     "/auth.v1.SocialVerificationService/UnlinkSocialAccount": {
       "post": {
-        "description": "Unlink the caller's Telegram account, or cancel a Telegram link in progress. Repeating it changes nothing.",
+        "description": "Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link in progress. Repeating it changes nothing. An X/Twitter or Discord unlink needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header, and counts as the provider's one change per 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after.",
         "operationId": "SocialVerificationService_UnlinkSocialAccount",
         "parameters": [
           {
@@ -40863,9 +42051,79 @@
         ]
       }
     },
+    "/chain.lifecycle.v1.LifecycleReadService/GetAccountFlow": {
+      "post": {
+        "description": "Retrieve one lifecycle flow the account owns or receives by public flow id. API keys need READ_FUNDING_FLOWS.",
+        "operationId": "LifecycleReadService_GetAccountFlow",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.lifecycle.v1.GetAccountFlowRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.lifecycle.v1.GetAccountFlowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.GetAccountFlowResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.GetAccountFlowResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Account Flow",
+        "tags": [
+          "Lifecycle",
+          "LifecycleReadService"
+        ]
+      }
+    },
     "/chain.lifecycle.v1.LifecycleReadService/GetFlowById": {
       "post": {
-        "description": "Retrieve one lifecycle flow by public flow id.",
+        "description": "Retrieve one lifecycle flow a chain transaction started by public flow id.",
         "operationId": "LifecycleReadService_GetFlowById",
         "parameters": [
           {
@@ -40933,9 +42191,79 @@
         ]
       }
     },
+    "/chain.lifecycle.v1.LifecycleReadService/ListAccountFlows": {
+      "post": {
+        "description": "List the account's own and received lifecycle flows, including those no chain transaction started. API keys need READ_FUNDING_FLOWS.",
+        "operationId": "LifecycleReadService_ListAccountFlows",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.lifecycle.v1.ListAccountFlowsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/chain.lifecycle.v1.ListAccountFlowsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.ListAccountFlowsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/chain.lifecycle.v1.ListAccountFlowsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List Account Flows",
+        "tags": [
+          "Lifecycle",
+          "LifecycleReadService"
+        ]
+      }
+    },
     "/chain.lifecycle.v1.LifecycleReadService/ListFlows": {
       "post": {
-        "description": "List lifecycle flows with optional account, chain, asset, and state filters.",
+        "description": "List lifecycle flows a chain transaction started, with optional smart account, chain, asset, and state filters.",
         "operationId": "LifecycleReadService_ListFlows",
         "parameters": [
           {
@@ -41005,7 +42333,7 @@
     },
     "/chain.lifecycle.v1.LifecycleReadService/ListFlowsByTx": {
       "post": {
-        "description": "List lifecycle flows that reference a transaction hash.",
+        "description": "List lifecycle flows a chain transaction started that reference a transaction hash.",
         "operationId": "LifecycleReadService_ListFlowsByTx",
         "parameters": [
           {
@@ -43496,6 +44824,412 @@
         "summary": "List finalized transfer history for an account.  Supports optional subaccount, asset, inclusive time-bound, ordering, and cursor filters.",
         "tags": [
           "LedgerReadService"
+        ]
+      }
+    },
+    "/ledger.read.v1.StatementExportService/CreateStatementExport": {
+      "post": {
+        "description": "Create a whole-period account statement file, produced in the background. Idempotent per idempotency key.",
+        "operationId": "StatementExportService_CreateStatementExport",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.CreateStatementExportRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.CreateStatementExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.CreateStatementExportResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.CreateStatementExportResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create Statement Export",
+        "tags": [
+          "Statement Exports",
+          "StatementExportService"
+        ]
+      }
+    },
+    "/ledger.read.v1.StatementExportService/GetStatementExport": {
+      "get": {
+        "description": "Get a statement export's status, progress and expiry.",
+        "operationId": "StatementExportService_GetStatementExport.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          },
+          {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportRequest"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportRequest"
+                }
+              }
+            },
+            "in": "query",
+            "name": "message"
+          },
+          {
+            "in": "query",
+            "name": "encoding",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/encoding"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base64",
+            "schema": {
+              "$ref": "#/components/schemas/base64"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compression",
+            "schema": {
+              "$ref": "#/components/schemas/compression"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connect",
+            "schema": {
+              "$ref": "#/components/schemas/connect"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Statement Export",
+        "tags": [
+          "Statement Exports",
+          "StatementExportService"
+        ]
+      },
+      "post": {
+        "description": "Get a statement export's status, progress and expiry.",
+        "operationId": "StatementExportService_GetStatementExport",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Statement Export",
+        "tags": [
+          "Statement Exports",
+          "StatementExportService"
+        ]
+      }
+    },
+    "/ledger.read.v1.StatementExportService/ListStatementExports": {
+      "get": {
+        "description": "List an account's statement exports, newest first.",
+        "operationId": "StatementExportService_ListStatementExports.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          },
+          {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsRequest"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsRequest"
+                }
+              }
+            },
+            "in": "query",
+            "name": "message"
+          },
+          {
+            "in": "query",
+            "name": "encoding",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/encoding"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base64",
+            "schema": {
+              "$ref": "#/components/schemas/base64"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compression",
+            "schema": {
+              "$ref": "#/components/schemas/compression"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connect",
+            "schema": {
+              "$ref": "#/components/schemas/connect"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List Statement Exports",
+        "tags": [
+          "Statement Exports",
+          "StatementExportService"
+        ]
+      },
+      "post": {
+        "description": "List an account's statement exports, newest first.",
+        "operationId": "StatementExportService_ListStatementExports",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.ListStatementExportsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List Statement Exports",
+        "tags": [
+          "Statement Exports",
+          "StatementExportService"
         ]
       }
     },
@@ -49667,6 +51401,421 @@
         ]
       }
     },
+    "/transfer.v1.DustConversionService/CreateDustConversion": {
+      "post": {
+        "description": "Errors:\n - FAILED_PRECONDITION: DUST_QUOTE_EXPIRED, DUST_PRICE_MOVED (the payout fell\n   more than 1% below the quote), DUST_NOT_ELIGIBLE (a quoted balance is no\n   longer dust), DUST_TARGET_UNAVAILABLE, DUST_BALANCE_CHANGED (a source\n   balance moved since the quote) or DUST_CONVERSION_FAILED.\n - RESOURCE_EXHAUSTED: DUST_WINDOW_ACTIVE (the account converted within the\n   last 6 hours or a conversion is still processing), DUST_DAILY_LIMIT or\n   DUST_BUSY (retry shortly).\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT (the key or the quote was used for\n   another conversion).\n - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.\n - UNAVAILABLE: SERVICE_UNAVAILABLE or ACCOUNT_SHARD_UNAVAILABLE; retry the\n   same request.",
+        "operationId": "DustConversionService_CreateDustConversion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.CreateDustConversionRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.CreateDustConversionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.CreateDustConversionResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.CreateDustConversionResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Convert a quote at current index prices, or return the conversion already  made under the idempotency key. Every source must still be the whole  available balance the quote showed. A refused conversion moves nothing.",
+        "tags": [
+          "DustConversionService"
+        ]
+      }
+    },
+    "/transfer.v1.DustConversionService/GetDustConversion": {
+      "post": {
+        "description": "Errors:\n - NOT_FOUND: NOT_FOUND.\n - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.",
+        "operationId": "DustConversionService_GetDustConversion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.GetDustConversionRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.GetDustConversionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.GetDustConversionResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.GetDustConversionResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one of the account's conversions.",
+        "tags": [
+          "DustConversionService"
+        ]
+      }
+    },
+    "/transfer.v1.DustConversionService/ListDustBalances": {
+      "post": {
+        "description": "Errors:\n - INVALID_ARGUMENT: INVALID_REQUEST (target_asset_id is not a target) or\n   INVALID_SUBACCOUNT_ID.\n - NOT_FOUND: SUBACCOUNT_NOT_FOUND.\n - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.",
+        "operationId": "DustConversionService_ListDustBalances",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.ListDustBalancesRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.ListDustBalancesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.ListDustBalancesResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.ListDustBalancesResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the account's available Trading balances with their eligibility and  the payout the eligible ones would bring now. Reserves nothing.",
+        "tags": [
+          "DustConversionService"
+        ]
+      }
+    },
+    "/transfer.v1.DustConversionService/ListDustConversions": {
+      "post": {
+        "description": "Errors:\n - INVALID_ARGUMENT: INVALID_REQUEST (malformed page_token).\n - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.",
+        "operationId": "DustConversionService_ListDustConversions",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.ListDustConversionsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.ListDustConversionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.ListDustConversionsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.ListDustConversionsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the account's conversions, newest first.",
+        "tags": [
+          "DustConversionService"
+        ]
+      }
+    },
+    "/transfer.v1.DustConversionService/QuoteDustConversion": {
+      "post": {
+        "description": "Errors:\n - INVALID_ARGUMENT: INVALID_REQUEST (target_asset_id is not a target) or\n   INVALID_SUBACCOUNT_ID.\n - FAILED_PRECONDITION: DUST_TARGET_UNAVAILABLE (the target cannot be paid\n   now or has no current price) or SOURCE_ACCOUNT_INACTIVE.\n - NOT_FOUND: SUBACCOUNT_NOT_FOUND.\n - PERMISSION_DENIED: PERMISSION_DENIED or POLICY_DENIED.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.",
+        "operationId": "DustConversionService_QuoteDustConversion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.QuoteDustConversionRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.QuoteDustConversionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.QuoteDustConversionResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.QuoteDustConversionResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Price the account's dust into a target. The quote is valid for 30 seconds  and reserves nothing.",
+        "tags": [
+          "DustConversionService"
+        ]
+      }
+    },
+    "/transfer.v1.InternalTransferService/BatchCreateInternalTransfers": {
+      "post": {
+        "description": "Submit up to 10 independent Trading to Trading transfers authorized by one MFA check. Every leg is checked before any leg runs; legs then run in order and are not atomic, so a leg can be refused after earlier legs were accepted.",
+        "operationId": "InternalTransferService_BatchCreateInternalTransfers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.BatchCreateInternalTransfersRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/transfer.v1.BatchCreateInternalTransfersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.BatchCreateInternalTransfersResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/transfer.v1.BatchCreateInternalTransfersResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Batch Create Internal Transfers",
+        "tags": [
+          "Internal Transfers",
+          "InternalTransferService"
+        ]
+      }
+    },
     "/transfer.v1.InternalTransferService/CreateInternalTransfer": {
       "post": {
         "description": "Create or return one authenticated Trading to Trading internal transfer. Root-owner same-owner transfers and root-owner transfers to explicitly whitelisted destinations accept recent MFA; delegated and other interactive transfers require fresh step-up.",
@@ -51019,6 +53168,14 @@
       "name": "FeeService"
     },
     {
+      "description": "Whole-period account statements produced in the background as one CSV file.",
+      "name": "Statement Exports"
+    },
+    {
+      "description": "StatementExportService produces whole-period account statements in the\n background as one CSV file each. It covers the same account, asset and\n period choices as LedgerReadService.ExportStatement, with the same access\n rules: API keys need the READ_STATEMENTS policy action. A root account has\n at most 5 exports QUEUED or PROCESSING at a time, one account produces one\n export at a time, and a READY file can be downloaded for 7 days.",
+      "name": "StatementExportService"
+    },
+    {
       "description": "HeatmapService serves historical orderbook heatmap chains.",
       "name": "HeatmapService"
     },
@@ -51108,6 +53265,10 @@
     {
       "description": "InternalTransferService manages authenticated Trading to Trading internal\n transfer intake.",
       "name": "InternalTransferService"
+    },
+    {
+      "description": "DustConversionService converts dust, Trading balances too small to trade, into\n one target asset at index prices less a disclosed fee. A conversion moves\n every source and credits the payout atomically, or moves nothing.\n\n Limits: a balance converts when no open market accepts an order for it and it\n is worth at most 10 USD; one conversion takes at most 20 balances worth at\n most 200 USD together; an account converts once every 6 hours, refused\n conversions excepted; each target has a daily conversion limit.\n\n Quoting, converting and reading conversions need the CONVERT_DUST permission;\n listing balances needs READ_BALANCES. Sessions have both for the root\n account. On a subaccount, the role must be owner, admin, trader or leveraged\n trader, and the subaccount's policy must grant CONVERT_DUST, which its\n default policy does not. An API key's policy must grant CONVERT_DUST, and a\n subaccount-scoped key's subaccount policy too. No step-up is required: the\n value stays in the account.",
+      "name": "DustConversionService"
     },
     {
       "description": "Public VIP tier reference data and authenticated root-account qualification status.",
