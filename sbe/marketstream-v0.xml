@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<messageSchema package="marketstream" id="20" version="0" semanticVersion="1.0.0" byteOrder="littleEndian" description="Public SBE WebSocket contract for real-time market data: trades, best bid and offer, top-20 order book depth, and a live order book window kept by snapshot and incremental updates">
+  <types>
+    <composite name="messageHeader" description="Eight-byte SBE header that prefixes every WebSocket binary message">
+      <type name="blockLength" primitiveType="uint16" description="Encoded length in bytes of the message fixed block, excluding this header and repeating groups"/>
+      <type name="templateId" primitiveType="uint16" description="Message template identifier used to select the payload type"/>
+      <type name="schemaId" primitiveType="uint16" description="Schema identifier; must equal 20 for this contract"/>
+      <type name="version" primitiveType="uint16" description="Schema version used by the sender to encode the message; a reader skips fixed-block bytes past those it knows by blockLength"/>
+    </composite>
+
+    <composite name="groupSizeEncoding" description="Header describing a repeating group">
+      <type name="blockLength" primitiveType="uint16" description="Encoded size in bytes of each group entry"/>
+      <type name="numInGroup" primitiveType="uint16" description="Number of entries following this header"/>
+    </composite>
+
+    <type name="ZeroNullUint8" primitiveType="uint8" presence="optional" nullValue="0" minValue="1" description="Optional one-byte value whose null is zero; encodes enumerations that define no value zero"/>
+    <type name="ZeroNullUint64" primitiveType="uint64" presence="optional" nullValue="0" minValue="1" description="Optional unsigned 64-bit value whose null is zero"/>
+    <type name="OptionalPriceTicks" primitiveType="int64" presence="optional" description="Optional price in quote-asset units scaled by 1e9; null is the minimum 64-bit signed value (-9223372036854775808)"/>
+
+    <enum name="Side" encodingType="ZeroNullUint8" description="Direction of the order that took liquidity in a trade">
+      <validValue name="BUY" description="The taker bought the base asset">1</validValue>
+      <validValue name="SELL" description="The taker sold the base asset">2</validValue>
+    </enum>
+
+    <enum name="StreamType" encodingType="uint8" description="Market-data stream of one trading pair">
+      <validValue name="TRADES" description="Every trade of the pair in real time, with a trade frontier and explicit skipped ranges">1</validValue>
+      <validValue name="BBO" description="The best bid and offer of the pair in real time; a subscriber that falls behind receives only the newest">2</validValue>
+      <validValue name="DEPTH20" description="The best 20 price levels per side as full replacement snapshots, sent at most every 20 milliseconds when they change and at least every second">3</validValue>
+      <validValue name="DEPTH" description="A live window of the best price levels per side: a DepthSnapshot on subscribe, then a DepthUpdate for every book update. A subscriber that falls behind, or a book the server must rebuild, receives a replacement DepthSnapshot">4</validValue>
+    </enum>
+
+    <enum name="SubscribeResult" encodingType="uint8" description="Outcome of one subscription item">
+      <validValue name="OK" description="For a Subscribe item, the stream is subscribed and its messages follow on this connection. For an Unsubscribe item, the stream is unsubscribed and none of its messages follow the response; subscribing again starts the stream afresh, with a new DepthSnapshot for depth and a new TradesThrough baseline for trades">1</validValue>
+      <validValue name="UNKNOWN_SYMBOL" description="The trading pair is not served on this endpoint">2</validValue>
+      <validValue name="LIMIT_EXCEEDED" description="The connection already holds the most subscriptions it may; this item is not subscribed and the connection is unchanged">3</validValue>
+      <validValue name="ALREADY_SUBSCRIBED" description="The connection already holds this subscription; it is unchanged">4</validValue>
+      <validValue name="NOT_SUBSCRIBED" description="Answers an Unsubscribe item the connection does not hold; the connection is unchanged">5</validValue>
+      <validValue name="SYMBOL_DISABLED" description="The trading pair is listed but disabled; subscribe again once it is enabled">7</validValue>
+    </enum>
+
+    <enum name="FeedState" encodingType="uint8" description="Whether the server holds the current state of a trading pair's market data">
+      <validValue name="LIVE" description="The pair's streams are current">1</validValue>
+      <validValue name="STALE" description="The server lost the pair's current state; best bid and offer and depth messages pause until it recovers, when each depth subscription receives a replacement DepthSnapshot and trade gaps are reported">2</validValue>
+    </enum>
+  </types>
+
+  <message name="Subscribe" id="1" description="Client request to subscribe to streams; answered by one SubscribeResponse with one result per item, in order">
+    <field name="requestId" id="1" type="uint64" description="Client-chosen identifier echoed in the SubscribeResponse"/>
+    <group name="items" id="2" dimensionType="groupSizeEncoding" description="Streams to subscribe to">
+      <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier as returned by the spot configuration API"/>
+      <field name="stream" id="2" type="StreamType" description="Stream to subscribe to"/>
+    </group>
+  </message>
+
+  <message name="Unsubscribe" id="2" description="Client request to end subscriptions; answered by one SubscribeResponse with one result per item, in order. No message of an unsubscribed stream follows the response">
+    <field name="requestId" id="1" type="uint64" description="Client-chosen identifier echoed in the SubscribeResponse"/>
+    <group name="items" id="2" dimensionType="groupSizeEncoding" description="Streams to unsubscribe from">
+      <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier as returned by the spot configuration API"/>
+      <field name="stream" id="2" type="StreamType" description="Stream to unsubscribe from"/>
+    </group>
+  </message>
+
+  <message name="Ping" id="3" description="Client liveness probe; answered by one Pong">
+    <field name="requestId" id="1" type="uint64" description="Client-chosen identifier echoed in the Pong"/>
+  </message>
+
+  <message name="SubscribeResponse" id="20" description="Server answer to one Subscribe or Unsubscribe; a subscribed stream's first message follows its OK result, and an unsubscribed stream's messages end before it">
+    <field name="requestId" id="1" type="uint64" description="The Subscribe or Unsubscribe request's requestId"/>
+    <group name="results" id="2" dimensionType="groupSizeEncoding" description="One result per requested item, in request order">
+      <field name="symbolId" id="1" type="uint32" description="The item's trading pair identifier"/>
+      <field name="stream" id="2" type="StreamType" description="The item's stream"/>
+      <field name="result" id="3" type="SubscribeResult" description="The item's outcome"/>
+    </group>
+  </message>
+
+  <message name="Pong" id="21" description="Server answer to one Ping">
+    <field name="requestId" id="1" type="uint64" description="The Ping request's requestId"/>
+    <field name="sendTsNs" id="2" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC"/>
+  </message>
+
+  <message name="Trades" id="22" description="Trades of the trades stream: up to 256 fills of one book update in match order. A larger update is several messages with the same updateId. Each trade is delivered at most once per subscription; a trade that cannot be delivered is named in a TradesSkipped">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="bookEpoch" id="2" type="uint64" description="Book epoch of the trades; it increases when the pair's book is rebuilt"/>
+    <field name="updateId" id="3" type="uint64" description="Book update that executed the trades; the depth stream numbers its state with the same sequence within bookEpoch"/>
+    <field name="transactTsNs" id="4" type="uint64" epoch="unix" timeUnit="nanosecond" description="Time of the book update that executed the trades, in Unix nanoseconds UTC"/>
+    <field name="sendTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC; minus transactTsNs, an estimate of server-side latency"/>
+    <group name="entries" id="6" dimensionType="groupSizeEncoding" description="Trades in ascending tradeId order">
+      <field name="tradeId" id="1" type="uint64" description="Trade identifier, the matchId the trade history API returns. Contiguous per pair within a bookEpoch, starting at (bookEpoch-1)*2^40+1; trades of a later bookEpoch have higher identifiers"/>
+      <field name="priceTicks" id="2" type="int64" description="Execution price in quote-asset units scaled by 1e9"/>
+      <field name="qtyScaled" id="3" type="int64" description="Executed quantity in base-asset units scaled by the pair's base_quantity_scale"/>
+      <field name="takerSide" id="4" type="Side" description="Side of the order that took liquidity"/>
+    </group>
+  </message>
+
+  <message name="BestBidOffer" id="23" description="Best bid and offer of a bbo subscription, sent when the best price or quantity of either side changes and re-sent unchanged every second. Only the newest is sent to a subscriber that falls behind. Keep the message with the highest (bookEpoch, updateId); an equal pair is a re-send that confirms liveness">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="bookEpoch" id="2" type="uint64" description="Book epoch; it increases when the pair's book is rebuilt"/>
+    <field name="updateId" id="3" type="uint64" description="Book update whose state this message shows; the same sequence numbers depth20 and trades within bookEpoch, strictly increasing between changes but not contiguous"/>
+    <field name="transactTsNs" id="4" type="uint64" epoch="unix" timeUnit="nanosecond" description="Time of the book update this message shows, in Unix nanoseconds UTC"/>
+    <field name="sendTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC; minus transactTsNs, an estimate of server-side latency"/>
+    <field name="bidPriceTicks" id="6" type="OptionalPriceTicks" description="Best bid price in quote-asset units scaled by 1e9; null when the book has no bids"/>
+    <field name="bidQtyScaled" id="7" type="int64" description="Total resting quantity at the best bid in base-asset units scaled by the pair's base_quantity_scale; 0 when the book has no bids"/>
+    <field name="askPriceTicks" id="8" type="OptionalPriceTicks" description="Best ask price in quote-asset units scaled by 1e9; null when the book has no asks"/>
+    <field name="askQtyScaled" id="9" type="int64" description="Total resting quantity at the best ask in base-asset units scaled by the pair's base_quantity_scale; 0 when the book has no asks"/>
+  </message>
+
+  <message name="DepthSnapshot" id="24" description="Full replacement of the best price levels of a depth20 or depth subscription. On depth20, keep the message with the highest (bookEpoch, updateId); an equal pair is an unchanged re-send that confirms liveness. On depth, it replaces the book whatever it held, and the DepthUpdates that follow continue from its updateId">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="stream" id="2" type="StreamType" description="Stream this snapshot belongs to"/>
+    <field name="bookEpoch" id="3" type="uint64" description="Book epoch; it increases when the pair's book is rebuilt"/>
+    <field name="updateId" id="4" type="uint64" description="Book update whose state this snapshot shows; strictly increasing within bookEpoch but not contiguous"/>
+    <field name="transactTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Time of the book update this snapshot shows, in Unix nanoseconds UTC"/>
+    <field name="sendTsNs" id="6" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC"/>
+    <field name="levelsPerSide" id="9" type="uint16" description="Most price levels per side the stream holds: 20 for depth20; for depth, the live window N, to which a subscriber truncates each side, keeping the N best, after applying every DepthUpdate. A side with fewer levels holds every level of that side"/>
+    <group name="bids" id="7" dimensionType="groupSizeEncoding" description="Bid levels, best (highest price) first; at most levelsPerSide">
+      <field name="priceTicks" id="1" type="int64" description="Level price in quote-asset units scaled by 1e9"/>
+      <field name="qtyScaled" id="2" type="int64" description="Total resting quantity at the level in base-asset units scaled by the pair's base_quantity_scale"/>
+    </group>
+    <group name="asks" id="8" dimensionType="groupSizeEncoding" description="Ask levels, best (lowest price) first; at most levelsPerSide">
+      <field name="priceTicks" id="1" type="int64" description="Level price in quote-asset units scaled by 1e9"/>
+      <field name="qtyScaled" id="2" type="int64" description="Total resting quantity at the level in base-asset units scaled by the pair's base_quantity_scale"/>
+    </group>
+  </message>
+
+  <message name="DepthUpdate" id="25" description="Incremental update of a depth subscription's window. Apply it only to a book at exactly firstUpdateId-1 of the same bookEpoch: the previous DepthUpdate's lastUpdateId, or the DepthSnapshot's updateId. On any other position, discard the book and resubscribe (Unsubscribe, then Subscribe); never apply it to a book taken from another source or to a position inside the range. Each level is a SET of its total quantity, and quantity 0 removes the level. After applying it, truncate each side to the DepthSnapshot's levelsPerSide best levels: a level pushed out of the window by better levels is not removed on the wire">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="bookEpoch" id="2" type="uint64" description="Book epoch; it increases when the pair's book is rebuilt, and a new epoch always starts with a DepthSnapshot"/>
+    <field name="firstUpdateId" id="3" type="uint64" description="First book update this message covers: the update after the position it applies to"/>
+    <field name="lastUpdateId" id="4" type="uint64" description="Last book update this message covers, the book's position once applied. A range whose updates changed no level of the window carries no level"/>
+    <field name="transactTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Time of the book update lastUpdateId, in Unix nanoseconds UTC"/>
+    <field name="sendTsNs" id="6" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC; minus transactTsNs, an estimate of server-side latency"/>
+    <group name="bids" id="7" dimensionType="groupSizeEncoding" description="Changed bid levels of the window: levels that changed inside it, entered it from below, or left it because they emptied">
+      <field name="priceTicks" id="1" type="int64" description="Level price in quote-asset units scaled by 1e9"/>
+      <field name="qtyScaled" id="2" type="int64" description="Total resting quantity at the level in base-asset units scaled by the pair's base_quantity_scale; 0 removes the level"/>
+    </group>
+    <group name="asks" id="8" dimensionType="groupSizeEncoding" description="Changed ask levels of the window: levels that changed inside it, entered it from below, or left it because they emptied">
+      <field name="priceTicks" id="1" type="int64" description="Level price in quote-asset units scaled by 1e9"/>
+      <field name="qtyScaled" id="2" type="int64" description="Total resting quantity at the level in base-asset units scaled by the pair's base_quantity_scale; 0 removes the level"/>
+    </group>
+  </message>
+
+  <message name="MarketStatus" id="26" description="Feed state of a trading pair, sent to every subscription of the pair when it changes and when a subscription starts while the pair is stale">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="feed" id="2" type="FeedState" description="Whether the pair's streams are current"/>
+    <field name="sendTsNs" id="3" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC"/>
+  </message>
+
+  <message name="TradesSkipped" id="27" description="Trades of the trades stream that this subscription will not receive live. Recover them from the trade history API by trade identifier">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="bookEpoch" id="2" type="uint64" description="Book epoch of the skipped trades"/>
+    <field name="firstTradeId" id="3" type="uint64" description="First skipped trade identifier, inclusive"/>
+    <field name="lastTradeId" id="4" type="ZeroNullUint64" description="Last skipped trade identifier, inclusive; null (0) means every trade of bookEpoch from firstTradeId on, whose end the trade history API reports once the epoch ends"/>
+    <field name="sendTsNs" id="5" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC"/>
+  </message>
+
+  <message name="TradesThrough" id="28" description="Trade frontier of the trades stream: every trade of bookEpoch with tradeId at or below lastTradeId has been delivered on this subscription or named in a TradesSkipped. Sent first on subscribe as the subscription's baseline, then every second">
+    <field name="symbolId" id="1" type="uint32" description="Numeric trading pair identifier"/>
+    <field name="bookEpoch" id="2" type="uint64" description="Current book epoch"/>
+    <field name="lastTradeId" id="3" type="uint64" description="Highest trade identifier of bookEpoch accounted for; (bookEpoch-1)*2^40 before the epoch's first trade"/>
+    <field name="sendTsNs" id="4" type="uint64" epoch="unix" timeUnit="nanosecond" description="Server time at which this message was encoded, in Unix nanoseconds UTC"/>
+  </message>
+</messageSchema>

@@ -3,6 +3,27 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-16 — develop-20261116T135944Z
+
+0.93.4: configurable deeper order book depth, SBE market data stream, strict REST decimals, retryable 503s and consistent error codes.
+
+- [2026-11-15T1206Z-orders-v1](changes/2026-11-15T1206Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `transfer.v1.InternalTransferService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `auth.v1.PolicyService`. **Breaking.**
+- [2026-11-15T1338Z-triggers-v1](changes/2026-11-15T1338Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`.
+- [2026-11-15T1545Z-triggers-v1](changes/2026-11-15T1545Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`.
+- [2026-11-15T2058Z-orderbook-v1](changes/2026-11-15T2058Z-orderbook-v1.md): removed `orderbook.v1.OrderbookService`. **Breaking.**
+- [2026-11-15T2125Z-marketdata-v1](changes/2026-11-15T2125Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-15T2226Z-ledger-read-v1](changes/2026-11-15T2226Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-15T2234Z-orders-v1](changes/2026-11-15T2234Z-orders-v1.md): changed `orders.v1.OrdersReadService`.
+- [2026-11-15T2309Z-orders-v1](changes/2026-11-15T2309Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `triggers.v1.TriggersService`, `marketdata.v1.MarketDataService`, `marketoverview.v1.MarketOverviewService`, `chain.deposit.v1.DepositAddressService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `chain.lifecycle.v1.LifecycleReadService`, `chain.analytics.v1.ChainAnalyticsService`, `transfer.v1.InternalTransferService`, `transfer.v1.DustConversionService`, `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`, `claims.v1.ClaimsService`, `ledger.read.v1.StatementExportService`, `rewards.v1.RewardCampaignService`, `auth.v1.ApiKeyService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.SubaccountService`, `auth.v1.ProfileService`.
+- [2026-11-15T2326Z-orders-v1](changes/2026-11-15T2326Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `auth.v1.AuthService`, `auth.v1.SubaccountService`, `chain.withdraw.v1.WithdrawService`, `transfer.v1.InternalTransferService`, `ledger.read.v1.LedgerReadService`.
+- [2026-11-15T2331Z-triggers-v1](changes/2026-11-15T2331Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-16T0009Z-polyester-ratelimit-v1](changes/2026-11-16T0009Z-polyester-ratelimit-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.AuthService`, `claims.v1.ClaimsService`, `chain.withdraw.v1.WithdrawService`, `changelog.v1.ChangelogService`. **Breaking.**
+- [2026-11-16T0149Z-orders-v1](changes/2026-11-16T0149Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-16T0332Z-tradews-v1](changes/2026-11-16T0332Z-tradews-v1.md): changed `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-16T0431Z-swap-quickswap-v1](changes/2026-11-16T0431Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapReferralService`, `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-16T0438Z-auth-v1](changes/2026-11-16T0438Z-auth-v1.md): changed `auth.v1.AuthService`.
+- [2026-11-16T0442Z-swap-quickswap-v1](changes/2026-11-16T0442Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapReferralService`. **Breaking.**
+
 ## 2026-11-15 — develop-20261115T203428Z
 
 batch internal transfers, dust conversion, statement export files, exact balance history and network suspension handling.

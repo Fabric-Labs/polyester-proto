@@ -10,10 +10,15 @@
             "name": "account_id",
             "jsonName": "accountId",
             "number": 1,
-            "doc": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN; an ID that is not a public sub-account ID\n fails with FEES_INVALID.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
-            "format": "fixed64"
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
           },
           {
             "name": "bps",
@@ -22,7 +27,13 @@
             "doc": "Fee in basis points of what each leg receives, from 1 to 300.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32"
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gte": "1",
+                "lte": "300"
+              }
+            }
           }
         ]
       }
@@ -300,7 +311,7 @@
             "name": "max_unfunded_addresses",
             "jsonName": "maxUnfundedAddresses",
             "number": 11,
-            "doc": "Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
+            "doc": "Unfunded QuickSwaps the broker may hold at once: QuickSwaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -309,7 +320,7 @@
             "name": "max_creates_per_hour",
             "jsonName": "maxCreatesPerHour",
             "number": 12,
-            "doc": "Quick Swaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
+            "doc": "QuickSwaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -497,7 +508,7 @@
             "name": "unfunded_addresses",
             "jsonName": "unfundedAddresses",
             "number": 1,
-            "doc": "Unfunded Quick Swaps held now, counted against\n Broker.max_unfunded_addresses.",
+            "doc": "Unfunded QuickSwaps held now, counted against\n Broker.max_unfunded_addresses.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -506,7 +517,7 @@
             "name": "creates_last_hour",
             "jsonName": "createsLastHour",
             "number": 2,
-            "doc": "Quick Swaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
+            "doc": "QuickSwaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -639,7 +650,8 @@
             "validate": {
               "string": {
                 "minLen": 1,
-                "maxLen": 64
+                "maxLen": 64,
+                "pattern": "^\\S([\\s\\S]*\\S)?$"
               }
             }
           }
@@ -693,13 +705,14 @@
             "name": "label",
             "jsonName": "label",
             "number": 2,
-            "doc": "Label, 1 to 64 characters without leading or trailing whitespace.",
+            "doc": "Label, 1 to 64 characters without leading or trailing whitespace,\n Unicode spaces such as the no-break space included.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
               "string": {
                 "minLen": 1,
-                "maxLen": 64
+                "maxLen": 64,
+                "pattern": "^[^\\t\\n\\v\\f\\r    - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r    - \u2028\u2029  　])?$"
               }
             }
           }
@@ -740,6 +753,16 @@
             "id": "create_quickswap_request.refund_target",
             "message": "refund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address",
             "expression": "(this.refund_address == '') == (this.refund_zipped_asset_id == 0u) \u0026\u0026 (this.refund_memo == '' || this.refund_address != '')"
+          },
+          {
+            "id": "create_quickswap_request.fees_total",
+            "message": "broker_bps and the affiliates' bps must total at most 300",
+            "expression": "this.broker_bps + (this.affiliates.size() \u003e 0 ? this.affiliates[0].bps : 0u) + (this.affiliates.size() \u003e 1 ? this.affiliates[1].bps : 0u) + (this.affiliates.size() \u003e 2 ? this.affiliates[2].bps : 0u) \u003c= 300u"
+          },
+          {
+            "id": "create_quickswap_request.referral_without_affiliates",
+            "message": "referral_code cannot be combined with affiliates",
+            "expression": "this.referral_code == '' || this.affiliates.size() == 0"
           }
         ],
         "fields": [
@@ -837,22 +860,39 @@
             "number": 11,
             "doc": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults. Fixed at creation with broker_bps.",
             "repeated": true,
-            "protoRef": "swap.quickswap.v1.AffiliateShare"
+            "protoRef": "swap.quickswap.v1.AffiliateShare",
+            "validate": {
+              "cel": [
+                {
+                  "id": "affiliates.distinct_vaults",
+                  "message": "each affiliate vault may be named once",
+                  "expression": "this.map(a, a.account_id).unique()"
+                }
+              ],
+              "repeated": {
+                "maxItems": 3
+              }
+            }
           },
           {
             "name": "broker_bps",
             "jsonName": "brokerBps",
             "number": 12,
-            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none,\n at most 300. broker_bps and the affiliates' bps total at most 300.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32"
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "300"
+              }
+            }
           },
           {
             "name": "referral_code",
             "jsonName": "referralCode",
             "number": 13,
-            "doc": "Optional referral partner code from a referral link, case-insensitive,\n at most 64 bytes; empty for none. Only a broker with a referral program may send one\n (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates (FEES_INVALID).\n It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's\n current code (REFERRAL_CODE_UNKNOWN), and the partner must be active\n (REFERRAL_PARTNER_INACTIVE). The program's rates\n for the route are applied (quote.referral) and fixed at creation. It is\n part of the request: the same idempotency_key with another code, or with\n and without one, is IDEMPOTENCY_CONFLICT.",
+            "doc": "Optional referral partner code from a referral link, case-insensitive,\n at most 64 bytes; empty for none. Only a broker with a referral program may send one\n (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates.\n It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's\n current code (REFERRAL_CODE_UNKNOWN), and the partner must be active\n (REFERRAL_PARTNER_INACTIVE). The program's rates\n for the route are applied (quote.referral) and fixed at creation. It is\n part of the request: the same idempotency_key with another code, or with\n and without one, is IDEMPOTENCY_CONFLICT.",
             "protoScalar": "string",
             "jsonType": "string"
           }
@@ -1143,7 +1183,7 @@
             "name": "display_name",
             "jsonName": "displayName",
             "number": 2,
-            "doc": "Name shown for the partner, 1 to 64 characters without leading or\n trailing spaces.",
+            "doc": "Name shown for the partner, at most 64 characters. Leading and trailing\n spaces are removed; at least one other character must remain.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -1316,7 +1356,7 @@
           {
             "name": "FEES_INVALID",
             "number": 32,
-            "doc": "The fees are not valid: more than three affiliates, an affiliate without\n a valid account_id or with bps outside 1 to 300, a vault named twice, or\n broker_bps and the affiliates' bps totalling more than 300."
+            "doc": "The fees are not valid in a way the request rules cannot check: an\n affiliate account_id that is not a public sub-account ID, or a\n referral_code whose discount and commission for the route exceed\n broker_bps. Fees that break the request rules (at most three distinct\n affiliates of 1 to 300 bps, broker_bps at most 300, all together at most\n 300, no affiliates with a referral_code) fail with INVALID_ARGUMENT\n before this check."
           },
           {
             "name": "STATS_INCOMPLETE",
@@ -2253,7 +2293,7 @@
     {
       "name": "swap.quickswap.v1.GetReferredQuickSwapRequest",
       "kind": "message",
-      "doc": "GetReferredQuickSwapRequest reads one Quick Swap the caller referred.",
+      "doc": "GetReferredQuickSwapRequest reads one QuickSwap the caller referred.",
       "message": {
         "fields": [
           {
@@ -2276,14 +2316,14 @@
     {
       "name": "swap.quickswap.v1.GetReferredQuickSwapResponse",
       "kind": "message",
-      "doc": "GetReferredQuickSwapResponse returns the Quick Swap with its fee\n breakdown, in progress or done.",
+      "doc": "GetReferredQuickSwapResponse returns the QuickSwap with its fee\n breakdown, in progress or done.",
       "message": {
         "fields": [
           {
             "name": "quick_swap",
             "jsonName": "quickSwap",
             "number": 1,
-            "doc": "The Quick Swap.",
+            "doc": "The QuickSwap.",
             "protoRef": "swap.quickswap.v1.ReferredQuickSwap"
           },
           {
@@ -2643,6 +2683,13 @@
       "kind": "message",
       "doc": "ListPayoutsRequest lists the payout runs of the broker's vaults, newest\n first. Every filter narrows the list.",
       "message": {
+        "cel": [
+          {
+            "id": "list_payouts_request.window",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
         "fields": [
           {
             "name": "broker",
@@ -2692,7 +2739,7 @@
             "name": "end_time",
             "jsonName": "endTime",
             "number": 5,
-            "doc": "Only runs scheduled before end_time (exclusive); unset for no upper\n bound.",
+            "doc": "Only runs scheduled before end_time (exclusive); after start_time when\n both are set; unset for no upper bound.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -2757,6 +2804,13 @@
       "kind": "message",
       "doc": "ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with\n optional filters. Every filter narrows the list.",
       "message": {
+        "cel": [
+          {
+            "id": "list_quickswaps_request.window",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
         "fields": [
           {
             "name": "broker",
@@ -2806,7 +2860,7 @@
             "name": "end_time",
             "jsonName": "endTime",
             "number": 5,
-            "doc": "Only QuickSwaps created before end_time (exclusive); unset for no upper\n bound.",
+            "doc": "Only QuickSwaps created before end_time (exclusive); after start_time\n when both are set; unset for no upper bound.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -2869,14 +2923,21 @@
     {
       "name": "swap.quickswap.v1.ListReferredQuickSwapsRequest",
       "kind": "message",
-      "doc": "ListReferredQuickSwapsRequest lists the Quick Swaps the caller referred.",
+      "doc": "ListReferredQuickSwapsRequest lists the QuickSwaps the caller referred.",
       "message": {
+        "cel": [
+          {
+            "id": "list_referred_quickswaps_request.window",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
         "fields": [
           {
             "name": "start_time",
             "jsonName": "startTime",
             "number": 1,
-            "doc": "Only Quick Swaps created at or after start_time, rounded down to the\n minute; unset for no lower bound.",
+            "doc": "Only QuickSwaps created at or after start_time, rounded down to the\n minute; unset for no lower bound.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -2885,7 +2946,7 @@
             "name": "end_time",
             "jsonName": "endTime",
             "number": 2,
-            "doc": "Only Quick Swaps created before end_time (exclusive), rounded up to the\n minute; unset for no upper bound.",
+            "doc": "Only QuickSwaps created before end_time (exclusive), rounded up to the\n minute; after start_time when both are set; unset for no upper bound.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -2894,7 +2955,7 @@
             "name": "statuses",
             "jsonName": "statuses",
             "number": 3,
-            "doc": "Only Quick Swaps in one of these statuses, at most 16; empty for every\n status.",
+            "doc": "Only QuickSwaps in one of these statuses, at most 16; empty for every\n status.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.QuickSwapStatus",
             "validate": {
@@ -2907,7 +2968,7 @@
             "name": "limit",
             "jsonName": "limit",
             "number": 4,
-            "doc": "Maximum number of Quick Swaps to return; 0 means 100, at most 200.",
+            "doc": "Maximum number of QuickSwaps to return; 0 means 100, at most 200.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32",
@@ -2921,7 +2982,7 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 5,
-            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the caller's partner record, the filters and the list order. It\n names only the swap_id of the previous page's last Quick Swap. Reuse it\n with the same filters. Empty for the first page.",
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the caller's partner record, the filters and the list order. It\n names only the swap_id of the previous page's last QuickSwap. Reuse it\n with the same filters. Empty for the first page.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2936,14 +2997,14 @@
     {
       "name": "swap.quickswap.v1.ListReferredQuickSwapsResponse",
       "kind": "message",
-      "doc": "ListReferredQuickSwapsResponse lists Quick Swaps newest minute first.\n Within a minute the order is fixed but does not follow creation time.\n Every Quick Swap whose creation was complete when the first page was read\n is listed exactly once. One whose creation completed later may be missing\n from later pages, even if its created_at is earlier than theirs.",
+      "doc": "ListReferredQuickSwapsResponse lists QuickSwaps newest minute first.\n Within a minute the order is fixed but does not follow creation time.\n Every QuickSwap whose creation was complete when the first page was read\n is listed exactly once. One whose creation completed later may be missing\n from later pages, even if its created_at is earlier than theirs.",
       "message": {
         "fields": [
           {
             "name": "quick_swaps",
             "jsonName": "quickSwaps",
             "number": 1,
-            "doc": "The Quick Swaps.",
+            "doc": "The QuickSwaps.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ReferredQuickSwap"
           },
@@ -3284,6 +3345,13 @@
       "kind": "message",
       "doc": "ListVaultLedgerRequest lists the ledger entries of the broker's vaults,\n newest first.",
       "message": {
+        "cel": [
+          {
+            "id": "list_vault_ledger_request.window",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
         "fields": [
           {
             "name": "broker",
@@ -3320,7 +3388,7 @@
             "name": "end_time",
             "jsonName": "endTime",
             "number": 4,
-            "doc": "Only entries that occurred before end_time (exclusive); unset for no\n upper bound.",
+            "doc": "Only entries that occurred before end_time (exclusive); after start_time\n when both are set; unset for no upper bound.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -4907,6 +4975,18 @@
       "kind": "message",
       "doc": "QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,\n without reserving anything.",
       "message": {
+        "cel": [
+          {
+            "id": "quote_quickswap_request.fees_total",
+            "message": "broker_bps and the affiliates' bps must total at most 300",
+            "expression": "this.broker_bps + (this.affiliates.size() \u003e 0 ? this.affiliates[0].bps : 0u) + (this.affiliates.size() \u003e 1 ? this.affiliates[1].bps : 0u) + (this.affiliates.size() \u003e 2 ? this.affiliates[2].bps : 0u) \u003c= 300u"
+          },
+          {
+            "id": "quote_quickswap_request.referral_without_affiliates",
+            "message": "referral_code cannot be combined with affiliates",
+            "expression": "this.referral_code == '' || this.affiliates.size() == 0"
+          }
+        ],
         "fields": [
           {
             "name": "terms",
@@ -4922,10 +5002,15 @@
             "name": "broker_bps",
             "jsonName": "brokerBps",
             "number": 2,
-            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "doc": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none,\n at most 300. broker_bps and the affiliates' bps total at most 300.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32"
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "300"
+              }
+            }
           },
           {
             "name": "affiliates",
@@ -4933,7 +5018,19 @@
             "number": 3,
             "doc": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults.",
             "repeated": true,
-            "protoRef": "swap.quickswap.v1.AffiliateShare"
+            "protoRef": "swap.quickswap.v1.AffiliateShare",
+            "validate": {
+              "cel": [
+                {
+                  "id": "affiliates.distinct_vaults",
+                  "message": "each affiliate vault may be named once",
+                  "expression": "this.map(a, a.account_id).unique()"
+                }
+              ],
+              "repeated": {
+                "maxItems": 3
+              }
+            }
           },
           {
             "name": "referral_code",
@@ -4965,7 +5062,7 @@
     {
       "name": "swap.quickswap.v1.ReferralBreakdown",
       "kind": "message",
-      "doc": "ReferralBreakdown shows how a referred Quick Swap's fee and the partner's\n commission were worked out. Rates are in basis points of what each leg\n receives and are fixed when the Quick Swap is created; a two-leg route\n shows the sum of both legs' rates. For example, on a one-leg route with a\n 30 bps fee, a 3 bps discount and a 6 bps commission, the user pays 27 bps\n and the partner earns 6 bps, 20% of the fee before the discount.",
+      "doc": "ReferralBreakdown shows how a referred QuickSwap's fee and the partner's\n commission were worked out. Rates are in basis points of what each leg\n receives and are fixed when the QuickSwap is created; a two-leg route\n shows the sum of both legs' rates. For example, on a one-leg route with a\n 30 bps fee, a 3 bps discount and a 6 bps commission, the user pays 27 bps\n and the partner earns 6 bps, 20% of the fee before the discount.",
       "message": {
         "fields": [
           {
@@ -5113,7 +5210,7 @@
     {
       "name": "swap.quickswap.v1.ReferralCommissionValue",
       "kind": "message",
-      "doc": "ReferralCommissionValue is the US dollar value of a Quick Swap's commission\n at a current price.",
+      "doc": "ReferralCommissionValue is the US dollar value of a QuickSwap's commission\n at a current price.",
       "message": {
         "fields": [
           {
@@ -5139,7 +5236,7 @@
     {
       "name": "swap.quickswap.v1.ReferralCredit",
       "kind": "message",
-      "doc": "ReferralCredit is one commission credit of a Quick Swap: a settled trade\n of one of its legs, or its bridge payout.",
+      "doc": "ReferralCredit is one commission credit of a QuickSwap: a settled trade\n of one of its legs, or its bridge payout.",
       "message": {
         "fields": [
           {
@@ -5221,7 +5318,7 @@
             "name": "link_path",
             "jsonName": "linkPath",
             "number": 6,
-            "doc": "Path of the share link on Polyester's Quick Swap app: \"/r/\" followed by\n the code.",
+            "doc": "Path of the share link on Polyester's QuickSwap app: \"/r/\" followed by\n the code.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -5267,12 +5364,12 @@
           {
             "name": "PARTNER_ACTIVE",
             "number": 2,
-            "doc": "Approved: Quick Swaps made with the partner's code earn the commission."
+            "doc": "Approved: QuickSwaps made with the partner's code earn the commission."
           },
           {
             "name": "PARTNER_DISABLED",
             "number": 3,
-            "doc": "Disabled by Polyester: new Quick Swaps with the code earn nothing and the\n code cannot be changed. Quick Swaps already created keep their terms."
+            "doc": "Disabled by Polyester: new QuickSwaps with the code earn nothing and the\n code cannot be changed. QuickSwaps already created keep their terms."
           }
         ]
       }
@@ -5316,7 +5413,7 @@
     {
       "name": "swap.quickswap.v1.ReferralProgram",
       "kind": "message",
-      "doc": "ReferralProgram is the referral rates of every route category. Polyester\n can change them at any time; a change applies to Quick Swaps created after\n it, and Quick Swaps already created keep their rates.",
+      "doc": "ReferralProgram is the referral rates of every route category. Polyester\n can change them at any time; a change applies to QuickSwaps created after\n it, and QuickSwaps already created keep their rates.",
       "message": {
         "fields": [
           {
@@ -5373,7 +5470,7 @@
     {
       "name": "swap.quickswap.v1.ReferredQuickSwap",
       "kind": "message",
-      "doc": "ReferredQuickSwap is a Quick Swap the caller referred, as its referral\n partner sees it. It carries no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID. Amounts are exact;\n every time is rounded down to the minute.",
+      "doc": "ReferredQuickSwap is a QuickSwap the caller referred, as its referral\n partner sees it. It carries no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID. Amounts are exact;\n every time is rounded down to the minute.",
       "message": {
         "fields": [
           {
@@ -5404,7 +5501,7 @@
             "name": "created_at",
             "jsonName": "createdAt",
             "number": 4,
-            "doc": "When the Quick Swap was created, rounded down to the minute.",
+            "doc": "When the QuickSwap was created, rounded down to the minute.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -5495,7 +5592,7 @@
             "name": "commission",
             "jsonName": "commission",
             "number": 15,
-            "doc": "Commission credited so far, one entry per asset in asset_id order. Grows\n while the Quick Swap executes or pays out a bridge; empty until the\n first credit. Each credit is commission_bps applied to what its leg\n actually received, so it can differ from an estimate.",
+            "doc": "Commission credited so far, one entry per asset in asset_id order. Grows\n while the QuickSwap executes or pays out a bridge; empty until the\n first credit. Each credit is commission_bps applied to what its leg\n actually received, so it can differ from an estimate.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ReferralCommission"
           }
@@ -5551,6 +5648,13 @@
       "kind": "message",
       "doc": "RequestVaultAllowlistChangeRequest asks to add one destination to, or\n remove one from, a vault's payout address allowlist.",
       "message": {
+        "cel": [
+          {
+            "id": "request_vault_allowlist_change_request.removal_without_label",
+            "message": "label must be empty for REMOVE_DESTINATION",
+            "expression": "this.action != 2 || this.label == ''"
+          }
+        ],
         "fields": [
           {
             "name": "broker",
@@ -5632,7 +5736,8 @@
             "jsonType": "string",
             "validate": {
               "string": {
-                "maxLen": 64
+                "maxLen": 64,
+                "pattern": "^(\\S([\\s\\S]*\\S)?)?$"
               }
             }
           }

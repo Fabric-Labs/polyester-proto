@@ -8956,7 +8956,7 @@
             "type": "string"
           },
           "requireMemberMfa": {
-            "description": "Current delegated-member MFA requirement on the target sub-account. If true, accepting the invite requires MFA enrollment and fresh step-up.",
+            "description": "Current delegated-member MFA requirement on the target sub-account. If true, accepting the invite requires an enrolled MFA factor and a recently MFA-elevated session.",
             "title": "require_member_mfa",
             "type": "boolean"
           },
@@ -18442,7 +18442,7 @@
         "type": "object"
       },
       "marketdata.v1.HeatmapDepth": {
-        "description": "HeatmapDepth controls top-N levels included per side in each heatmap bucket.\n\n Values intentionally mirror orderbook.v1.Depth for FE ergonomics, while\n keeping this contract decoupled from orderbook service protos.",
+        "description": "HeatmapDepth controls top-N levels included per side in each heatmap bucket.",
         "enum": [
           "DEPTH_UNSPECIFIED",
           "DEPTH_1",
@@ -20252,31 +20252,14 @@
         "title": "TypeCount",
         "type": "object"
       },
-      "orderbook.v1.Depth": {
-        "description": "Depth specifies the number of price levels per side.",
-        "enum": [
-          "DEPTH_UNSPECIFIED",
-          "DEPTH_1",
-          "DEPTH_5",
-          "DEPTH_10",
-          "DEPTH_20",
-          "DEPTH_50",
-          "DEPTH_100",
-          "DEPTH_200",
-          "DEPTH_500",
-          "DEPTH_1000"
-        ],
-        "title": "Depth",
-        "type": "string"
-      },
       "orderbook.v1.GetOrderBookRequest": {
         "additionalProperties": false,
         "description": "GetOrderBookRequest describes a ConnectRPC snapshot request.",
         "properties": {
           "depth": {
-            "$ref": "#/components/schemas/orderbook.v1.Depth",
-            "description": "Requested depth per side (number of price levels). Default is 50.",
-            "title": "depth"
+            "description": "Number of price levels per side, from 1 to the max_depth every response\n reports. 0 (unset) selects the default of 50. A depth above max_depth is\n rejected with INVALID_ARGUMENT, never truncated.",
+            "title": "depth",
+            "type": "integer"
           },
           "symbolId": {
             "description": "Stable numeric pair ID from GetSpotConfig.",
@@ -20313,14 +20296,28 @@
             "title": "bids",
             "type": "array"
           },
+          "bookEpoch": {
+            "description": "Epoch of book_seq. Order snapshots by (book_epoch, book_seq): a higher\n epoch is newer whatever its book_seq, and a new epoch may restart\n book_seq. Discard a snapshot whose epoch is older than the newest one\n seen for the symbol. 0 while available is false.",
+            "format": "int64",
+            "title": "book_epoch",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "bookSeq": {
-            "description": "Monotonic book sequence for this symbol.",
+            "description": "Book sequence of this snapshot within book_epoch. Monotonic within one\n epoch; compare it only with sequences of the same epoch.",
             "format": "int64",
             "title": "book_seq",
             "type": [
               "integer",
               "string"
             ]
+          },
+          "maxDepth": {
+            "description": "Largest depth per side the service accepts, the upper bound of the\n request's depth. Set in every response, available or not.",
+            "title": "max_depth",
+            "type": "integer"
           },
           "symbolId": {
             "description": "Numeric symbol identifier (client resolves to symbol string).",
@@ -20516,7 +20513,7 @@
         "description": "BatchCancelItem identifies a single order to cancel within a batch.\nexactly one of order_id or client_order_id must be set",
         "properties": {
           "clientOrderId": {
-            "description": "Client order ID. Exactly one of order_id or client_order_id.",
+            "description": "Client order ID: 1 to 36 ASCII characters using letters, digits, period,\n underscore, colon, slash, or hyphen. Exactly one of order_id or\n client_order_id.",
             "maxLength": 36,
             "pattern": "^[A-Za-z0-9._:/-]*$",
             "title": "client_order_id",
@@ -20545,7 +20542,7 @@
         "description": "BatchCancelOrdersRequest cancels multiple orders by explicit ID.",
         "properties": {
           "items": {
-            "description": "Orders to cancel (max 50).",
+            "description": "Orders to cancel, 1 to 50.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.BatchCancelItem"
             },
@@ -20555,7 +20552,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Idempotency key (required).",
+            "description": "Idempotency key (required).\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -20744,7 +20741,7 @@
         "description": "BatchCreateOrdersRequest places multiple orders in one request.",
         "properties": {
           "items": {
-            "description": "Orders to create (max 20). client_order_id is optional per item. For a new\n request_id, a reused client_order_id rejects only that item with\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID; other valid items continue.",
+            "description": "Orders to create, 1 to 20. client_order_id is optional per item. For a new\n request_id, a reused client_order_id rejects only that item with\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID; other valid items continue.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.OrderIntent"
             },
@@ -20754,7 +20751,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes returns each decided\n item's original result and result time, and retries the items still\n unresolved, never admitting an already admitted item again. Reusing it\n with a different payload during that window returns\n CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat\n is a new request and can place its orders again, so read the items back\n instead of repeating an older batch.",
+            "description": "Required account-scoped idempotency key for the entire ordered batch.\n Reusing it with the same payload within 15 minutes returns each decided\n item's original result and result time, and retries the items still\n unresolved, never admitting an already admitted item again. Reusing it\n with a different payload during that window returns\n CONFLICT_IDEMPOTENCY_KEY_REUSE. After 15 minutes the ID is free: a repeat\n is a new request and can place its orders again, so read the items back\n instead of repeating an older batch.\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -20967,7 +20964,7 @@
         ],
         "properties": {
           "clientOrderId": {
-            "description": "Client order ID. Exactly one of order_id or client_order_id.",
+            "description": "Client order ID: 1 to 36 ASCII characters using letters, digits,\n period, underscore, colon, slash, or hyphen. Exactly one of order_id or\n client_order_id.",
             "maxLength": 36,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -20980,14 +20977,14 @@
             "title": "new_attached_risk"
           },
           "newClientOrderId": {
-            "description": "Optional client order ID for the successor. A value other than the order's\n client order ID makes the item a replacement.",
+            "description": "Optional client order ID for the successor. A value other than the order's\n client order ID makes the item a replacement. At most 36 ASCII characters\n using letters, digits, period, underscore, colon, slash, or hyphen.",
             "maxLength": 36,
             "pattern": "^[A-Za-z0-9._:/-]+$",
             "title": "new_client_order_id",
             "type": "string"
           },
           "newPriceTicks": {
-            "description": "New limit price in quote units scaled by 1e9.",
+            "description": "Patch fields (presence-based): set at least one of new_price_ticks,\n new_qty_scaled or new_attached_risk.\n Positive new limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -20998,7 +20995,7 @@
             ]
           },
           "newQtyScaled": {
-            "description": "Target total quantity after modify/replace, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "description": "Positive target total quantity after modify/replace, scaled by the\n pair's base_quantity_scale from GetSpotConfig.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -21027,7 +21024,7 @@
         "description": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\n Read the batch's status with GetBatchReplaceStatus within the same window;\n after it, reconcile the individual orders and never resubmit an accepted batch.\n The response answers admission, before an admitted item's change completes.\n Until it completes, a later change of that order, an item of the next batch\n included, is rejected with a retryable code: ORDER_MODIFY_IN_PROGRESS when it\n names the order by client order ID, and ORDER_PLACEMENT_PENDING (or\n ORDER_MODIFY_IN_PROGRESS) when it names the replacement_order_id returned\n here. Resend only the rejected items, in a new batch under a fresh key, after\n a short backoff: the rejected batch's key keeps replaying its rejection, and\n admitted items must not be sent again.\neach item target must be unique within a batch",
         "properties": {
           "items": {
-            "description": "Replacement items.",
+            "description": "Replacement items, 1 to 50, each targeting a different order.",
             "items": {
               "$ref": "#/components/schemas/orders.v1.BatchReplaceOrderItem"
             },
@@ -21037,7 +21034,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Client idempotency key (required).",
+            "description": "Client idempotency key (required).\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -21195,7 +21192,7 @@
         "description": "CancelAllAfterRequest arms/disables a dead-man switch for automatic cancel-all.\n When the switch fires, it cancels what a CancelAllOrders with the same\n scope cancels: open orders, never triggers. See CancelAllAfter.\ntimeout_sec must be 0 or between 10 and 120",
         "properties": {
           "requestId": {
-            "description": "Idempotency/trace key from caller (required).",
+            "description": "Idempotency/trace key from caller (required).\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -21298,7 +21295,7 @@
             "type": "boolean"
           },
           "requestId": {
-            "description": "Idempotency key (required). Reuse the same key and criteria for retries.\n Completed results are retained for at least two minutes. Use a fresh key\n for a new cancellation; do not reuse a key after its replay window.",
+            "description": "Idempotency key (required). Reuse the same key and criteria for retries.\n Completed results are retained for at least two minutes. Use a fresh key\n for a new cancellation; do not reuse a key after its replay window.\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -21456,7 +21453,7 @@
         ],
         "properties": {
           "clientOrderId": {
-            "description": "Client order ID.",
+            "description": "Client order ID: 1 to 36 ASCII characters using letters, digits,\n period, underscore, colon, slash, or hyphen. Exactly one of order_id or\n client_order_id.",
             "maxLength": 36,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -21464,7 +21461,7 @@
             "type": "string"
           },
           "orderId": {
-            "description": "Order ID as fixed64.",
+            "description": "Order ID as fixed64. Exactly one of order_id or client_order_id.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "order_id",
@@ -21594,7 +21591,7 @@
         "properties": {
           "order": {
             "$ref": "#/components/schemas/orders.v1.OrderIntent",
-            "description": "Order to admit.",
+            "description": "Order to admit. Required.",
             "title": "order"
           },
           "subaccountId": {
@@ -22164,7 +22161,7 @@
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, and sort\n order.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, and sort\n order. At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -22186,7 +22183,7 @@
             ]
           },
           "symbolId": {
-            "description": "Optional filter by symbol_id values. Empty means all symbols.",
+            "description": "Optional filter by symbol_id values: at most 100 distinct positive IDs.\n Empty means all symbols.",
             "items": {
               "exclusiveMinimum": 0,
               "maxItems": 100,
@@ -22240,7 +22237,7 @@
         "description": "GetOrderHistoryRequest lists terminal orders for an account.\nstart_ts_ns must be <= end_ts_ns when both are set, except end_ts_ns = 0 returns an empty page",
         "properties": {
           "endTsNs": {
-            "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).\n Omit for no upper bound; an explicit zero returns an empty page.",
+            "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).\n Omit for no upper bound; an explicit zero returns an empty page. Any\n other value must not be earlier than start_ts_ns when both are set.",
             "format": "int64",
             "nullable": true,
             "title": "end_ts_ns",
@@ -22270,7 +22267,7 @@
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order. At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -22307,7 +22304,7 @@
             ]
           },
           "symbolId": {
-            "description": "Optional filter by symbol_id values. Empty means all symbols.",
+            "description": "Optional filter by symbol_id values: at most 100 distinct positive IDs.\n Empty means all symbols.",
             "items": {
               "exclusiveMinimum": 0,
               "maxItems": 100,
@@ -22375,7 +22372,7 @@
         ],
         "properties": {
           "clientOrderId": {
-            "description": "Client order ID. When provided, server resolves latest matching order for the account.",
+            "description": "Client order ID. When provided, server resolves latest matching order for the account.\n 1 to 36 ASCII characters using letters, digits, period, underscore,\n colon, slash, or hyphen.",
             "maxLength": 36,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -22419,7 +22416,7 @@
             ]
           },
           "pageToken": {
-            "description": "Execution cursor from this order's previous response. Use order_id rather\n than a reused client_order_id to keep the requested generation stable.",
+            "description": "Execution cursor from this order's previous response. Use order_id rather\n than a reused client_order_id to keep the requested generation stable.\n At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -22514,7 +22511,7 @@
         ],
         "properties": {
           "afterMatchId": {
-            "description": "Return only durable fills whose per-symbol match ID is greater than this\n value. Subscribe to the execution WebSocket before calling this method and\n de-duplicate overlapping results by (symbol_id, match_id, order_id).",
+            "description": "Return only durable fills whose per-symbol match ID is greater than this\n value. Subscribe to the execution WebSocket before calling this method and\n de-duplicate overlapping results by (symbol_id, match_id, order_id).\n Must be positive and requires symbol_id, because match IDs are per symbol.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -22525,7 +22522,7 @@
             ]
           },
           "endTsNs": {
-            "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).\n Omit for no upper bound; an explicit zero returns an empty page.",
+            "description": "Inclusive end of the time range, in nanoseconds since epoch (UTC).\n Omit for no upper bound; an explicit zero returns an empty page. Any\n other value must not be earlier than start_ts_ns when both are set.",
             "format": "int64",
             "nullable": true,
             "title": "end_ts_ns",
@@ -22568,7 +22565,7 @@
             ]
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, time range,\n and sort order. At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -22600,13 +22597,13 @@
             ]
           },
           "symbolId": {
-            "description": "Optional filter by symbol_id.",
+            "description": "Optional filter by symbol_id. Required with after_match_id.",
             "exclusiveMinimum": 0,
             "title": "symbol_id",
             "type": "integer"
           },
           "throughGeneration": {
-            "description": "Inclusive generation ceiling; requires lineage_id.\n Does not freeze an actively filling generation.",
+            "description": "Positive inclusive generation ceiling; requires lineage_id.\n Does not freeze an actively filling generation.",
             "exclusiveMinimum": 0,
             "nullable": true,
             "title": "through_generation",
@@ -22651,7 +22648,7 @@
         "description": "LimitFok configures a fill-or-kill limit order.",
         "properties": {
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -22679,12 +22676,12 @@
             ]
           },
           "postOnly": {
-            "description": "Reject the order instead of taking liquidity. Post-only is available only\n on this resting limit-order variant.",
+            "description": "Reject the order instead of taking liquidity. Post-only is available on\n GTC and GTD limit orders; IOC, FOK and market orders cannot be post-only.",
             "title": "post_only",
             "type": "boolean"
           },
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -22713,7 +22710,7 @@
           },
           "expireAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Exact expiry time in UTC. It must be at least 1 second and at most 30 days\n after validation time. The order cannot execute when the current time equals\n this value.",
+            "description": "Required exact expiry time in UTC. It must be at least 1 second and at\n most 30 days after validation time. The order cannot execute when the\n current time equals this value.",
             "title": "expire_at"
           },
           "postOnly": {
@@ -22722,7 +22719,7 @@
             "type": "boolean"
           },
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -22743,7 +22740,7 @@
         "description": "LimitIoc configures an immediate-or-cancel limit order.",
         "properties": {
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -22791,7 +22788,7 @@
         ],
         "properties": {
           "clientRefPriceTicks": {
-            "description": "Optional client reference price in quote units scaled by 1e9. When\n omitted, admission uses server-side reference pricing.",
+            "description": "Optional positive client reference price in quote units scaled by 1e9.\n When omitted, admission uses server-side reference pricing.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "client_ref_price_ticks",
@@ -22801,7 +22798,7 @@
             ]
           },
           "maxSlippageBps": {
-            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%).",
+            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 10000.\n A SELL order accepts at most 9999: a 100% cap would leave it no\n positive price to sell at, so 10000 is rejected with\n ERROR_CODE_MAX_SLIPPAGE_INVALID.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -22867,7 +22864,7 @@
             "title": "behavior"
           },
           "clientOrderId": {
-            "description": "Client order ID to resolve within the caller account.",
+            "description": "Client order ID to resolve within the caller account: 1 to 36 ASCII\n characters using letters, digits, period, underscore, colon, slash, or\n hyphen.",
             "maxLength": 36,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -22880,14 +22877,14 @@
             "title": "new_attached_risk"
           },
           "newClientOrderId": {
-            "description": "Optional new client order id when replace path is taken.",
+            "description": "Optional new client order id when replace path is taken: at most 36 ASCII\n characters using letters, digits, period, underscore, colon, slash, or\n hyphen.",
             "maxLength": 36,
             "pattern": "^[A-Za-z0-9._:/-]+$",
             "title": "new_client_order_id",
             "type": "string"
           },
           "newPriceTicks": {
-            "description": "Patch fields (presence-based).\n New limit price in quote units scaled by 1e9. Required for price changes.",
+            "description": "Patch fields (presence-based): set at least one of new_price_ticks,\n new_qty_scaled or new_attached_risk.\n Positive new limit price in quote units scaled by 1e9. Required for price\n changes.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -22898,7 +22895,7 @@
             ]
           },
           "newQtyScaled": {
-            "description": "Target total quantity after modify/replace, scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
+            "description": "Positive target total quantity after modify/replace, scaled by the\n pair's base_quantity_scale from GetSpotConfig.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -22919,7 +22916,7 @@
             ]
           },
           "requestId": {
-            "description": "Idempotency key (required). Outstanding modifications retain this key;\n identical retries replay the final result for 60 seconds after the answer.",
+            "description": "Idempotency key (required). Outstanding modifications retain this key;\n identical retries replay the final result for 60 seconds after the answer.\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -23168,7 +23165,7 @@
             "type": "integer"
           },
           "marketMaxSlippageTicks": {
-            "description": "Non-negative MARKET maximum absolute price delta in Q9 execution-price ticks\n (1 tick = 1e-9 quote units). Zero means no absolute cap is configured.",
+            "description": "MARKET maximum absolute price delta the order carries, in Q9\n execution-price ticks (1 tick = 1e-9 quote units). Positive when the order\n set this cap; zero when it did not, for example because it set\n market_max_slippage_bps instead.",
             "format": "int64",
             "title": "market_max_slippage_ticks",
             "type": [
@@ -23210,7 +23207,7 @@
             "type": "boolean"
           },
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9. Zero for MARKET orders.",
+            "description": "Price in quote units scaled by 1e9. For a LIMIT order, its limit price.\n For a MARKET order, whatever placed it, its protection price: the worst\n price it may fill at, a BUY at or below it and a SELL at or above it. It\n is the order's reference price moved by its maximum slippage, or by the\n pair's default market slippage for its side (200 basis points if none is\n configured), on the pair's tick grid. A stop-loss's, take-profit's or\n trailing stop's market order takes the price that fired it as its\n reference; a buy stop's is never above the protection price at its\n trigger price.",
             "format": "int64",
             "title": "price_ticks",
             "type": [
@@ -23383,7 +23380,7 @@
             "title": "attached_risk"
           },
           "baseQtyScaled": {
-            "description": "Exact gross base quantity scaled by the pair's base_quantity_scale from\n GetSpotConfig.",
+            "description": "Exact positive gross base quantity scaled by the pair's\n base_quantity_scale from GetSpotConfig.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "base_qty_scaled",
@@ -23393,7 +23390,7 @@
             ]
           },
           "clientOrderId": {
-            "description": "Optional account-scoped identifier for correlation, lookup, and cancellation.\n While this identifier is retained, reuse returns\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the\n same payload. This identifier enables GetOrder reconciliation after a\n timeout; it does not provide exact replay.",
+            "description": "Optional account-scoped identifier for correlation, lookup, and cancellation.\n While this identifier is retained, reuse returns\n CONFLICT_DUPLICATE_CLIENT_ORDER_ID for every new submission, even with the\n same payload. This identifier enables GetOrder reconciliation after a\n timeout; it does not provide exact replay. At most 36 ASCII characters\n using letters, digits, period, underscore, colon, slash, or hyphen.",
             "maxLength": 36,
             "pattern": "^[A-Za-z0-9._:/-]*$",
             "title": "client_order_id",
@@ -23401,7 +23398,7 @@
           },
           "feeAsset": {
             "$ref": "#/components/schemas/orders.v1.FeeAsset",
-            "description": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY\n orders; SELL orders must use QUOTE.",
+            "description": "Asset charged for fees. Defaults to QUOTE. BASE is available only for BUY\n orders on a pair whose allow_buy_fee_from_base is true in GetSpotConfig;\n SELL orders must use QUOTE. Otherwise the order is refused with\n ERROR_CODE_FEE_ASSET_NOT_ALLOWED.",
             "title": "fee_asset"
           },
           "limitFok": {
@@ -23430,7 +23427,7 @@
             "title": "market_ioc"
           },
           "maxQuoteDebitScaled": {
-            "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled. It can carry\n attached_risk: the legs protect the quantity it actually buys.",
+            "description": "Hard all-in quote debit limit scaled by the pair's quote_quantity_scale\n from GetSpotConfig. Valid only for BUY market IOC and BUY limit IOC.\n The order spends up to this amount at the prices it fills at. Once what\n is left buys no further quantity step, it ends FILLED; if the book or\n its price limit stops it first, its remainder is canceled. It can carry\n attached_risk: the legs protect the quantity it actually buys. Must be\n positive.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "max_quote_debit_scaled",
@@ -23445,7 +23442,7 @@
             "title": "peg"
           },
           "quoteProceedsScaled": {
-            "description": "Quote proceeds target scaled by the pair's quote_quantity_scale from\n GetSpotConfig. Valid only for SELL market IOC and SELL limit IOC. The\n order sells whole quantity steps until its proceeds, the sum of each\n fill's price times quantity before fees, reach this amount, and never\n receives more. The fee is charged in quote on those proceeds. The order\n holds the base this amount sells at its limit price, or a market\n order's maximum slippage price, and is rejected INSUFFICIENT_FUNDS when\n that base is not available. Once what is left sells no further quantity\n step, it ends FILLED; if the book or its price limit stops it first,\n its remainder is canceled. It cannot carry attached_risk.",
+            "description": "Quote proceeds target scaled by the pair's quote_quantity_scale from\n GetSpotConfig. Valid only for SELL market IOC and SELL limit IOC. The\n order sells whole quantity steps until its proceeds, the sum of each\n fill's price times quantity before fees, reach this amount, and never\n receives more. The fee is charged in quote on those proceeds. The order\n holds the base this amount sells at its limit price, or a market\n order's maximum slippage price, and is rejected INSUFFICIENT_FUNDS when\n that base is not available. Once what is left sells no further quantity\n step, it ends FILLED; if the book or its price limit stops it first,\n its remainder is canceled. It cannot carry attached_risk. Must be\n positive.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "quote_proceeds_scaled",
@@ -23461,7 +23458,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Order side.",
+            "description": "Order side. Required.",
             "not": {
               "enum": [
                 0
@@ -23676,7 +23673,7 @@
         "properties": {
           "order": {
             "$ref": "#/components/schemas/orders.v1.OrderIntent",
-            "description": "Order intent to evaluate without submitting it.",
+            "description": "Order intent to evaluate without submitting it. Required.",
             "title": "order"
           },
           "subaccountId": {
@@ -23777,7 +23774,7 @@
         "description": "RiskLimitGtc configures an attached risk leg that submits a resting limit\n child. Attached risk legs do not support post-only.",
         "properties": {
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -23909,7 +23906,7 @@
         "properties": {
           "child": {
             "$ref": "#/components/schemas/orders.v1.RiskExecution",
-            "description": "Child execution when the threshold is crossed.",
+            "description": "Required child execution when the threshold is crossed.",
             "title": "child"
           },
           "triggerPriceSource": {
@@ -23918,7 +23915,7 @@
             "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
-            "description": "Trigger price in quote units scaled by 1e9.",
+            "description": "Positive trigger price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trigger_price_ticks",
@@ -23940,7 +23937,7 @@
         "properties": {
           "child": {
             "$ref": "#/components/schemas/orders.v1.RiskExecution",
-            "description": "Child execution when the threshold is crossed.",
+            "description": "Required child execution when the threshold is crossed.",
             "title": "child"
           },
           "triggerPriceSource": {
@@ -23949,7 +23946,7 @@
             "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
-            "description": "Trigger price in quote units scaled by 1e9.",
+            "description": "Positive trigger price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trigger_price_ticks",
@@ -24057,7 +24054,7 @@
             ]
           },
           "limitPriceTicks": {
-            "description": "Maximum price of a trailing stop that buys back, in quote units scaled by\n 1e9: the most its exit pays per unit, at which the quote it may spend is\n reserved with the exit's fee. Required when the parent order sells, so\n the trailing stop buys; must be unset when the parent order buys. A rise\n that fires above it still fires, and the exit fills only at or below it.\n Changing it with ModifyOrder replaces the leg.",
+            "description": "Positive maximum price of a trailing stop that buys back, in quote units\n scaled by 1e9: the most its exit pays per unit, at which the quote it may\n spend is reserved with the exit's fee. Required when the parent order\n sells, so the trailing stop buys; must be unset when the parent order\n buys. A rise that fires above it still fires, and the exit fills only at\n or below it. Changing it with ModifyOrder replaces the leg.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "limit_price_ticks",
@@ -24085,7 +24082,7 @@
             ]
           },
           "trailingDistanceBps": {
-            "description": "Trailing distance in basis points (1 bp = 0.01%).",
+            "description": "Trailing distance in basis points (1 bp = 0.01%), from 1 to 10000.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -24093,7 +24090,7 @@
             "type": "integer"
           },
           "trailingDistanceTicks": {
-            "description": "Trailing distance as a price delta in 1e-9 quote-unit ticks.",
+            "description": "Positive trailing distance as a price delta in 1e-9 quote-unit ticks.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trailing_distance_ticks",
@@ -24801,7 +24798,8 @@
         "description": "AffiliateShare credits one affiliate vault, a sub-account the broker owns,\n with a fee charged on top of the service and broker fees.",
         "properties": {
           "accountId": {
-            "description": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN.",
+            "description": "Public sub-account ID of an active affiliate vault of the broker\n (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an\n unknown, disabled or other broker's vault, or the default vault, fails\n with AFFILIATE_VAULT_UNKNOWN; an ID that is not a public sub-account ID\n fails with FEES_INVALID.",
+            "exclusiveMinimum": 0,
             "format": "int64",
             "title": "account_id",
             "type": [
@@ -24811,6 +24809,8 @@
           },
           "bps": {
             "description": "Fee in basis points of what each leg receives, from 1 to 300.",
+            "maximum": 300,
+            "minimum": 1,
             "title": "bps",
             "type": "integer"
           }
@@ -24959,12 +24959,12 @@
             "type": "integer"
           },
           "maxCreatesPerHour": {
-            "description": "Quick Swaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
+            "description": "QuickSwaps the broker may create in any rolling hour. At the limit,\n CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the\n oldest create of the hour is more than an hour old.",
             "title": "max_creates_per_hour",
             "type": "integer"
           },
           "maxUnfundedAddresses": {
-            "description": "Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
+            "description": "Unfunded QuickSwaps the broker may hold at once: QuickSwaps whose\n deposit address is being issued or is still awaiting a deposit within\n its funding window. At the limit, CreateQuickSwap fails with\n RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding\n window frees a slot.",
             "title": "max_unfunded_addresses",
             "type": "integer"
           },
@@ -25130,12 +25130,12 @@
             "type": "integer"
           },
           "createsLastHour": {
-            "description": "Quick Swaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
+            "description": "QuickSwaps created in the last hour, counted against\n Broker.max_creates_per_hour.",
             "title": "creates_last_hour",
             "type": "integer"
           },
           "unfundedAddresses": {
-            "description": "Unfunded Quick Swaps held now, counted against\n Broker.max_unfunded_addresses.",
+            "description": "Unfunded QuickSwaps held now, counted against\n Broker.max_unfunded_addresses.",
             "title": "unfunded_addresses",
             "type": "integer"
           }
@@ -25221,6 +25221,7 @@
             "description": "Label, 1 to 64 characters without leading or trailing whitespace, unique\n per broker. The same label always returns the same vault.",
             "maxLength": 64,
             "minLength": 1,
+            "pattern": "^\\S([\\s\\S]*\\S)?$",
             "title": "label",
             "type": "string"
           }
@@ -25257,9 +25258,10 @@
             "type": "string"
           },
           "label": {
-            "description": "Label, 1 to 64 characters without leading or trailing whitespace.",
+            "description": "Label, 1 to 64 characters without leading or trailing whitespace,\n Unicode spaces such as the no-break space included.",
             "maxLength": 64,
             "minLength": 1,
+            "pattern": "^[^\\t\\n\\v\\f\\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]([\\s\\S]*[^\\t\\n\\v\\f\\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000])?$",
             "title": "label",
             "type": "string"
           }
@@ -25287,18 +25289,20 @@
       },
       "swap.quickswap.v1.CreateQuickSwapRequest": {
         "additionalProperties": false,
-        "description": "CreateQuickSwapRequest creates, or returns, the QuickSwap for one\n idempotency key.\nrefund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address",
+        "description": "CreateQuickSwapRequest creates, or returns, the QuickSwap for one\n idempotency key.\nbroker_bps and the affiliates' bps must total at most 300\nreferral_code cannot be combined with affiliates\nrefund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address",
         "properties": {
           "affiliates": {
-            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults. Fixed at creation with broker_bps.",
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults. Fixed at creation with broker_bps.\neach affiliate vault may be named once",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
             },
+            "maxItems": 3,
             "title": "affiliates",
             "type": "array"
           },
           "brokerBps": {
-            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none,\n at most 300. broker_bps and the affiliates' bps total at most 300.",
+            "maximum": 300,
             "title": "broker_bps",
             "type": "integer"
           },
@@ -25319,7 +25323,7 @@
             "type": "string"
           },
           "referralCode": {
-            "description": "Optional referral partner code from a referral link, case-insensitive,\n at most 64 bytes; empty for none. Only a broker with a referral program may send one\n (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates (FEES_INVALID).\n It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's\n current code (REFERRAL_CODE_UNKNOWN), and the partner must be active\n (REFERRAL_PARTNER_INACTIVE). The program's rates\n for the route are applied (quote.referral) and fixed at creation. It is\n part of the request: the same idempotency_key with another code, or with\n and without one, is IDEMPOTENCY_CONFLICT.",
+            "description": "Optional referral partner code from a referral link, case-insensitive,\n at most 64 bytes; empty for none. Only a broker with a referral program may send one\n (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates.\n It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's\n current code (REFERRAL_CODE_UNKNOWN), and the partner must be active\n (REFERRAL_PARTNER_INACTIVE). The program's rates\n for the route are applied (quote.referral) and fixed at creation. It is\n part of the request: the same idempotency_key with another code, or with\n and without one, is IDEMPOTENCY_CONFLICT.",
             "title": "referral_code",
             "type": "string"
           },
@@ -25531,7 +25535,7 @@
         "description": "EnrollReferralPartnerRequest applies to become a referral partner.",
         "properties": {
           "displayName": {
-            "description": "Name shown for the partner, 1 to 64 characters without leading or\n trailing spaces.",
+            "description": "Name shown for the partner, at most 64 characters. Leading and trailing\n spaces are removed; at least one other character must remain.",
             "maxLength": 64,
             "minLength": 1,
             "title": "display_name",
@@ -26161,7 +26165,7 @@
       },
       "swap.quickswap.v1.GetReferredQuickSwapRequest": {
         "additionalProperties": false,
-        "description": "GetReferredQuickSwapRequest reads one Quick Swap the caller referred.",
+        "description": "GetReferredQuickSwapRequest reads one QuickSwap the caller referred.",
         "properties": {
           "swapId": {
             "description": "Public QuickSwap identifier.",
@@ -26179,7 +26183,7 @@
       },
       "swap.quickswap.v1.GetReferredQuickSwapResponse": {
         "additionalProperties": false,
-        "description": "GetReferredQuickSwapResponse returns the Quick Swap with its fee\n breakdown, in progress or done.",
+        "description": "GetReferredQuickSwapResponse returns the QuickSwap with its fee\n breakdown, in progress or done.",
         "properties": {
           "breakdown": {
             "$ref": "#/components/schemas/swap.quickswap.v1.ReferralBreakdown",
@@ -26188,7 +26192,7 @@
           },
           "quickSwap": {
             "$ref": "#/components/schemas/swap.quickswap.v1.ReferredQuickSwap",
-            "description": "The Quick Swap.",
+            "description": "The QuickSwap.",
             "title": "quick_swap"
           }
         },
@@ -26452,7 +26456,7 @@
       },
       "swap.quickswap.v1.ListPayoutsRequest": {
         "additionalProperties": false,
-        "description": "ListPayoutsRequest lists the payout runs of the broker's vaults, newest\n first. Every filter narrows the list.",
+        "description": "ListPayoutsRequest lists the payout runs of the broker's vaults, newest\n first. Every filter narrows the list.\nend_time must be after start_time",
         "properties": {
           "broker": {
             "description": "Broker name. A broker API key may name only its own broker.",
@@ -26462,7 +26466,7 @@
           },
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Only runs scheduled before end_time (exclusive); unset for no upper\n bound.",
+            "description": "Only runs scheduled before end_time (exclusive); after start_time when\n both are set; unset for no upper bound.",
             "title": "end_time"
           },
           "limit": {
@@ -26527,7 +26531,7 @@
       },
       "swap.quickswap.v1.ListQuickSwapsRequest": {
         "additionalProperties": false,
-        "description": "ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with\n optional filters. Every filter narrows the list.",
+        "description": "ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with\n optional filters. Every filter narrows the list.\nend_time must be after start_time",
         "properties": {
           "broker": {
             "description": "Broker name. A broker API key may name only its own broker.",
@@ -26537,7 +26541,7 @@
           },
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Only QuickSwaps created before end_time (exclusive); unset for no upper\n bound.",
+            "description": "Only QuickSwaps created before end_time (exclusive); after start_time\n when both are set; unset for no upper bound.",
             "title": "end_time"
           },
           "limit": {
@@ -26602,32 +26606,32 @@
       },
       "swap.quickswap.v1.ListReferredQuickSwapsRequest": {
         "additionalProperties": false,
-        "description": "ListReferredQuickSwapsRequest lists the Quick Swaps the caller referred.",
+        "description": "ListReferredQuickSwapsRequest lists the QuickSwaps the caller referred.\nend_time must be after start_time",
         "properties": {
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Only Quick Swaps created before end_time (exclusive), rounded up to the\n minute; unset for no upper bound.",
+            "description": "Only QuickSwaps created before end_time (exclusive), rounded up to the\n minute; after start_time when both are set; unset for no upper bound.",
             "title": "end_time"
           },
           "limit": {
-            "description": "Maximum number of Quick Swaps to return; 0 means 100, at most 200.",
+            "description": "Maximum number of QuickSwaps to return; 0 means 100, at most 200.",
             "maximum": 200,
             "title": "limit",
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the caller's partner record, the filters and the list order. It\n names only the swap_id of the previous page's last Quick Swap. Reuse it\n with the same filters. Empty for the first page.",
+            "description": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the caller's partner record, the filters and the list order. It\n names only the swap_id of the previous page's last QuickSwap. Reuse it\n with the same filters. Empty for the first page.",
             "maxLength": 256,
             "title": "page_token",
             "type": "string"
           },
           "startTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Only Quick Swaps created at or after start_time, rounded down to the\n minute; unset for no lower bound.",
+            "description": "Only QuickSwaps created at or after start_time, rounded down to the\n minute; unset for no lower bound.",
             "title": "start_time"
           },
           "statuses": {
-            "description": "Only Quick Swaps in one of these statuses, at most 16; empty for every\n status.",
+            "description": "Only QuickSwaps in one of these statuses, at most 16; empty for every\n status.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.QuickSwapStatus"
             },
@@ -26641,7 +26645,7 @@
       },
       "swap.quickswap.v1.ListReferredQuickSwapsResponse": {
         "additionalProperties": false,
-        "description": "ListReferredQuickSwapsResponse lists Quick Swaps newest minute first.\n Within a minute the order is fixed but does not follow creation time.\n Every Quick Swap whose creation was complete when the first page was read\n is listed exactly once. One whose creation completed later may be missing\n from later pages, even if its created_at is earlier than theirs.",
+        "description": "ListReferredQuickSwapsResponse lists QuickSwaps newest minute first.\n Within a minute the order is fixed but does not follow creation time.\n Every QuickSwap whose creation was complete when the first page was read\n is listed exactly once. One whose creation completed later may be missing\n from later pages, even if its created_at is earlier than theirs.",
         "properties": {
           "nextPageToken": {
             "description": "Cursor of the next page. Empty when no more results exist.",
@@ -26649,7 +26653,7 @@
             "type": "string"
           },
           "quickSwaps": {
-            "description": "The Quick Swaps.",
+            "description": "The QuickSwaps.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.ReferredQuickSwap"
             },
@@ -26881,7 +26885,7 @@
       },
       "swap.quickswap.v1.ListVaultLedgerRequest": {
         "additionalProperties": false,
-        "description": "ListVaultLedgerRequest lists the ledger entries of the broker's vaults,\n newest first.",
+        "description": "ListVaultLedgerRequest lists the ledger entries of the broker's vaults,\n newest first.\nend_time must be after start_time",
         "properties": {
           "broker": {
             "description": "Broker name. A broker API key may name only its own broker.",
@@ -26891,7 +26895,7 @@
           },
           "endTime": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "Only entries that occurred before end_time (exclusive); unset for no\n upper bound.",
+            "description": "Only entries that occurred before end_time (exclusive); after start_time\n when both are set; unset for no upper bound.",
             "title": "end_time"
           },
           "limit": {
@@ -27880,18 +27884,20 @@
       },
       "swap.quickswap.v1.QuoteQuickSwapRequest": {
         "additionalProperties": false,
-        "description": "QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,\n without reserving anything.",
+        "description": "QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,\n without reserving anything.\nbroker_bps and the affiliates' bps must total at most 300\nreferral_code cannot be combined with affiliates",
         "properties": {
           "affiliates": {
-            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults.",
+            "description": "Affiliate fees, each charged on top and credited to its affiliate vault:\n at most three distinct vaults.\neach affiliate vault may be named once",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.AffiliateShare"
             },
+            "maxItems": 3,
             "title": "affiliates",
             "type": "array"
           },
           "brokerBps": {
-            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none.\n broker_bps and the affiliates' bps total at most 300. Fees outside these\n rules fail with FEES_INVALID.",
+            "description": "Broker fee in basis points of what each leg receives, charged on top of\n the service fee and credited to the broker's default vault; 0 for none,\n at most 300. broker_bps and the affiliates' bps total at most 300.",
+            "maximum": 300,
             "title": "broker_bps",
             "type": "integer"
           },
@@ -27927,7 +27933,7 @@
       },
       "swap.quickswap.v1.ReferralBreakdown": {
         "additionalProperties": false,
-        "description": "ReferralBreakdown shows how a referred Quick Swap's fee and the partner's\n commission were worked out. Rates are in basis points of what each leg\n receives and are fixed when the Quick Swap is created; a two-leg route\n shows the sum of both legs' rates. For example, on a one-leg route with a\n 30 bps fee, a 3 bps discount and a 6 bps commission, the user pays 27 bps\n and the partner earns 6 bps, 20% of the fee before the discount.",
+        "description": "ReferralBreakdown shows how a referred QuickSwap's fee and the partner's\n commission were worked out. Rates are in basis points of what each leg\n receives and are fixed when the QuickSwap is created; a two-leg route\n shows the sum of both legs' rates. For example, on a one-leg route with a\n 30 bps fee, a 3 bps discount and a 6 bps commission, the user pays 27 bps\n and the partner earns 6 bps, 20% of the fee before the discount.",
         "properties": {
           "baseFeeBps": {
             "description": "Fee rate without the referral: the Polyester service fee plus the\n broker fee before the discount.",
@@ -28018,7 +28024,7 @@
       },
       "swap.quickswap.v1.ReferralCommissionValue": {
         "additionalProperties": false,
-        "description": "ReferralCommissionValue is the US dollar value of a Quick Swap's commission\n at a current price.",
+        "description": "ReferralCommissionValue is the US dollar value of a QuickSwap's commission\n at a current price.",
         "properties": {
           "asOf": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -28036,7 +28042,7 @@
       },
       "swap.quickswap.v1.ReferralCredit": {
         "additionalProperties": false,
-        "description": "ReferralCredit is one commission credit of a Quick Swap: a settled trade\n of one of its legs, or its bridge payout.",
+        "description": "ReferralCredit is one commission credit of a QuickSwap: a settled trade\n of one of its legs, or its bridge payout.",
         "properties": {
           "accruedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
@@ -28091,7 +28097,7 @@
             ]
           },
           "linkPath": {
-            "description": "Path of the share link on Polyester's Quick Swap app: \"/r/\" followed by\n the code.",
+            "description": "Path of the share link on Polyester's QuickSwap app: \"/r/\" followed by\n the code.",
             "title": "link_path",
             "type": "string"
           },
@@ -28154,7 +28160,7 @@
       },
       "swap.quickswap.v1.ReferralProgram": {
         "additionalProperties": false,
-        "description": "ReferralProgram is the referral rates of every route category. Polyester\n can change them at any time; a change applies to Quick Swaps created after\n it, and Quick Swaps already created keep their rates.",
+        "description": "ReferralProgram is the referral rates of every route category. Polyester\n can change them at any time; a change applies to QuickSwaps created after\n it, and QuickSwaps already created keep their rates.",
         "properties": {
           "bridging": {
             "$ref": "#/components/schemas/swap.quickswap.v1.ReferralRates",
@@ -28195,7 +28201,7 @@
       },
       "swap.quickswap.v1.ReferredQuickSwap": {
         "additionalProperties": false,
-        "description": "ReferredQuickSwap is a Quick Swap the caller referred, as its referral\n partner sees it. It carries no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID. Amounts are exact;\n every time is rounded down to the minute.",
+        "description": "ReferredQuickSwap is a QuickSwap the caller referred, as its referral\n partner sees it. It carries no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID. Amounts are exact;\n every time is rounded down to the minute.",
         "properties": {
           "baseFeeBps": {
             "description": "Fee rate the user would pay without the referral, in basis points: the\n Polyester service fee plus the broker fee before the discount. Each\n trading leg is charged its rate on what that leg receives, so a two-leg\n route shows the sum of both legs' rates; a bridge has one rate. Fixed\n at creation.",
@@ -28208,7 +28214,7 @@
             "type": "integer"
           },
           "commission": {
-            "description": "Commission credited so far, one entry per asset in asset_id order. Grows\n while the Quick Swap executes or pays out a bridge; empty until the\n first credit. Each credit is commission_bps applied to what its leg\n actually received, so it can differ from an estimate.",
+            "description": "Commission credited so far, one entry per asset in asset_id order. Grows\n while the QuickSwap executes or pays out a bridge; empty until the\n first credit. Each credit is commission_bps applied to what its leg\n actually received, so it can differ from an estimate.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.ReferralCommission"
             },
@@ -28222,7 +28228,7 @@
           },
           "createdAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
-            "description": "When the Quick Swap was created, rounded down to the minute.",
+            "description": "When the QuickSwap was created, rounded down to the minute.",
             "title": "created_at"
           },
           "destinationAmount": {
@@ -28315,7 +28321,7 @@
       },
       "swap.quickswap.v1.RequestVaultAllowlistChangeRequest": {
         "additionalProperties": false,
-        "description": "RequestVaultAllowlistChangeRequest asks to add one destination to, or\n remove one from, a vault's payout address allowlist.",
+        "description": "RequestVaultAllowlistChangeRequest asks to add one destination to, or\n remove one from, a vault's payout address allowlist.\nlabel must be empty for REMOVE_DESTINATION",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/swap.quickswap.v1.AllowlistAction",
@@ -28354,6 +28360,7 @@
           "label": {
             "description": "ADD_DESTINATION only: the member's name for the destination, at most 64\n characters without leading or trailing whitespace. Optional; must be\n empty for REMOVE_DESTINATION.",
             "maxLength": 64,
+            "pattern": "^(\\S([\\s\\S]*\\S)?)?$",
             "title": "label",
             "type": "string"
           },
@@ -31252,7 +31259,7 @@
         "description": "BatchCancelTriggersRequest cancels up to 50 of the account's triggers in one\n request. Each trigger is canceled as CancelTrigger cancels it and answered\n on its own, in request order; one item's rejection does not stop the others.",
         "properties": {
           "requestId": {
-            "description": "Idempotency key (required). Retrying with the same request_id and the same\n trigger_ids within 2 minutes returns the original results and cancels\n nothing again. The same request_id with other trigger_ids rejects every\n item with ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE.",
+            "description": "Idempotency key (required). Retrying with the same request_id and the same\n trigger_ids within 2 minutes returns the original results and cancels\n nothing again. The same request_id with other trigger_ids rejects every\n item with ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE.\n 1 to 64 ASCII characters using letters, digits, period, underscore, colon,\n slash, or hyphen.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._:/-]+$",
@@ -31562,12 +31569,12 @@
         "properties": {
           "child": {
             "$ref": "#/components/schemas/triggers.v1.ConditionalChildExecution",
-            "description": "Child execution.",
+            "description": "Child execution. Required.",
             "title": "child"
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Child order side.",
+            "description": "Child order side. Required.",
             "not": {
               "enum": [
                 0
@@ -31581,7 +31588,7 @@
             "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
-            "description": "Trigger threshold in quote units scaled by 1e9.",
+            "description": "Positive trigger threshold in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trigger_price_ticks",
@@ -31603,7 +31610,7 @@
         "properties": {
           "oco": {
             "$ref": "#/components/schemas/triggers.v1.OcoIntent",
-            "description": "OCO to admit.",
+            "description": "OCO to admit. Required.",
             "title": "oco"
           },
           "subaccountId": {
@@ -31693,7 +31700,7 @@
           },
           "trigger": {
             "$ref": "#/components/schemas/triggers.v1.TriggerIntent",
-            "description": "Trigger to admit.",
+            "description": "Trigger to admit. Required.",
             "title": "trigger"
           }
         },
@@ -31848,7 +31855,7 @@
         "description": "LadderTrigger configures the supported LINEAR limit-GTC ladder. All levels\n are admitted immediately and may rest concurrently.\nprice_max_ticks must be greater than price_min_ticks",
         "properties": {
           "levels": {
-            "description": "Number of linearly distributed levels.",
+            "description": "Number of linearly distributed levels, from 2 to 100.",
             "format": "int32",
             "maximum": 100,
             "minimum": 2,
@@ -31861,7 +31868,7 @@
             "type": "boolean"
           },
           "priceMaxTicks": {
-            "description": "Maximum generated level price in quote units scaled by 1e9.",
+            "description": "Maximum generated level price in quote units scaled by 1e9; must be\n greater than price_min_ticks.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_max_ticks",
@@ -31871,7 +31878,7 @@
             ]
           },
           "priceMinTicks": {
-            "description": "Minimum generated level price in quote units scaled by 1e9.",
+            "description": "Positive minimum generated level price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_min_ticks",
@@ -31882,7 +31889,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Child side.",
+            "description": "Child side. Required.",
             "not": {
               "enum": [
                 0
@@ -31910,7 +31917,7 @@
             "type": "integer"
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, trigger, sub-account scope, event\n filter, and newest-first sort order.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, trigger, sub-account scope, event\n filter, and newest-first sort order. At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -31991,7 +31998,7 @@
             ]
           },
           "pageToken": {
-            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, and newest\n first sort order.",
+            "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated account, sub-account scope, filters, and newest\n first sort order. At most 512 characters.",
             "maxLength": 512,
             "title": "page_token",
             "type": "string"
@@ -32186,7 +32193,7 @@
             "type": "integer"
           },
           "trailingDistanceBps": {
-            "description": "Updated trailing distance in basis points (1 bp = 0.01%).",
+            "description": "Updated trailing distance in basis points (1 bp = 0.01%), from 1 to\n 10000.",
             "format": "int32",
             "maximum": 10000,
             "minimum": 1,
@@ -32194,7 +32201,7 @@
             "type": "integer"
           },
           "trailingDistanceTicks": {
-            "description": "Updated trailing distance as a price delta in 1e-9 quote-unit ticks.",
+            "description": "Positive updated trailing distance as a price delta in 1e-9 quote-unit\n ticks.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trailing_distance_ticks",
@@ -32214,7 +32221,7 @@
             ]
           },
           "triggerPriceTicks": {
-            "description": "Patch fields for safe price, trailing-distance, and slippage edits.\n For stop/take-profit:\n Updated trigger price in quote units scaled by 1e9.",
+            "description": "Patch fields for safe price, trailing-distance, and slippage edits.\n For stop/take-profit:\n Positive updated trigger price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "nullable": true,
@@ -32277,7 +32284,7 @@
             "type": "string"
           },
           "qtyScaled": {
-            "description": "Quantity both legs trade, scaled by the pair's base_quantity_scale; a\n multiple of the pair's quantity step.",
+            "description": "Positive quantity both legs trade, scaled by the pair's\n base_quantity_scale; a multiple of the pair's quantity step.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "qty_scaled",
@@ -32293,7 +32300,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "The side both legs trade: SELL protects a held base position, BUY spends\n held quote.",
+            "description": "The side both legs trade: SELL protects a held base position, BUY spends\n held quote. Required.",
             "not": {
               "enum": [
                 0
@@ -32303,7 +32310,7 @@
           },
           "stopLoss": {
             "$ref": "#/components/schemas/triggers.v1.OcoLeg",
-            "description": "The stop-loss leg.",
+            "description": "The stop-loss leg. Required.",
             "title": "stop_loss"
           },
           "symbolId": {
@@ -32314,7 +32321,7 @@
           },
           "takeProfit": {
             "$ref": "#/components/schemas/triggers.v1.OcoLeg",
-            "description": "The take-profit leg. Its trigger price must be above the stop-loss's for\n a SELL OCO and below it for a BUY OCO.",
+            "description": "The take-profit leg. Its trigger price must be above the stop-loss's for\n a SELL OCO and below it for a BUY OCO. Required.",
             "title": "take_profit"
           }
         },
@@ -32335,7 +32342,7 @@
         "properties": {
           "child": {
             "$ref": "#/components/schemas/orders.v1.RiskExecution",
-            "description": "The order the leg places when its trigger price is reached: a market\n order (IOC) or a resting limit order (GTC).",
+            "description": "The order the leg places when its trigger price is reached: a market\n order (IOC) or a resting limit order (GTC). Required.",
             "title": "child"
           },
           "triggerPriceSource": {
@@ -32344,7 +32351,7 @@
             "title": "trigger_price_source"
           },
           "triggerPriceTicks": {
-            "description": "Trigger price in quote units scaled by 1e9.",
+            "description": "Positive trigger price in quote units scaled by 1e9. Required.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trigger_price_ticks",
@@ -32662,7 +32669,7 @@
         "description": "TrailingStopTrigger configures a spot trailing-stop strategy. A trailing\n stop that sells tracks the highest price since it activated and fires a\n market IOC child when the price falls the trailing distance from it. A\n trailing stop that buys tracks the lowest price since it activated and\n fires when the price rises the trailing distance from it; its child is an\n IOC limit order at its maximum price, or at its slippage cap above the fire\n price when that is lower, so it never buys above the maximum price. Without\n an activation price, tracking starts when the trigger is placed. Attached\n trailing stops may use either side, opposite their parent order.",
         "properties": {
           "activationPriceTicks": {
-            "description": "Optional activation price in quote units scaled by 1e9.",
+            "description": "Optional positive activation price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "activation_price_ticks",
@@ -32672,7 +32679,7 @@
             ]
           },
           "limitPriceTicks": {
-            "description": "Maximum price of a trailing stop that buys, in quote units scaled by 1e9:\n the most its child pays per unit. Required when `side` is BUY and set\n aside for it with the child's fee; at least the activation price, or at\n least the price it watches (trigger_price_source) when no activation price\n is set. A rise that fires above it still fires, and the child fills only\n at or below it. Must be unset when `side` is SELL. Fixed at create.",
+            "description": "Positive maximum price of a trailing stop that buys, in quote units scaled\n by 1e9: the most its child pays per unit. Required when `side` is BUY and\n set aside for it with the child's fee; at least the activation price, or\n at least the price it watches (trigger_price_source) when no activation\n price is set. A rise that fires above it still fires, and the child fills\n only at or below it. Must be unset when `side` is SELL. Fixed at create.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "limit_price_ticks",
@@ -32682,7 +32689,7 @@
             ]
           },
           "maxSlippageBps": {
-            "description": "Maximum slippage in basis points (1 bp = 0.01%). Values below 10000\n are accepted; a 100% cap would leave a trailing stop that sells no\n positive price to sell at.",
+            "description": "Maximum slippage in basis points (1 bp = 0.01%), from 1 to 9999 on\n either side. 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID,\n because a 100% cap would leave a trailing stop that sells no positive\n price to sell at.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -32701,7 +32708,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Child order side.",
+            "description": "Child order side. Required.",
             "not": {
               "enum": [
                 0
@@ -32710,7 +32717,7 @@
             "title": "side"
           },
           "trailingDistanceBps": {
-            "description": "Distance in basis points (1 bp = 0.01%).",
+            "description": "Distance in basis points (1 bp = 0.01%), from 1 to 10000.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -32718,7 +32725,7 @@
             "type": "integer"
           },
           "trailingDistanceTicks": {
-            "description": "Distance as a price delta in 1e-9 quote-unit ticks.",
+            "description": "Positive distance as a price delta in 1e-9 quote-unit ticks.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "trailing_distance_ticks",
@@ -33352,14 +33359,14 @@
         ],
         "properties": {
           "clientTriggerId": {
-            "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair\n and trigger type. While the trigger is active and for 60 seconds after it\n reaches a terminal status, retrying the create with the identical intent\n returns the same trigger, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is\n free: a create that uses it is a new intent and creates a new trigger. To\n learn the outcome of an earlier create after that window, read the\n triggers with ListTriggers, which return each trigger's\n client_trigger_id, instead of retrying the create. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected\n with INVALID_ARGUMENT.",
+            "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair\n and trigger type. While the trigger is active and for 60 seconds after it\n reaches a terminal status, retrying the create with the identical intent\n returns the same trigger, and a different intent with the same ID returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is\n free: a create that uses it is a new intent and creates a new trigger. To\n learn the outcome of an earlier create after that window, read the\n triggers with ListTriggers, which return each trigger's\n client_trigger_id, instead of retrying the create. After a create fails\n with INTERNAL_ERROR, the ID may already be used: a retry then returns\n CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.\n 1 to 36 bytes in UTF-8 (up to 36 ASCII characters); empty or longer IDs\n are rejected with INVALID_ARGUMENT and\n ERROR_CODE_CLIENT_TRIGGER_ID_INVALID.",
             "minLength": 1,
             "title": "client_trigger_id",
             "type": "string"
           },
           "feeAsset": {
             "$ref": "#/components/schemas/orders.v1.FeeAsset",
-            "description": "Fee asset for BUY children. SELL children must use QUOTE.",
+            "description": "Asset charged for the children's fees, for every strategy. Defaults to\n QUOTE. A trigger whose children BUY may select BASE only on a pair whose\n allow_buy_fee_from_base is true in GetSpotConfig; a trigger whose\n children SELL must use QUOTE. Otherwise the create is refused with\n ERROR_CODE_FEE_ASSET_NOT_ALLOWED.",
             "title": "fee_asset"
           },
           "ladder": {
@@ -33368,7 +33375,7 @@
             "title": "ladder"
           },
           "qtyScaled": {
-            "description": "Total quantity scaled by the pair's base_quantity_scale.",
+            "description": "Positive total quantity scaled by the pair's base_quantity_scale.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "qty_scaled",
@@ -33422,7 +33429,7 @@
         "description": "TriggerLimitFok configures a fill-or-kill limit child.",
         "properties": {
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -33445,7 +33452,7 @@
             "type": "boolean"
           },
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -33463,7 +33470,7 @@
         "description": "TriggerLimitIoc configures an immediate-or-cancel limit child.",
         "properties": {
           "priceTicks": {
-            "description": "Limit price in quote units scaled by 1e9.",
+            "description": "Positive limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -33511,7 +33518,7 @@
         ],
         "properties": {
           "maxSlippageBps": {
-            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%). A sell child\n accepts values below 10000; a 100% cap would leave it no positive price\n to sell at.",
+            "description": "Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 10000.\n A sell child accepts values below 10000; a 100% cap would leave it no\n positive price to sell at.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -33612,7 +33619,7 @@
         "description": "TwapLimitGtc configures one resting limit slice at a time. A previous open\n slice is canceled before the next interval.",
         "properties": {
           "priceTicks": {
-            "description": "Slice limit price in quote units scaled by 1e9.",
+            "description": "Positive slice limit price in quote units scaled by 1e9.",
             "exclusiveMinimum": 0,
             "format": "int64",
             "title": "price_ticks",
@@ -33660,7 +33667,7 @@
         ],
         "properties": {
           "maxSlippageBps": {
-            "description": "Maximum adverse price movement per slice in basis points (1 bp = 0.01%).",
+            "description": "Maximum adverse price movement per slice in basis points (1 bp = 0.01%),\n from 1 to 10000. A SELL TWAP accepts values below 10000; a 100% cap\n would leave a slice no positive price to sell at.",
             "exclusiveMinimum": 0,
             "format": "int32",
             "maximum": 10000,
@@ -33721,7 +33728,7 @@
           },
           "side": {
             "$ref": "#/components/schemas/orders.v1.Side",
-            "description": "Child side.",
+            "description": "Child side. Required.",
             "not": {
               "enum": [
                 0
@@ -46671,7 +46678,7 @@
     },
     "/orderbook.v1.OrderbookService/GetOrderBook": {
       "post": {
-        "description": "Retrieve a spot order book depth snapshot for a symbol. Supports selectable depth per side and returns best bid/ask levels.",
+        "description": "Retrieve a spot order book depth snapshot for a symbol. Supports a selectable depth per side, up to the max_depth each response reports, and returns best bid/ask levels.",
         "operationId": "OrderbookService_GetOrderBook",
         "parameters": [
           {
@@ -50410,7 +50417,7 @@
     },
     "/swap.quickswap.v1.QuickSwapReferralService/GetReferredQuickSwap": {
       "post": {
-        "description": "Get one Quick Swap the caller referred, with its fee and commission breakdown.",
+        "description": "Get one QuickSwap the caller referred, with its fee and commission breakdown.",
         "operationId": "QuickSwapReferralService_GetReferredQuickSwap",
         "parameters": [
           {
@@ -50471,7 +50478,7 @@
             "description": "Error"
           }
         },
-        "summary": "Get referred Quick Swap",
+        "summary": "Get referred QuickSwap",
         "tags": [
           "QuickSwap Referral",
           "QuickSwapReferralService"
@@ -50480,7 +50487,7 @@
     },
     "/swap.quickswap.v1.QuickSwapReferralService/ListReferredQuickSwaps": {
       "post": {
-        "description": "List the Quick Swaps the caller referred, newest first, with rates and commission.",
+        "description": "List the QuickSwaps the caller referred, newest first, with rates and commission.",
         "operationId": "QuickSwapReferralService_ListReferredQuickSwaps",
         "parameters": [
           {
@@ -50541,7 +50548,7 @@
             "description": "Error"
           }
         },
-        "summary": "List referred Quick Swaps",
+        "summary": "List referred QuickSwaps",
         "tags": [
           "QuickSwap Referral",
           "QuickSwapReferralService"
@@ -53235,11 +53242,11 @@
       "name": "QuickSwapBrokerService"
     },
     {
-      "description": "A referral partner's own record: enrollment, status, rates, referral code and the Quick Swaps it referred.",
+      "description": "A referral partner's own record: enrollment, status, rates, referral code and the QuickSwaps it referred.",
       "name": "QuickSwap Referral"
     },
     {
-      "description": "QuickSwapReferralService is a referral partner's own record, over\n ConnectRPC. A referral partner shares a link with their code; Quick Swaps\n made through it on Polyester's own Quick Swap app give the user a discount\n and pay the partner a commission, both out of the broker fee (see\n ReferralProgram). Referrals never apply to Quick Swaps through other\n brokers or the API.\n\n Every RPC takes the caller's interactive session token and acts only on\n the caller's own partner record; a broker API key is refused with\n PERMISSION_DENIED / ACTION_DENIED. A person who has not enrolled gets\n NOT_FOUND / REFERRAL_PARTNER_NOT_FOUND from every RPC but\n EnrollReferralPartner.\n\n A partner's code can be changed while it is not disabled, up to 9 times.\n The old code is retired and never given to anyone again; Quick Swaps\n already referred keep their partner.\n\n A partner reads the Quick Swaps it referred with ListReferredQuickSwaps\n and GetReferredQuickSwap, never another partner's or a Quick Swap without\n its referral. They return no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID; amounts are exact and\n times are rounded down to the minute.\n\n Every RPC is rate limited per account: over the limit it fails with\n RESOURCE_EXHAUSTED, a RateLimitDetail and a Retry-After header.",
+      "description": "QuickSwapReferralService is a referral partner's own record, over\n ConnectRPC. A referral partner shares a link with their code; QuickSwaps\n made through it on Polyester's own QuickSwap app give the user a discount\n and pay the partner a commission, both out of the broker fee (see\n ReferralProgram). Referrals never apply to QuickSwaps through other\n brokers or the API.\n\n Every RPC takes the caller's interactive session token and acts only on\n the caller's own partner record; a broker API key is refused with\n PERMISSION_DENIED / ACTION_DENIED. A person who has not enrolled gets\n NOT_FOUND / REFERRAL_PARTNER_NOT_FOUND from every RPC but\n EnrollReferralPartner.\n\n A partner's code can be changed while it is not disabled, up to 9 times.\n The old code is retired and never given to anyone again; QuickSwaps\n already referred keep their partner.\n\n A partner reads the QuickSwaps it referred with ListReferredQuickSwaps\n and GetReferredQuickSwap, never another partner's or a QuickSwap without\n its referral. They return no identity of the person who swapped and no\n account, address, memo, transaction hash or flow ID; amounts are exact and\n times are rounded down to the minute.\n\n Every RPC is rate limited per account: over the limit it fails with\n RESOURCE_EXHAUSTED, a RateLimitDetail and a Retry-After header.",
       "name": "QuickSwapReferralService"
     },
     {
