@@ -18,37 +18,15 @@ option (gnostic.openapi.v3.document) = {
   ]
 };
 
-// Depth specifies the number of price levels per side.
-enum Depth {
-  // Default depth (50 levels per side).
-  DEPTH_UNSPECIFIED = 0;
-  // 1 level per side (top of book / best bid-ask).
-  DEPTH_1 = 1;
-  // 5 levels per side.
-  DEPTH_5 = 2;
-  // 10 levels per side.
-  DEPTH_10 = 3;
-  // 20 levels per side.
-  DEPTH_20 = 4;
-  // 50 levels per side.
-  DEPTH_50 = 5;
-  // 100 levels per side.
-  DEPTH_100 = 6;
-  // 200 levels per side.
-  DEPTH_200 = 7;
-  // 500 levels per side.
-  DEPTH_500 = 8;
-  // 1000 levels per side.
-  DEPTH_1000 = 9;
-}
-
 // GetOrderBookRequest describes a ConnectRPC snapshot request.
 message GetOrderBookRequest {
   // Stable numeric pair ID from GetSpotConfig.
   uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
 
-  // Requested depth per side (number of price levels). Default is 50.
-  Depth depth = 2 [(buf.validate.field).enum.defined_only = true];
+  // Number of price levels per side, from 1 to the max_depth every response
+  // reports. 0 (unset) selects the default of 50. A depth above max_depth is
+  // rejected with INVALID_ARGUMENT, never truncated.
+  uint32 depth = 3;
 }
 
 // PriceLevel uses scaled integers for the binary (protobuf) API (low-latency).
@@ -68,7 +46,8 @@ message PriceLevel {
 message GetOrderBookResponse {
   // Numeric symbol identifier (client resolves to symbol string).
   uint32 symbol_id = 1;
-  // Monotonic book sequence for this symbol.
+  // Book sequence of this snapshot within book_epoch. Monotonic within one
+  // epoch; compare it only with sequences of the same epoch.
   uint64 book_seq = 2;
   // Best bid first; descending price. When available is true, empty means no
   // current liquidity; when it is false, always empty.
@@ -83,6 +62,14 @@ message GetOrderBookResponse {
   // was invalidated: its levels are unknown, not empty, and the response
   // carries none. Request the snapshot again later.
   bool available = 6;
+  // Epoch of book_seq. Order snapshots by (book_epoch, book_seq): a higher
+  // epoch is newer whatever its book_seq, and a new epoch may restart
+  // book_seq. Discard a snapshot whose epoch is older than the newest one
+  // seen for the symbol. 0 while available is false.
+  uint64 book_epoch = 7;
+  // Largest depth per side the service accepts, the upper bound of the
+  // request's depth. Set in every response, available or not.
+  uint32 max_depth = 8;
 }
 
 // OrderBookDelta is an incremental update to the orderbook state of one depth
@@ -133,14 +120,16 @@ service OrderbookService {
   option (polyester.api.docs_group) = "marketdata";
 
   // Retrieve a spot order book depth snapshot for a symbol.
-  // Supports selectable depth per side and returns best bid/ask levels.
+  // Supports a selectable depth per side, up to the max_depth each response
+  // reports, and returns best bid/ask levels.
   rpc GetOrderBook(GetOrderBookRequest) returns (GetOrderBookResponse) {
     option (polyester.api.public) = true;
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Order Book"
       description:
         "Retrieve a spot order book depth snapshot for a symbol. "
-        "Supports selectable depth per side and returns best bid/ask levels."
+        "Supports a selectable depth per side, up to the max_depth each "
+        "response reports, and returns best bid/ask levels."
       tags: "Orderbook Service"
     };
   }

@@ -1039,16 +1039,33 @@ message ChargedFee {
 // QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,
 // without reserving anything.
 message QuoteQuickSwapRequest {
+  option (buf.validate.message).cel = {
+    id: "quote_quickswap_request.fees_total"
+    message: "broker_bps and the affiliates' bps must total at most 300"
+    expression: "this.broker_bps + (this.affiliates.size() > 0 ? this.affiliates[0].bps : 0u) + (this.affiliates.size() > 1 ? this.affiliates[1].bps : 0u) + (this.affiliates.size() > 2 ? this.affiliates[2].bps : 0u) <= 300u"
+  };
+  option (buf.validate.message).cel = {
+    id: "quote_quickswap_request.referral_without_affiliates"
+    message: "referral_code cannot be combined with affiliates"
+    expression: "this.referral_code == '' || this.affiliates.size() == 0"
+  };
+
   // Terms to price.
   QuickSwapTerms terms = 1 [(buf.validate.field).required = true];
   // Broker fee in basis points of what each leg receives, charged on top of
-  // the service fee and credited to the broker's default vault; 0 for none.
-  // broker_bps and the affiliates' bps total at most 300. Fees outside these
-  // rules fail with FEES_INVALID.
-  uint32 broker_bps = 2;
+  // the service fee and credited to the broker's default vault; 0 for none,
+  // at most 300. broker_bps and the affiliates' bps total at most 300.
+  uint32 broker_bps = 2 [(buf.validate.field).uint32.lte = 300];
   // Affiliate fees, each charged on top and credited to its affiliate vault:
   // at most three distinct vaults.
-  repeated AffiliateShare affiliates = 3;
+  repeated AffiliateShare affiliates = 3 [
+    (buf.validate.field).repeated.max_items = 3,
+    (buf.validate.field).cel = {
+      id: "affiliates.distinct_vaults"
+      message: "each affiliate vault may be named once"
+      expression: "this.map(a, a.account_id).unique()"
+    }
+  ];
   // Optional referral partner code, as CreateQuickSwapRequest.referral_code:
   // at most 64 bytes.
   string referral_code = 4 [(buf.validate.field).string.max_bytes = 64];
@@ -1068,10 +1085,14 @@ message AffiliateShare {
   // Public sub-account ID of an active affiliate vault of the broker
   // (QuickSwapBrokerService.CreateAffiliateVault). Create the vault first: an
   // unknown, disabled or other broker's vault, or the default vault, fails
-  // with AFFILIATE_VAULT_UNKNOWN.
-  fixed64 account_id = 1;
+  // with AFFILIATE_VAULT_UNKNOWN; an ID that is not a public sub-account ID
+  // fails with FEES_INVALID.
+  fixed64 account_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // Fee in basis points of what each leg receives, from 1 to 300.
-  uint32 bps = 2;
+  uint32 bps = 2 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 300
+  }];
 }
 
 // CreateQuickSwapRequest creates, or returns, the QuickSwap for one
@@ -1081,6 +1102,16 @@ message CreateQuickSwapRequest {
     id: "create_quickswap_request.refund_target"
     message: "refund_zipped_asset_id and refund_address must be set together, and refund_memo requires refund_address"
     expression: "(this.refund_address == '') == (this.refund_zipped_asset_id == 0u) && (this.refund_memo == '' || this.refund_address != '')"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_quickswap_request.fees_total"
+    message: "broker_bps and the affiliates' bps must total at most 300"
+    expression: "this.broker_bps + (this.affiliates.size() > 0 ? this.affiliates[0].bps : 0u) + (this.affiliates.size() > 1 ? this.affiliates[1].bps : 0u) + (this.affiliates.size() > 2 ? this.affiliates[2].bps : 0u) <= 300u"
+  };
+  option (buf.validate.message).cel = {
+    id: "create_quickswap_request.referral_without_affiliates"
+    message: "referral_code cannot be combined with affiliates"
+    expression: "this.referral_code == '' || this.affiliates.size() == 0"
   };
 
   // Broker-chosen idempotency key, 1 to 128 characters of letters, digits,
@@ -1136,15 +1167,21 @@ message CreateQuickSwapRequest {
   string source_wallet = 10 [(buf.validate.field).string.max_bytes = 256];
   // Affiliate fees, each charged on top and credited to its affiliate vault:
   // at most three distinct vaults. Fixed at creation with broker_bps.
-  repeated AffiliateShare affiliates = 11;
+  repeated AffiliateShare affiliates = 11 [
+    (buf.validate.field).repeated.max_items = 3,
+    (buf.validate.field).cel = {
+      id: "affiliates.distinct_vaults"
+      message: "each affiliate vault may be named once"
+      expression: "this.map(a, a.account_id).unique()"
+    }
+  ];
   // Broker fee in basis points of what each leg receives, charged on top of
-  // the service fee and credited to the broker's default vault; 0 for none.
-  // broker_bps and the affiliates' bps total at most 300. Fees outside these
-  // rules fail with FEES_INVALID.
-  uint32 broker_bps = 12;
+  // the service fee and credited to the broker's default vault; 0 for none,
+  // at most 300. broker_bps and the affiliates' bps total at most 300.
+  uint32 broker_bps = 12 [(buf.validate.field).uint32.lte = 300];
   // Optional referral partner code from a referral link, case-insensitive,
   // at most 64 bytes; empty for none. Only a broker with a referral program may send one
-  // (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates (FEES_INVALID).
+  // (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates.
   // It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's
   // current code (REFERRAL_CODE_UNKNOWN), and the partner must be active
   // (REFERRAL_PARTNER_INACTIVE). The program's rates
@@ -1264,9 +1301,13 @@ enum ErrorCode {
   OWNER_IMMUTABLE = 30;
   // No pending invite with this ID is addressed to the caller.
   INVITE_NOT_FOUND = 31;
-  // The fees are not valid: more than three affiliates, an affiliate without
-  // a valid account_id or with bps outside 1 to 300, a vault named twice, or
-  // broker_bps and the affiliates' bps totalling more than 300.
+  // The fees are not valid in a way the request rules cannot check: an
+  // affiliate account_id that is not a public sub-account ID, or a
+  // referral_code whose discount and commission for the route exceed
+  // broker_bps. Fees that break the request rules (at most three distinct
+  // affiliates of 1 to 300 bps, broker_bps at most 300, all together at most
+  // 300, no affiliates with a referral_code) fail with INVALID_ARGUMENT
+  // before this check.
   FEES_INVALID = 32;
   // The broker stats cannot be read: a QuickSwap in the window, named by
   // ErrorDetail.swap_id, is missing a record they need. Contact Polyester

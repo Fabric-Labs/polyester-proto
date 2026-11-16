@@ -72,13 +72,13 @@ message Broker {
   // API key count as reads. Over the rate, the call fails with
   // RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After header.
   uint32 read_rps = 10;
-  // Unfunded Quick Swaps the broker may hold at once: Quick Swaps whose
+  // Unfunded QuickSwaps the broker may hold at once: QuickSwaps whose
   // deposit address is being issued or is still awaiting a deposit within
   // its funding window. At the limit, CreateQuickSwap fails with
   // RESOURCE_EXHAUSTED / BROKER_LIMIT; a deposit or the end of a funding
   // window frees a slot.
   uint32 max_unfunded_addresses = 11;
-  // Quick Swaps the broker may create in any rolling hour. At the limit,
+  // QuickSwaps the broker may create in any rolling hour. At the limit,
   // CreateQuickSwap fails with RESOURCE_EXHAUSTED / BROKER_LIMIT until the
   // oldest create of the hour is more than an hour old.
   uint32 max_creates_per_hour = 12;
@@ -90,10 +90,10 @@ message Broker {
 // is lowered. The counts are read when the request is served and can change
 // right after with concurrent creates, deposits and expiring funding windows.
 message BrokerUsage {
-  // Unfunded Quick Swaps held now, counted against
+  // Unfunded QuickSwaps held now, counted against
   // Broker.max_unfunded_addresses.
   uint32 unfunded_addresses = 1;
-  // Quick Swaps created in the last hour, counted against
+  // QuickSwaps created in the last hour, counted against
   // Broker.max_creates_per_hour.
   uint32 creates_last_hour = 2;
   // Affiliate vaults created, active and disabled together, counted against
@@ -335,10 +335,12 @@ message ListKeysResponse {
 message CreateKeyRequest {
   // Broker name.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
-  // Label, 1 to 64 characters without leading or trailing whitespace.
+  // Label, 1 to 64 characters without leading or trailing whitespace,
+  // Unicode spaces such as the no-break space included.
   string label = 2 [(buf.validate.field).string = {
     min_len: 1
     max_len: 64
+    pattern: "^[^\\t\\n\\v\\f\\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]([\\s\\S]*[^\\t\\n\\v\\f\\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000])?$"
   }];
 }
 
@@ -398,6 +400,7 @@ message CreateAffiliateVaultRequest {
   string label = 2 [(buf.validate.field).string = {
     min_len: 1
     max_len: 64
+    pattern: "^\\S([\\s\\S]*\\S)?$"
   }];
 }
 
@@ -507,6 +510,12 @@ message QuickSwapBrokerServiceGetQuickSwapResponse {
 // ListQuickSwapsRequest lists the broker's QuickSwaps, newest first, with
 // optional filters. Every filter narrows the list.
 message ListQuickSwapsRequest {
+  option (buf.validate.message).cel = {
+    id: "list_quickswaps_request.window"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+
   // Broker name. A broker API key may name only its own broker.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
   // Only QuickSwaps whose fees credit this vault: an affiliate vault they
@@ -528,8 +537,8 @@ message ListQuickSwapsRequest {
   // Only QuickSwaps created at or after start_time; unset for no lower
   // bound.
   google.protobuf.Timestamp start_time = 4;
-  // Only QuickSwaps created before end_time (exclusive); unset for no upper
-  // bound.
+  // Only QuickSwaps created before end_time (exclusive); after start_time
+  // when both are set; unset for no upper bound.
   google.protobuf.Timestamp end_time = 5;
   // Maximum number of QuickSwaps to return; 0 means 100, at most 200.
   uint32 limit = 6 [(buf.validate.field).uint32.lte = 200];
@@ -941,6 +950,12 @@ message Payout {
 // ListPayoutsRequest lists the payout runs of the broker's vaults, newest
 // first. Every filter narrows the list.
 message ListPayoutsRequest {
+  option (buf.validate.message).cel = {
+    id: "list_payouts_request.window"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+
   // Broker name. A broker API key may name only its own broker.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
   // Only this vault's payouts: the default vault or an affiliate vault, as
@@ -959,8 +974,8 @@ message ListPayoutsRequest {
   }];
   // Only runs scheduled at or after start_time; unset for no lower bound.
   google.protobuf.Timestamp start_time = 4;
-  // Only runs scheduled before end_time (exclusive); unset for no upper
-  // bound.
+  // Only runs scheduled before end_time (exclusive); after start_time when
+  // both are set; unset for no upper bound.
   google.protobuf.Timestamp end_time = 5;
   // Maximum number of payouts to return; 0 means 50, at most 100.
   uint32 limit = 6 [(buf.validate.field).uint32.lte = 100];
@@ -1337,6 +1352,12 @@ message VaultLedgerEntry {
 // ListVaultLedgerRequest lists the ledger entries of the broker's vaults,
 // newest first.
 message ListVaultLedgerRequest {
+  option (buf.validate.message).cel = {
+    id: "list_vault_ledger_request.window"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+
   // Broker name. A broker API key may name only its own broker.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
   // Only this vault's entries: the default vault or an affiliate vault, as
@@ -1345,8 +1366,8 @@ message ListVaultLedgerRequest {
   // Only entries that occurred at or after start_time; unset for no lower
   // bound.
   google.protobuf.Timestamp start_time = 3;
-  // Only entries that occurred before end_time (exclusive); unset for no
-  // upper bound.
+  // Only entries that occurred before end_time (exclusive); after start_time
+  // when both are set; unset for no upper bound.
   google.protobuf.Timestamp end_time = 4;
   // Maximum number of entries to return; 0 means 25, at most 100.
   uint32 limit = 5 [(buf.validate.field).uint32.lte = 100];
@@ -1529,6 +1550,12 @@ message ListVaultAllowlistChangesResponse {
 // RequestVaultAllowlistChangeRequest asks to add one destination to, or
 // remove one from, a vault's payout address allowlist.
 message RequestVaultAllowlistChangeRequest {
+  option (buf.validate.message).cel = {
+    id: "request_vault_allowlist_change_request.removal_without_label"
+    message: "label must be empty for REMOVE_DESTINATION"
+    expression: "this.action != 2 || this.label == ''"
+  };
+
   // Broker name.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
   // Public sub-account ID of the vault: the default vault or an affiliate
@@ -1555,7 +1582,10 @@ message RequestVaultAllowlistChangeRequest {
   // ADD_DESTINATION only: the member's name for the destination, at most 64
   // characters without leading or trailing whitespace. Optional; must be
   // empty for REMOVE_DESTINATION.
-  string label = 6 [(buf.validate.field).string.max_len = 64];
+  string label = 6 [(buf.validate.field).string = {
+    max_len: 64
+    pattern: "^(\\S([\\s\\S]*\\S)?)?$"
+  }];
 }
 
 // RequestVaultAllowlistChangeResponse returns the change, PENDING.
@@ -1619,10 +1649,16 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListVaultBalances reads current balances for this broker's own vaults.
-  // All broker roles and the broker's API keys can read, without step-up.
-  // Errors: NOT_FOUND for an unknown broker or vault; UNAVAILABLE when a
-  // balance cannot be read. No partial page is returned on a read failure.
+  // ListVaultBalances reads the current balances of the broker's vaults.
+  //
+  // Covers the default vault and every affiliate vault. Every broker role
+  // and the broker's API keys can read, without step-up.
+  //
+  // Errors:
+  // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another broker or vault filter, or
+  //   malformed.
+  // - UNAVAILABLE: a balance cannot be read; no partial page is returned.
   rpc ListVaultBalances(ListVaultBalancesRequest) returns (ListVaultBalancesResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1633,8 +1669,12 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListMyBrokers lists the brokers the caller is a member of and the
-  // invites addressed to the caller. Session token only.
+  // ListMyBrokers lists the caller's broker memberships and pending invites.
+  //
+  // Session token only.
+  //
+  // Errors:
+  // - PERMISSION_DENIED: ACTION_DENIED for a broker API key.
   rpc ListMyBrokers(ListMyBrokersRequest) returns (ListMyBrokersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (gnostic.openapi.v3.operation) = {
@@ -1733,10 +1773,11 @@ service QuickSwapBrokerService {
     };
   }
 
-  // TransferOwnership makes another member the Owner; the caller, the
-  // current Owner, becomes an Admin in the same change, and the caller's
-  // pending invites that an Admin may not grant (Finance) are cancelled.
-  // Session token and step-up proof only.
+  // TransferOwnership makes another member the Owner of the broker.
+  //
+  // The caller, the current Owner, becomes an Admin in the same change, and
+  // the caller's pending invites that an Admin may not grant (Finance) are
+  // cancelled. Session token and step-up proof only.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.
@@ -1883,13 +1924,14 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListQuickSwaps lists the broker's QuickSwaps, newest first, filtered by
-  // vault, status and creation time.
+  // ListQuickSwaps lists the broker's QuickSwaps.
+  //
+  // Newest first, filtered by vault, status and creation time.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND.
-  // - INVALID_ARGUMENT: a page_token from another broker, other filters or
-  //   malformed.
+  // - INVALID_ARGUMENT: vault_account_id is not a public sub-account ID, or
+  //   a page_token from another broker, other filters or malformed.
   rpc ListQuickSwaps(ListQuickSwapsRequest) returns (ListQuickSwapsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1900,12 +1942,14 @@ service QuickSwapBrokerService {
     };
   }
 
-  // GetQuickSwap returns the full detail of one of the broker's QuickSwaps,
-  // including its addresses, quote, progress, requested and charged fees.
-  // Every broker member role can read it with a session token.
+  // GetQuickSwap returns the full detail of one of the broker's QuickSwaps.
+  //
+  // The detail includes its addresses, quote, progress, and requested and
+  // charged fees. Every broker member role can read it with a session token.
   //
   // Errors:
-  // - NOT_FOUND: BROKER_NOT_FOUND or SWAP_NOT_FOUND, including another broker's swap.
+  // - NOT_FOUND: BROKER_NOT_FOUND, or SWAP_NOT_FOUND, including another
+  //   broker's QuickSwap.
   rpc GetQuickSwap(QuickSwapBrokerServiceGetQuickSwapRequest) returns (QuickSwapBrokerServiceGetQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1916,11 +1960,14 @@ service QuickSwapBrokerService {
     };
   }
 
-  // GetFeeTotals totals the broker and affiliate fees charged to the
-  // broker's QuickSwaps in a window, per asset, by vault, day or month.
+  // GetFeeTotals totals the broker and affiliate fees charged in a window.
+  //
+  // Fees charged to the broker's QuickSwaps, per asset, grouped by vault, day
+  // or month.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND.
+  // - INVALID_ARGUMENT: vault_account_id is not a public sub-account ID.
   rpc GetFeeTotals(GetFeeTotalsRequest) returns (GetFeeTotalsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1931,9 +1978,10 @@ service QuickSwapBrokerService {
     };
   }
 
-  // GetBrokerStats reads the broker's QuickSwap activity in a window, per UTC
-  // day or month: QuickSwaps created by status, deposits credited and
-  // payouts delivered per asset, and the service, broker, affiliate and
+  // GetBrokerStats reads the broker's QuickSwap activity in a window.
+  //
+  // Per UTC day or month: QuickSwaps created by status, deposits credited
+  // and payouts delivered per asset, and the service, broker, affiliate and
   // referral fees charged per asset.
   //
   // Errors:
@@ -1949,9 +1997,11 @@ service QuickSwapBrokerService {
       tags: "QuickSwap Broker"
     };
   }
-  // ListPayouts lists the payout runs of the broker's vaults, newest first,
-  // filtered by vault, status and scheduled slot. Every broker role and the
-  // broker's API keys can read, without step-up.
+
+  // ListPayouts lists the payout runs of the broker's vaults.
+  //
+  // Newest first, filtered by vault, status and scheduled slot. Every broker
+  // role and the broker's API keys can read, without step-up.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is
@@ -1969,9 +2019,10 @@ service QuickSwapBrokerService {
     };
   }
 
-  // GetPayout reads one payout run of the broker's vaults, for a detail view
-  // or a link from a ledger entry. Every broker role and the broker's API
-  // keys can read, without step-up.
+  // GetPayout reads one payout run of the broker's vaults.
+  //
+  // For a detail view or a link from a ledger entry. Every broker role and
+  // the broker's API keys can read, without step-up.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND, or PAYOUT_NOT_FOUND, including a run of
@@ -1987,11 +2038,12 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListUpcomingPayouts previews the next payout run of each of the
-  // broker's vaults from its balances now: when it starts, whether it would
-  // pay, and per asset what it would pay, what would stay and why, and the
-  // expected network fee. Every broker role and the broker's API keys can
-  // read, without step-up.
+  // ListUpcomingPayouts previews the next payout run of each vault.
+  //
+  // The preview uses the vault's balances now: when the run starts, whether
+  // it would pay, and per asset what it would pay, what would stay and why,
+  // and the expected network fee. Every broker role and the broker's API keys
+  // can read, without step-up.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
@@ -2008,10 +2060,11 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListVaultPayoutRules reads the payout rule of each of the broker's
-  // vaults, and the assets each vault holds or was credited in that its rule
-  // pays no destination for. Every broker role and the broker's API keys can
-  // read, without step-up; only Owner and Finance members change rules.
+  // ListVaultPayoutRules reads the payout rule of each of the broker's vaults.
+  //
+  // Each vault also lists the assets it holds or was credited in that its
+  // rule pays no destination for. Every broker role and the broker's API keys
+  // can read, without step-up; only Owner and Finance members change rules.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
@@ -2029,8 +2082,9 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListVaultLedger lists the movements of the broker's vaults' funds,
-  // newest first: each fee a QuickSwap credited, each payout that left a
+  // ListVaultLedger lists the movements of the broker's vaults' funds.
+  //
+  // Newest first: each fee a QuickSwap credited, each payout that left a
   // vault with how it ended, and each refund of a rejected payout to the
   // vault's smart account. It carries no running balance; read the current
   // balance with ListVaultBalances. Every broker role and the broker's API
@@ -2052,10 +2106,12 @@ service QuickSwapBrokerService {
     };
   }
 
-  // ListVaultAllowlist reads one vault's payout address allowlist: the
-  // destinations its payouts and withdrawals may pay, each with when it
-  // becomes payable. A destination is payable 24 hours after it is listed.
-  // Every broker role and the broker's API keys can read, without step-up.
+  // ListVaultAllowlist reads one vault's payout address allowlist.
+  //
+  // The allowlist holds the destinations the vault's payouts and withdrawals
+  // may pay, each with when it becomes payable. A destination is payable 24
+  // hours after it is listed. Every broker role and the broker's API keys can
+  // read, without step-up.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.
@@ -2089,11 +2145,12 @@ service QuickSwapBrokerService {
     };
   }
 
-  // RequestVaultAllowlistChange asks to add one destination to, or remove
-  // one from, a vault's payout address allowlist. Only Owner and Finance
-  // members can, each change with its own fresh step-up proof. The change
-  // is returned PENDING; ListVaultAllowlistChanges shows how it ends. A
-  // vault has at most one pending change. An added
+  // RequestVaultAllowlistChange adds a payout address to a vault's allowlist,
+  // or removes one.
+  //
+  // Only Owner and Finance members can, each change with its own fresh
+  // step-up proof. The change is returned PENDING; ListVaultAllowlistChanges
+  // shows how it ends. A vault has at most one pending change. An added
   // destination becomes payable 24 hours after it is listed
   // (VaultAllowlistEntry.payable_from).
   //

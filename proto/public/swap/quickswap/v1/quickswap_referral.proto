@@ -13,7 +13,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "QuickSwap Referral"
-      description: "A referral partner's own record: enrollment, status, rates, referral code and the Quick Swaps it referred."
+      description: "A referral partner's own record: enrollment, status, rates, referral code and the QuickSwaps it referred."
     }
   ]
 };
@@ -26,10 +26,10 @@ enum ReferralPartnerStatus {
   // Enrolled and waiting for Polyester's review. The code is reserved for the
   // partner but earns nothing yet.
   PARTNER_PENDING = 1;
-  // Approved: Quick Swaps made with the partner's code earn the commission.
+  // Approved: QuickSwaps made with the partner's code earn the commission.
   PARTNER_ACTIVE = 2;
-  // Disabled by Polyester: new Quick Swaps with the code earn nothing and the
-  // code cannot be changed. Quick Swaps already created keep their terms.
+  // Disabled by Polyester: new QuickSwaps with the code earn nothing and the
+  // code cannot be changed. QuickSwaps already created keep their terms.
   PARTNER_DISABLED = 3;
 }
 
@@ -62,8 +62,8 @@ message ReferralRates {
 }
 
 // ReferralProgram is the referral rates of every route category. Polyester
-// can change them at any time; a change applies to Quick Swaps created after
-// it, and Quick Swaps already created keep their rates.
+// can change them at any time; a change applies to QuickSwaps created after
+// it, and QuickSwaps already created keep their rates.
 message ReferralProgram {
   // Swaps between two assets, at least one of them not a stablecoin.
   ReferralRates normal = 1;
@@ -86,7 +86,7 @@ message ReferralPartner {
   fixed64 earnings_subaccount_id = 4;
   // Current referral code, lower case.
   string code = 5;
-  // Path of the share link on Polyester's Quick Swap app: "/r/" followed by
+  // Path of the share link on Polyester's QuickSwap app: "/r/" followed by
   // the code.
   string link_path = 6;
   // Rates the partner earns on; unset while no referral program runs.
@@ -106,8 +106,8 @@ message EnrollReferralPartnerRequest {
   // credited with the commissions. It cannot be changed later or be used by
   // another partner.
   fixed64 earnings_subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Name shown for the partner, 1 to 64 characters without leading or
-  // trailing spaces.
+  // Name shown for the partner, at most 64 characters. Leading and trailing
+  // spaces are removed; at least one other character must remain.
   string display_name = 2 [(buf.validate.field).string = {
     min_len: 1
     max_len: 64
@@ -177,7 +177,7 @@ message ReferralCommission {
   TokenAmount amount = 2;
 }
 
-// ReferralCredit is one commission credit of a Quick Swap: a settled trade
+// ReferralCredit is one commission credit of a QuickSwap: a settled trade
 // of one of its legs, or its bridge payout.
 message ReferralCredit {
   // Asset credited, as an AssetConfig.ledger_id from
@@ -189,7 +189,7 @@ message ReferralCredit {
   google.protobuf.Timestamp accrued_at = 3;
 }
 
-// ReferredQuickSwap is a Quick Swap the caller referred, as its referral
+// ReferredQuickSwap is a QuickSwap the caller referred, as its referral
 // partner sees it. It carries no identity of the person who swapped and no
 // account, address, memo, transaction hash or flow ID. Amounts are exact;
 // every time is rounded down to the minute.
@@ -201,7 +201,7 @@ message ReferredQuickSwap {
   QuickSwapStatus status = 2;
   // True when status is terminal; a terminal status never changes.
   bool is_terminal = 3;
-  // When the Quick Swap was created, rounded down to the minute.
+  // When the QuickSwap was created, rounded down to the minute.
   google.protobuf.Timestamp created_at = 4;
   // When status became terminal, rounded down to the minute; unset while
   // not terminal.
@@ -236,13 +236,13 @@ message ReferredQuickSwap {
   // legs as base_fee_bps is. Fixed at creation.
   uint32 commission_bps = 14;
   // Commission credited so far, one entry per asset in asset_id order. Grows
-  // while the Quick Swap executes or pays out a bridge; empty until the
+  // while the QuickSwap executes or pays out a bridge; empty until the
   // first credit. Each credit is commission_bps applied to what its leg
   // actually received, so it can differ from an estimate.
   repeated ReferralCommission commission = 15;
 }
 
-// ReferralCommissionValue is the US dollar value of a Quick Swap's commission
+// ReferralCommissionValue is the US dollar value of a QuickSwap's commission
 // at a current price.
 message ReferralCommissionValue {
   // Value of every credited commission at the current price of its asset,
@@ -254,9 +254,9 @@ message ReferralCommissionValue {
   google.protobuf.Timestamp as_of = 2;
 }
 
-// ReferralBreakdown shows how a referred Quick Swap's fee and the partner's
+// ReferralBreakdown shows how a referred QuickSwap's fee and the partner's
 // commission were worked out. Rates are in basis points of what each leg
-// receives and are fixed when the Quick Swap is created; a two-leg route
+// receives and are fixed when the QuickSwap is created; a two-leg route
 // shows the sum of both legs' rates. For example, on a one-leg route with a
 // 30 bps fee, a 3 bps discount and a 6 bps commission, the user pays 27 bps
 // and the partner earns 6 bps, 20% of the fee before the discount.
@@ -283,15 +283,21 @@ message ReferralBreakdown {
   ReferralCommissionValue commission_value = 8;
 }
 
-// ListReferredQuickSwapsRequest lists the Quick Swaps the caller referred.
+// ListReferredQuickSwapsRequest lists the QuickSwaps the caller referred.
 message ListReferredQuickSwapsRequest {
-  // Only Quick Swaps created at or after start_time, rounded down to the
+  option (buf.validate.message).cel = {
+    id: "list_referred_quickswaps_request.window"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+
+  // Only QuickSwaps created at or after start_time, rounded down to the
   // minute; unset for no lower bound.
   google.protobuf.Timestamp start_time = 1;
-  // Only Quick Swaps created before end_time (exclusive), rounded up to the
-  // minute; unset for no upper bound.
+  // Only QuickSwaps created before end_time (exclusive), rounded up to the
+  // minute; after start_time when both are set; unset for no upper bound.
   google.protobuf.Timestamp end_time = 2;
-  // Only Quick Swaps in one of these statuses, at most 16; empty for every
+  // Only QuickSwaps in one of these statuses, at most 16; empty for every
   // status.
   repeated QuickSwapStatus statuses = 3 [(buf.validate.field).repeated = {
     max_items: 16
@@ -302,47 +308,47 @@ message ListReferredQuickSwapsRequest {
       }
     }
   }];
-  // Maximum number of Quick Swaps to return; 0 means 100, at most 200.
+  // Maximum number of QuickSwaps to return; 0 means 100, at most 200.
   uint32 limit = 4 [(buf.validate.field).uint32.lte = 200];
   // Opaque keyset cursor from a previous next_page_token, exclusive, bound
   // to the caller's partner record, the filters and the list order. It
-  // names only the swap_id of the previous page's last Quick Swap. Reuse it
+  // names only the swap_id of the previous page's last QuickSwap. Reuse it
   // with the same filters. Empty for the first page.
   string page_token = 5 [(buf.validate.field).string.max_len = 256];
 }
 
-// ListReferredQuickSwapsResponse lists Quick Swaps newest minute first.
+// ListReferredQuickSwapsResponse lists QuickSwaps newest minute first.
 // Within a minute the order is fixed but does not follow creation time.
-// Every Quick Swap whose creation was complete when the first page was read
+// Every QuickSwap whose creation was complete when the first page was read
 // is listed exactly once. One whose creation completed later may be missing
 // from later pages, even if its created_at is earlier than theirs.
 message ListReferredQuickSwapsResponse {
-  // The Quick Swaps.
+  // The QuickSwaps.
   repeated ReferredQuickSwap quick_swaps = 1;
   // Cursor of the next page. Empty when no more results exist.
   string next_page_token = 2;
 }
 
-// GetReferredQuickSwapRequest reads one Quick Swap the caller referred.
+// GetReferredQuickSwapRequest reads one QuickSwap the caller referred.
 message GetReferredQuickSwapRequest {
   // Public QuickSwap identifier.
   fixed64 swap_id = 1 [(buf.validate.field).fixed64.gt = 0];
 }
 
-// GetReferredQuickSwapResponse returns the Quick Swap with its fee
+// GetReferredQuickSwapResponse returns the QuickSwap with its fee
 // breakdown, in progress or done.
 message GetReferredQuickSwapResponse {
-  // The Quick Swap.
+  // The QuickSwap.
   ReferredQuickSwap quick_swap = 1;
   // How its fee and the partner's commission were worked out.
   ReferralBreakdown breakdown = 2;
 }
 
 // QuickSwapReferralService is a referral partner's own record, over
-// ConnectRPC. A referral partner shares a link with their code; Quick Swaps
-// made through it on Polyester's own Quick Swap app give the user a discount
+// ConnectRPC. A referral partner shares a link with their code; QuickSwaps
+// made through it on Polyester's own QuickSwap app give the user a discount
 // and pay the partner a commission, both out of the broker fee (see
-// ReferralProgram). Referrals never apply to Quick Swaps through other
+// ReferralProgram). Referrals never apply to QuickSwaps through other
 // brokers or the API.
 //
 // Every RPC takes the caller's interactive session token and acts only on
@@ -352,11 +358,11 @@ message GetReferredQuickSwapResponse {
 // EnrollReferralPartner.
 //
 // A partner's code can be changed while it is not disabled, up to 9 times.
-// The old code is retired and never given to anyone again; Quick Swaps
+// The old code is retired and never given to anyone again; QuickSwaps
 // already referred keep their partner.
 //
-// A partner reads the Quick Swaps it referred with ListReferredQuickSwaps
-// and GetReferredQuickSwap, never another partner's or a Quick Swap without
+// A partner reads the QuickSwaps it referred with ListReferredQuickSwaps
+// and GetReferredQuickSwap, never another partner's or a QuickSwap without
 // its referral. They return no identity of the person who swapped and no
 // account, address, memo, transaction hash or flow ID; amounts are exact and
 // times are rounded down to the minute.
@@ -431,9 +437,10 @@ service QuickSwapReferralService {
     };
   }
 
-  // ListReferredQuickSwaps lists the Quick Swaps the caller referred, newest
-  // first, filtered by status and creation time, with their rates and the
-  // commission credited so far.
+  // ListReferredQuickSwaps lists the QuickSwaps the caller referred.
+  //
+  // Newest first, filtered by status and creation time. Each QuickSwap
+  // carries its rates and the commission credited so far.
   //
   // Errors:
   // - NOT_FOUND: REFERRAL_PARTNER_NOT_FOUND.
@@ -442,24 +449,26 @@ service QuickSwapReferralService {
   rpc ListReferredQuickSwaps(ListReferredQuickSwapsRequest) returns (ListReferredQuickSwapsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (gnostic.openapi.v3.operation) = {
-      summary: "List referred Quick Swaps"
-      description: "List the Quick Swaps the caller referred, newest first, with rates and commission."
+      summary: "List referred QuickSwaps"
+      description: "List the QuickSwaps the caller referred, newest first, with rates and commission."
       tags: "QuickSwap Referral"
     };
   }
 
-  // GetReferredQuickSwap returns one Quick Swap the caller referred, in
-  // progress or done, with the breakdown of its fee and the commission:
-  // rates, every credit and the commission's current US dollar value.
+  // GetReferredQuickSwap returns one QuickSwap the caller referred.
+  //
+  // The QuickSwap can be in progress or done. Its breakdown shows the fee
+  // and commission rates, every commission credit and the commission's
+  // current US dollar value.
   //
   // Errors:
-  // - NOT_FOUND: REFERRAL_PARTNER_NOT_FOUND, or SWAP_NOT_FOUND for a Quick
-  //   Swap the caller did not refer.
+  // - NOT_FOUND: REFERRAL_PARTNER_NOT_FOUND, or SWAP_NOT_FOUND for a
+  //   QuickSwap the caller did not refer.
   rpc GetReferredQuickSwap(GetReferredQuickSwapRequest) returns (GetReferredQuickSwapResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (gnostic.openapi.v3.operation) = {
-      summary: "Get referred Quick Swap"
-      description: "Get one Quick Swap the caller referred, with its fee and commission breakdown."
+      summary: "Get referred QuickSwap"
+      description: "Get one QuickSwap the caller referred, with its fee and commission breakdown."
       tags: "QuickSwap Referral"
     };
   }

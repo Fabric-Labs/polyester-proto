@@ -430,9 +430,9 @@ message TriggerMarketIoc {
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 1 [(buf.validate.field).int64.gt = 0];
-    // Maximum allowed slippage in basis points (1 bp = 0.01%). A sell child
-    // accepts values below 10000; a 100% cap would leave it no positive price
-    // to sell at.
+    // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 10000.
+    // A sell child accepts values below 10000; a 100% cap would leave it no
+    // positive price to sell at.
     int32 max_slippage_bps = 2 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -442,7 +442,7 @@ message TriggerMarketIoc {
 
 // TriggerLimitGtc configures a resting limit child.
 message TriggerLimitGtc {
-  // Limit price in quote units scaled by 1e9.
+  // Positive limit price in quote units scaled by 1e9.
   int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Reject instead of taking liquidity.
   bool post_only = 2;
@@ -450,19 +450,20 @@ message TriggerLimitGtc {
 
 // TriggerLimitIoc configures an immediate-or-cancel limit child.
 message TriggerLimitIoc {
-  // Limit price in quote units scaled by 1e9.
+  // Positive limit price in quote units scaled by 1e9.
   int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
 }
 
 // TriggerLimitFok configures a fill-or-kill limit child.
 message TriggerLimitFok {
-  // Limit price in quote units scaled by 1e9.
+  // Positive limit price in quote units scaled by 1e9.
   int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
 }
 
 // ConditionalChildExecution selects the child submitted by a stop-loss or
 // take-profit trigger. Either side may use any child.
 message ConditionalChildExecution {
+  // Required child execution: exactly one variant.
   oneof execution {
     option (buf.validate.oneof).required = true;
     // Market child with implicit IOC behavior.
@@ -478,16 +479,16 @@ message ConditionalChildExecution {
 
 // ConditionalTrigger configures a standalone stop-loss or take-profit.
 message ConditionalTrigger {
-  // Trigger threshold in quote units scaled by 1e9.
+  // Positive trigger threshold in quote units scaled by 1e9.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
-  // Child order side.
+  // Child order side. Required.
   orders.v1.Side side = 2 [
     (buf.validate.field).enum = {
       defined_only: true
       not_in: [0]
     }
   ];
-  // Child execution.
+  // Child execution. Required.
   ConditionalChildExecution child = 3 [(buf.validate.field).required = true];
   // Price the trigger watches. Unspecified or LAST_PRICE watches the last
   // traded price. INDEX_PRICE watches the market's index price; a market
@@ -508,18 +509,19 @@ message ConditionalTrigger {
 // an activation price, tracking starts when the trigger is placed. Attached
 // trailing stops may use either side, opposite their parent order.
 message TrailingStopTrigger {
-  // Required trailing distance.
+  // Required trailing distance. A missing distance, or one out of range, is
+  // rejected with ERROR_CODE_TRAILING_DISTANCE_INVALID.
   oneof trailing_distance {
     option (buf.validate.oneof).required = true;
-    // Distance as a price delta in 1e-9 quote-unit ticks.
+    // Positive distance as a price delta in 1e-9 quote-unit ticks.
     int64 trailing_distance_ticks = 1 [(buf.validate.field).int64.gt = 0];
-    // Distance in basis points (1 bp = 0.01%).
+    // Distance in basis points (1 bp = 0.01%), from 1 to 10000.
     int32 trailing_distance_bps = 2 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
     }];
   }
-  // Optional activation price in quote units scaled by 1e9.
+  // Optional positive activation price in quote units scaled by 1e9.
   int64 activation_price_ticks = 3 [
     (buf.validate.field).int64.gt = 0,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
@@ -530,27 +532,28 @@ message TrailingStopTrigger {
   oneof max_slippage {
     // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 4 [(buf.validate.field).int64.gt = 0];
-    // Maximum slippage in basis points (1 bp = 0.01%). Values below 10000
-    // are accepted; a 100% cap would leave a trailing stop that sells no
-    // positive price to sell at.
+    // Maximum slippage in basis points (1 bp = 0.01%), from 1 to 9999 on
+    // either side. 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID,
+    // because a 100% cap would leave a trailing stop that sells no positive
+    // price to sell at.
     int32 max_slippage_bps = 5 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
     }];
   }
-  // Child order side.
+  // Child order side. Required.
   orders.v1.Side side = 6 [
     (buf.validate.field).enum = {
       defined_only: true
       not_in: [0]
     }
   ];
-  // Maximum price of a trailing stop that buys, in quote units scaled by 1e9:
-  // the most its child pays per unit. Required when `side` is BUY and set
-  // aside for it with the child's fee; at least the activation price, or at
-  // least the price it watches (trigger_price_source) when no activation price
-  // is set. A rise that fires above it still fires, and the child fills only
-  // at or below it. Must be unset when `side` is SELL. Fixed at create.
+  // Positive maximum price of a trailing stop that buys, in quote units scaled
+  // by 1e9: the most its child pays per unit. Required when `side` is BUY and
+  // set aside for it with the child's fee; at least the activation price, or
+  // at least the price it watches (trigger_price_source) when no activation
+  // price is set. A rise that fires above it still fires, and the child fills
+  // only at or below it. Must be unset when `side` is SELL. Fixed at create.
   int64 limit_price_ticks = 7 [
     (buf.validate.field).int64.gt = 0,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
@@ -574,7 +577,9 @@ message TwapMarketIoc {
   oneof max_slippage {
     // Positive maximum absolute price delta per slice in Q9 execution-price ticks (1 tick = 1e-9 quote units).
     int64 max_slippage_ticks = 1 [(buf.validate.field).int64.gt = 0];
-    // Maximum adverse price movement per slice in basis points (1 bp = 0.01%).
+    // Maximum adverse price movement per slice in basis points (1 bp = 0.01%),
+    // from 1 to 10000. A SELL TWAP accepts values below 10000; a 100% cap
+    // would leave a slice no positive price to sell at.
     int32 max_slippage_bps = 2 [(buf.validate.field).int32 = {
       gt: 0
       lte: 10000
@@ -585,7 +590,7 @@ message TwapMarketIoc {
 // TwapLimitGtc configures one resting limit slice at a time. A previous open
 // slice is canceled before the next interval.
 message TwapLimitGtc {
-  // Slice limit price in quote units scaled by 1e9.
+  // Positive slice limit price in quote units scaled by 1e9.
   int64 price_ticks = 1 [(buf.validate.field).int64.gt = 0];
 }
 
@@ -597,7 +602,7 @@ message TwapTrigger {
     expression: "this.slice_interval_ms <= this.duration_ms"
   };
 
-  // Child side.
+  // Child side. Required.
   orders.v1.Side side = 1 [
     (buf.validate.field).enum = {
       defined_only: true
@@ -609,7 +614,7 @@ message TwapTrigger {
   // Interval between slices in milliseconds, at least 100 and at most
   // duration_ms.
   int64 slice_interval_ms = 3 [(buf.validate.field).int64.gte = 100];
-  // Proven slice execution behavior.
+  // Proven slice execution behavior. Required: exactly one variant.
   oneof execution {
     option (buf.validate.oneof).required = true;
     // Server-priced market IOC slices.
@@ -628,18 +633,19 @@ message LadderTrigger {
     expression: "this.price_max_ticks > this.price_min_ticks"
   };
 
-  // Child side.
+  // Child side. Required.
   orders.v1.Side side = 1 [
     (buf.validate.field).enum = {
       defined_only: true
       not_in: [0]
     }
   ];
-  // Minimum generated level price in quote units scaled by 1e9.
+  // Positive minimum generated level price in quote units scaled by 1e9.
   int64 price_min_ticks = 2 [(buf.validate.field).int64.gt = 0];
-  // Maximum generated level price in quote units scaled by 1e9.
+  // Maximum generated level price in quote units scaled by 1e9; must be
+  // greater than price_min_ticks.
   int64 price_max_ticks = 3 [(buf.validate.field).int64.gt = 0];
-  // Number of linearly distributed levels.
+  // Number of linearly distributed levels, from 2 to 100.
   int32 levels = 4 [(buf.validate.field).int32 = {
     gte: 2
     lte: 100
@@ -655,12 +661,16 @@ message TriggerIntent {
     (buf.validate.field).uint32.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Total quantity scaled by the pair's base_quantity_scale.
+  // Positive total quantity scaled by the pair's base_quantity_scale.
   int64 qty_scaled = 2 [
     (buf.validate.field).int64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Fee asset for BUY children. SELL children must use QUOTE.
+  // Asset charged for the children's fees, for every strategy. Defaults to
+  // QUOTE. A trigger whose children BUY may select BASE only on a pair whose
+  // allow_buy_fee_from_base is true in GetSpotConfig; a trigger whose
+  // children SELL must use QUOTE. Otherwise the create is refused with
+  // ERROR_CODE_FEE_ASSET_NOT_ALLOWED.
   orders.v1.FeeAsset fee_asset = 3 [(buf.validate.field).enum.defined_only = true];
   // Child self-trade prevention mode against orders of the same root account,
   // including all its subaccounts. Defaults to EXPIRE_MAKER.
@@ -676,8 +686,9 @@ message TriggerIntent {
   // client_trigger_id, instead of retrying the create. After a create fails
   // with INTERNAL_ERROR, the ID may already be used: a retry then returns
   // CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID.
-  // At most 36 bytes in UTF-8 (36 ASCII characters); longer IDs are rejected
-  // with INVALID_ARGUMENT.
+  // 1 to 36 bytes in UTF-8 (up to 36 ASCII characters); empty or longer IDs
+  // are rejected with INVALID_ARGUMENT and
+  // ERROR_CODE_CLIENT_TRIGGER_ID_INVALID.
   string client_trigger_id = 5 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_bytes = 36,
@@ -709,7 +720,7 @@ message CreateTriggerRequest {
   // use their bound subaccount; other callers use their authenticated root
   // account.
   optional fixed64 subaccount_id = 1;
-  // Trigger to admit.
+  // Trigger to admit. Required.
   TriggerIntent trigger = 2 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
@@ -736,13 +747,13 @@ message CreateTriggerResponse {
 // OcoLeg configures one leg of an OCO: the price that triggers it and the
 // order it then places for the OCO's whole remaining quantity.
 message OcoLeg {
-  // Trigger price in quote units scaled by 1e9.
+  // Positive trigger price in quote units scaled by 1e9. Required.
   int64 trigger_price_ticks = 1 [
     (buf.validate.field).int64.gt = 0,
     (google.api.field_behavior) = REQUIRED
   ];
   // The order the leg places when its trigger price is reached: a market
-  // order (IOC) or a resting limit order (GTC).
+  // order (IOC) or a resting limit order (GTC). Required.
   orders.v1.RiskExecution child = 2 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
@@ -777,7 +788,7 @@ message OcoIntent {
     (google.api.field_behavior) = REQUIRED
   ];
   // The side both legs trade: SELL protects a held base position, BUY spends
-  // held quote.
+  // held quote. Required.
   orders.v1.Side side = 2 [
     (buf.validate.field).enum = {
       defined_only: true
@@ -785,8 +796,8 @@ message OcoIntent {
     },
     (google.api.field_behavior) = REQUIRED
   ];
-  // Quantity both legs trade, scaled by the pair's base_quantity_scale; a
-  // multiple of the pair's quantity step.
+  // Positive quantity both legs trade, scaled by the pair's
+  // base_quantity_scale; a multiple of the pair's quantity step.
   int64 qty_scaled = 3 [
     (buf.validate.field).int64.gt = 0,
     (google.api.field_behavior) = REQUIRED
@@ -809,12 +820,12 @@ message OcoIntent {
     (google.api.field_behavior) = REQUIRED
   ];
   // The take-profit leg. Its trigger price must be above the stop-loss's for
-  // a SELL OCO and below it for a BUY OCO.
+  // a SELL OCO and below it for a BUY OCO. Required.
   OcoLeg take_profit = 6 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
   ];
-  // The stop-loss leg.
+  // The stop-loss leg. Required.
   OcoLeg stop_loss = 7 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
@@ -833,7 +844,7 @@ message CreateOcoRequest {
   // use their bound subaccount; other callers use their authenticated root
   // account.
   optional fixed64 subaccount_id = 1;
-  // OCO to admit.
+  // OCO to admit. Required.
   OcoIntent oco = 2 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
@@ -943,7 +954,7 @@ message ListTriggersRequest {
   }];
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
   // bound to the authenticated account, sub-account scope, filters, and newest
-  // first sort order.
+  // first sort order. At most 512 characters.
   string page_token = 12 [(buf.validate.field).string.max_len = 512];
 }
 
@@ -977,7 +988,7 @@ message ListTriggerEventsRequest {
   TriggerEventType event_type = 4 [(buf.validate.field).enum.defined_only = true];
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
   // bound to the authenticated account, trigger, sub-account scope, event
-  // filter, and newest-first sort order.
+  // filter, and newest-first sort order. At most 512 characters.
   string page_token = 5 [(buf.validate.field).string.max_len = 512];
 }
 
@@ -1087,6 +1098,8 @@ message BatchCancelTriggersRequest {
   // trigger_ids within 2 minutes returns the original results and cancels
   // nothing again. The same request_id with other trigger_ids rejects every
   // item with ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE.
+  // 1 to 64 ASCII characters using letters, digits, period, underscore, colon,
+  // slash, or hyphen.
   string request_id = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 64,
@@ -1173,7 +1186,7 @@ message ModifyTriggerRequest {
 
   // Patch fields for safe price, trailing-distance, and slippage edits.
   // For stop/take-profit:
-  // Updated trigger price in quote units scaled by 1e9.
+  // Positive updated trigger price in quote units scaled by 1e9.
   optional int64 trigger_price_ticks = 10 [(buf.validate.field).int64.gt = 0];
   // Not modifiable: a trigger's child limit price is fixed at create. Setting
   // this field rejects the whole request with
@@ -1184,9 +1197,11 @@ message ModifyTriggerRequest {
 
   // For trailing stop:
   oneof trailing_distance {
-    // Updated trailing distance as a price delta in 1e-9 quote-unit ticks.
+    // Positive updated trailing distance as a price delta in 1e-9 quote-unit
+    // ticks.
     int64 trailing_distance_ticks = 12 [(buf.validate.field).int64.gt = 0];
-    // Updated trailing distance in basis points (1 bp = 0.01%).
+    // Updated trailing distance in basis points (1 bp = 0.01%), from 1 to
+    // 10000.
     int32 trailing_distance_bps = 13 [(buf.validate.field).int32 = {
       gte: 1
       lte: 10000
