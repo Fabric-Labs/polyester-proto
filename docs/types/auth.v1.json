@@ -201,7 +201,7 @@
     {
       "name": "auth.v1.ActivityEvent",
       "kind": "message",
-      "doc": "Activity or audit event for a sub-account.",
+      "doc": "Activity or audit event of a main account or one of its sub-accounts.",
       "message": {
         "fields": [
           {
@@ -291,6 +291,24 @@
             "doc": "Structured event details as a JSON string. Maximum 64 KiB (65536 UTF-8\n bytes).",
             "protoScalar": "string",
             "jsonType": "string"
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 10,
+            "doc": "Sub-account the event belongs to (opaque ID). Absent for an event of the\n main account itself.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "actor_api_key_id",
+            "jsonName": "actorApiKeyId",
+            "number": 11,
+            "doc": "API key the actor used (opaque ID). Absent when the actor used a session.\n Set by ListAccountActivity only.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -1446,7 +1464,7 @@
           {
             "name": "READ_ONLY",
             "number": 1,
-            "doc": "Read actions only: READ_BALANCES, READ_SPOT, READ_INTERNAL_TRANSFERS,\n READ_AUTO_WITHDRAW, READ_API_KEYS, READ_SUBACCOUNTS,\n READ_DEPOSIT_ADDRESSES, READ_STATEMENTS and READ_FUNDING_FLOWS. On the\n main account, also READ_PRICE_ALERTS, a main-account permission. Policy\n name \"Polyester AI - Read only (main account)\" on the main account,\n \"Polyester AI - Read only (sub-account)\" on a sub-account."
+            "doc": "Read actions only: READ_BALANCES, READ_SPOT, READ_INTERNAL_TRANSFERS,\n READ_AUTO_WITHDRAW, READ_API_KEYS, READ_SUBACCOUNTS,\n READ_DEPOSIT_ADDRESSES, READ_STATEMENTS and READ_FUNDING_FLOWS. On the\n main account, also the main-account permissions READ_PRICE_ALERTS,\n READ_VIP_STATUS, READ_REWARDS, READ_DAILY_CLAIMS, READ_CHECKPOINTS,\n READ_PROFILE, READ_SOCIAL_VERIFICATION and READ_NOTIFICATIONS. Policy\n name \"Polyester AI - Read only (main account)\" on the main account,\n \"Polyester AI - Read only (sub-account)\" on a sub-account."
           },
           {
             "name": "TRADE_WITH_APPROVAL",
@@ -1771,7 +1789,7 @@
           {
             "name": "AUTH_TIMESTAMP_SKEW",
             "number": 49,
-            "doc": "The API key request timestamp is malformed, more than 1 second ahead of the server\n clock, or older than the request's receive window (X-API-RECV-WINDOW, 5 seconds when\n omitted) when the request arrived. The request was not processed. Sync the clock, then\n sign the request again with a fresh timestamp. The REST problem code is TIMESTAMP_SKEW."
+            "doc": "The API key request timestamp is malformed, more than 1 second ahead of the server\n clock, or older than the request's receive window (X-API-RECV-WINDOW, 5 seconds when\n omitted) when the request arrived. The request was not processed. The detail's\n timestamp_window carries the server time and the window the timestamp was checked\n against; the REST problem carries the same as its timestampWindow member. Sync the\n clock, for example with the server time from GET /v1/time or this refusal, then sign\n the request again with a fresh timestamp. The REST problem code is TIMESTAMP_SKEW."
           },
           {
             "name": "AUTH_MISSING_HEADERS",
@@ -1852,6 +1870,11 @@
             "name": "AUTH_SOCIAL_CHANGE_LIMIT_REACHED",
             "number": 65,
             "doc": "The account already changed or unlinked its X/Twitter or Discord account\n less than 30 days ago: one change per provider every 30 days. retry_after\n says when the next one is allowed. HTTP 412, SOCIAL_CHANGE_LIMIT_REACHED."
+          },
+          {
+            "name": "AUTH_RECENT_MFA_EXPIRED",
+            "number": 66,
+            "doc": "The session's recent-MFA window has closed: the action needs a new\n step-up. Complete an MFA challenge for fresh step-up and retry; the\n step-up opens a new window. PermissionDenied."
           }
         ]
       }
@@ -1885,6 +1908,13 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "timestamp_window",
+            "jsonName": "timestampWindow",
+            "number": 4,
+            "doc": "The server time and the window a signed request's timestamp must fall in.\n Set for AUTH_TIMESTAMP_SKEW; empty otherwise.",
+            "protoRef": "auth.v1.TimestampWindow"
           }
         ]
       }
@@ -3416,6 +3446,22 @@
       }
     },
     {
+      "name": "auth.v1.EndRecentMFARequest",
+      "kind": "message",
+      "doc": "Request to end the session's recent-MFA window, for example at sign-out.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "auth.v1.EndRecentMFAResponse",
+      "kind": "message",
+      "doc": "Empty response returned after the recent-MFA window is ended.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
       "name": "auth.v1.ExternalAddressBookEntry",
       "kind": "message",
       "message": {
@@ -4185,6 +4231,56 @@
       "doc": "GetProfileRequest fetches the authenticated caller's profile.",
       "message": {
         "fields": []
+      }
+    },
+    {
+      "name": "auth.v1.GetRecentMFARequest",
+      "kind": "message",
+      "doc": "Request to read whether the session's recent-MFA window covers an action.",
+      "message": {
+        "fields": [
+          {
+            "name": "action",
+            "jsonName": "action",
+            "number": 1,
+            "doc": "The action the client is about to perform.",
+            "protoRef": "auth.v1.RecentMFAAction",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.GetRecentMFAResponse",
+      "kind": "message",
+      "doc": "Whether the session's recent-MFA window is open for the action.",
+      "message": {
+        "fields": [
+          {
+            "name": "open",
+            "jsonName": "open",
+            "number": 1,
+            "doc": "True when the action needs no new step-up now: send it without a step-up\n proof. False when the client must complete an MFA challenge for fresh\n step-up first.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 2,
+            "doc": "Time when the window closes. Empty when open is false. A request that\n arrives after this time needs a new step-up.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
       }
     },
     {
@@ -5102,6 +5198,172 @@
             "number": 1,
             "doc": "Pending invitation.",
             "protoRef": "auth.v1.SubaccountInvite"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ListAccountActivityRequest",
+      "kind": "message",
+      "doc": "Request to list the activity of the caller's main account and its\n sub-accounts. Every filter narrows the result; an omitted filter matches\n every event the caller may read.",
+      "message": {
+        "cel": [
+          {
+            "id": "list_account_activity.time_range",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
+        "fields": [
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 1,
+            "doc": "Maximum number of events to return. Defaults to 50 when omitted; maximum is\n 200.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "200"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 2,
+            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to the authenticated main account, the API key when the caller is\n one, and every filter of the request: reuse it only with the same filters.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
+          },
+          {
+            "name": "subaccount_ids",
+            "jsonName": "subaccountIds",
+            "number": 3,
+            "doc": "Sub-accounts (opaque IDs) whose events to return. Together with\n include_main_account it selects the accounts the list covers. When neither\n selects an account, the list covers the main account and every\n sub-account the caller may read. At most 100 distinct IDs. A sub-account\n the caller may not read fails the request with NotFound.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "repeated": true,
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "repeated": {
+                "maxItems": 100,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "include_main_account",
+            "jsonName": "includeMainAccount",
+            "number": 4,
+            "doc": "Include the main account's own events, those that belong to no\n sub-account. Set it alone to list only the main account's events, or with\n subaccount_ids to add the main account to those sub-accounts. An API key\n scoped to a sub-account may not set it.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "entity_kinds",
+            "jsonName": "entityKinds",
+            "number": 5,
+            "doc": "Entity categories to return. Empty matches every category. At most 16\n distinct values.",
+            "repeated": true,
+            "protoRef": "auth.v1.ActivityEntityKind",
+            "validate": {
+              "repeated": {
+                "maxItems": 16,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "event_actions",
+            "jsonName": "eventActions",
+            "number": 6,
+            "doc": "Actions to return. Empty matches every action. At most 32 distinct values.",
+            "repeated": true,
+            "protoRef": "auth.v1.ActivityEventAction",
+            "validate": {
+              "repeated": {
+                "maxItems": 32,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "sources",
+            "jsonName": "sources",
+            "number": 7,
+            "doc": "Client channels to return. Empty matches every channel. At most 8 distinct\n values.",
+            "repeated": true,
+            "protoRef": "auth.v1.ActivityEventSource",
+            "validate": {
+              "repeated": {
+                "maxItems": 8,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "api_key_id",
+            "jsonName": "apiKeyId",
+            "number": 8,
+            "doc": "API key (opaque ID) whose actions to return: only events performed with\n that key. Omit it to match every actor.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 9,
+            "doc": "Earliest event time to return, inclusive. Omit it for no lower bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 10,
+            "doc": "Event time to return events before, exclusive. Omit it for no upper bound.\n When both bounds are set, end_time must be after start_time.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ListAccountActivityResponse",
+      "kind": "message",
+      "doc": "Response containing the activity of the main account and its sub-accounts.",
+      "message": {
+        "fields": [
+          {
+            "name": "events",
+            "jsonName": "events",
+            "number": 1,
+            "doc": "Activity events ordered newest first. Each event names the sub-account it\n belongs to, or none for the main account.",
+            "repeated": true,
+            "protoRef": "auth.v1.ActivityEvent"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
           }
         ]
       }
@@ -6425,12 +6687,22 @@
           {
             "name": "CONVERT_DUST",
             "number": 39,
-            "doc": "Allow quoting and converting dust, small Trading balances, into a target\n asset, and reading the conversions. Listing dust balances needs\n READ_BALANCES. Account permission."
+            "doc": "Allow quoting and converting dust, small Trading balances, into a target\n asset, and reading the conversions. Listing dust balances needs\n READ_BALANCES."
           },
           {
             "name": "READ_FUNDING_FLOWS",
             "number": 40,
-            "doc": "Allow reading the account's deposit, withdrawal, and transfer flows,\n including the flows no chain transaction started and the transfers it\n receives from other accounts. It grants no balance or transfer read.\n Account permission."
+            "doc": "Allow reading the account's deposit, withdrawal, and transfer flows,\n including the flows no chain transaction started and the transfers it\n receives from other accounts. It grants no balance or transfer read."
+          },
+          {
+            "name": "READ_NOTIFICATIONS",
+            "number": 41,
+            "doc": "Allow listing, reading, and counting the main account's notifications.\n It does not allow marking them read or unread. Main-account permission."
+          },
+          {
+            "name": "READ_ACCOUNT_ACTIVITY",
+            "number": 42,
+            "doc": "Allow listing the security and activity events of the main account and\n its sub-accounts within the key's scope: a key scoped to the main account\n reads all of them, a key scoped to a sub-account only that sub-account's.\n Account permission."
           }
         ]
       }
@@ -6492,6 +6764,30 @@
             "doc": "Human-friendly message for UI/debugging.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.RecentMFAAction",
+      "kind": "enum",
+      "doc": "An action that one step-up covers for a short time in the same signed-in\n session: the recent-MFA window. The window opens when the session completes\n an MFA challenge for fresh step-up, and lasts 5 minutes. It closes earlier\n when the session ends (EndRecentMFA or session expiry). Every other action\n that needs MFA, including withdrawals, transfers, auto-withdraw rules, API\n key and policy changes outside the assistant, address book changes and MFA\n settings, still needs a fresh, single-use step-up proof each time.",
+      "enum": {
+        "values": [
+          {
+            "name": "RECENT_MFA_ACTION_TELEGRAM_LINK",
+            "number": 1,
+            "doc": "Confirming a Telegram link (SocialVerificationService.ConfirmSocialVerification\n for TELEGRAM)."
+          },
+          {
+            "name": "RECENT_MFA_ACTION_ASSISTANT_ACCESS",
+            "number": 2,
+            "doc": "Changing the Polyester AI assistant's account access\n (ApiKeyService.SetAssistantKeys, with policies or presets)."
+          },
+          {
+            "name": "RECENT_MFA_ACTION_TELEGRAM_APPROVAL_LIMITS",
+            "number": 3,
+            "doc": "Raising or removing a Telegram approval limit\n (ai.v1.AssistantService.SetTelegramApprovalLimits). Setting or lowering a\n limit never needs MFA."
           }
         ]
       }
@@ -7271,6 +7567,15 @@
             "jsonName": "retryAfter",
             "number": 18,
             "doc": "Time in UTC from which a new verification may succeed, when this one\n failed with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN or\n AUTH_SOCIAL_CHANGE_LIMIT_REACHED. Empty otherwise.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "change_available_at",
+            "jsonName": "changeAvailableAt",
+            "number": 19,
+            "doc": "Time in UTC from which the caller may change or unlink its X/Twitter or\n Discord account again. Each provider allows one change or unlink per 30\n days; until this time, changing or unlinking the linked account fails with\n AUTH_SOCIAL_CHANGE_LIMIT_REACHED and a retry_after equal to it. Set\n whenever the limit applies, whether or not a verification failed. Empty\n when a change or unlink is allowed now, and always for Telegram. A first\n link, a link after an unlink, and a re-verification of the linked\n X/Twitter handle are not changes and are allowed while it is set.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -8710,6 +9015,42 @@
                 "definedOnly": true
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.TimestampWindow",
+      "kind": "message",
+      "doc": "TimestampWindow is the window in which the server accepts the timestamp of\n a request signed with an API key: from server_time_ms minus recv_window_ms\n to server_time_ms plus max_future_ms, both inclusive. Compare\n server_time_ms with the clock that signed the request to correct its\n offset.",
+      "message": {
+        "fields": [
+          {
+            "name": "server_time_ms",
+            "jsonName": "serverTimeMs",
+            "number": 1,
+            "doc": "Server time when the request was refused, in milliseconds since the Unix\n epoch (UTC).",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "recv_window_ms",
+            "jsonName": "recvWindowMs",
+            "number": 2,
+            "doc": "Receive window the timestamp was checked against, in milliseconds: the\n request's X-API-RECV-WINDOW, from 1 to 60000, or 5000 when the header is\n omitted.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_future_ms",
+            "jsonName": "maxFutureMs",
+            "number": 3,
+            "doc": "How far a timestamp may run ahead of the server time, in milliseconds:\n 1000, whatever the receive window.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }

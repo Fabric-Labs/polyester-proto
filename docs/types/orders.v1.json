@@ -181,7 +181,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 1,
-            "doc": "Order ID as fixed64. Exactly one of order_id or client_order_id.",
+            "doc": "Public order ID. Exactly one of order_id or client_order_id.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -742,7 +742,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 1,
-            "doc": "Order ID as fixed64. Exactly one of order_id or client_order_id.",
+            "doc": "Public order ID. Exactly one of order_id or client_order_id.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -1402,7 +1402,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 1,
-            "doc": "Order ID as fixed64. Exactly one of order_id or client_order_id.",
+            "doc": "Public order ID. Exactly one of order_id or client_order_id.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -1472,7 +1472,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 2,
-            "doc": "Order ID as fixed64.",
+            "doc": "Public order ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1892,7 +1892,7 @@
           {
             "name": "ERROR_CODE_ORDER_UNKNOWN",
             "number": 17,
-            "doc": "Referenced order could not be resolved."
+            "doc": "Referenced order could not be resolved: no order of the account has that\n order ID or client order ID, or an ended order can no longer be\n confirmed under it (see OrdersService.CancelOrder). Read the order to\n tell an ended order from one that was never placed."
           },
           {
             "name": "ERROR_CODE_INTERNAL_ERROR",
@@ -2833,6 +2833,11 @@
             "name": "ERROR_CODE_TRIGGER_ACTIVATION_PRICE_NOT_MODIFIABLE",
             "number": 315,
             "doc": "ModifyTrigger attempted to set a new or different nonzero activation\n price after the trailing stop started tracking. Nothing changed: the\n existing peak or trough and trigger price keep protecting the position.\n Clearing activation with zero and repeating the current activation price\n remain valid. To wait for a new activation price, cancel the trigger and\n create a new one."
+          },
+          {
+            "name": "ERROR_CODE_CLIENT_LIST_ID_INVALID",
+            "number": 318,
+            "doc": "The OCO's client list ID is empty, longer than 36 characters, or has a\n character other than a letter, digit, period, underscore, colon, slash or\n hyphen. Answered by CreateOco and by the ListTriggers client_list_id\n filter. Nothing changed."
           }
         ]
       }
@@ -2889,6 +2894,15 @@
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
+          },
+          {
+            "name": "price_band_limit_ticks",
+            "jsonName": "priceBandLimitTicks",
+            "number": 10,
+            "doc": "The price band limit the order's limit price is past, when a preview is\n not admissible with PRICE_BAND_VIOLATION: the highest admitted buy price\n for a buy, the lowest admitted sell price for a sell, as the market last\n published its band. REST returns priceBandLimit as a decimal string in\n quote asset units per base asset unit, for example \"1837.5\". Protobuf\n uses quote units scaled by 1e9. Omitted for every other error.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
           }
         ]
       }
@@ -3407,7 +3421,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 2,
-            "doc": "Public order ID (base58-encoded fixed64 on REST).",
+            "doc": "Public order ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -3929,7 +3943,7 @@
     {
       "name": "orders.v1.MarketIoc",
       "kind": "message",
-      "doc": "MarketIoc configures a market order. Market orders always execute as\n immediate-or-cancel and therefore cannot rest or be post-only.",
+      "doc": "MarketIoc configures a market order. Market orders always execute as\n immediate-or-cancel and therefore cannot rest or be post-only.\n\n The order fills only up to its protection price, a BUY at or below it and\n a SELL at or above it. The protection price is the reference price\n (client_ref_price_ticks, or the server's reference when it is omitted)\n moved by the maximum slippage, up for a BUY and down for a SELL, then put\n on the pair's tick grid toward the reference: a BUY's is rounded down and\n a SELL's up, so it never allows more than the slippage and can be up to\n one tick tighter. Neither client_ref_price_ticks nor max_slippage_ticks\n has to be a multiple of the pair's tick size; only the protection price\n is. For example, on a pair whose tick size is 0.01, a reference of\n 73840.125 and a slippage of 50.12 give a BUY protection price of 73890.24\n (73890.245 rounded down) and a SELL protection price of 73790.01\n (73790.005 rounded up). The order's price_ticks shows the protection\n price; market_client_ref_price_ticks and market_max_slippage_ticks show\n the values exactly as given.",
       "message": {
         "oneofs": [
           {
@@ -3945,7 +3959,7 @@
             "name": "max_slippage_ticks",
             "jsonName": "maxSlippageTicks",
             "number": 1,
-            "doc": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+            "doc": "Positive maximum absolute price delta in quote units scaled by 1e9. The\n \"ticks\" in this name are 1e-9 quote units, not the pair's tick size,\n and the value need not be a multiple of the pair's tick size: the\n protection price derived from it is put on the tick grid toward the\n reference, as MarketIoc describes.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -3976,7 +3990,7 @@
             "name": "client_ref_price_ticks",
             "jsonName": "clientRefPriceTicks",
             "number": 3,
-            "doc": "Optional positive client reference price in quote units scaled by 1e9.\n When omitted, admission uses server-side reference pricing.",
+            "doc": "Optional positive client reference price in quote units scaled by 1e9\n (1e-9 quote units, not the pair's tick size). It need not be on the\n pair's tick grid; only the protection price derived from it is, as\n MarketIoc describes. When omitted, admission uses server-side reference\n pricing. A reference too far from the server's is refused with\n ERROR_CODE_STALE_QUOTE.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -4068,7 +4082,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 2,
-            "doc": "Order ID as fixed64.",
+            "doc": "Public order ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -4285,7 +4299,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 1,
-            "doc": "Public order identifier as fixed64.",
+            "doc": "Public order ID.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -4449,14 +4463,14 @@
             "name": "fee_total",
             "jsonName": "feeTotal",
             "number": 38,
-            "doc": "Total fee of the fills across the lineage through this generation, net\n of rebates, in the order's fee asset. Order history reads and\n single-order reads that include execution history (the default) carry\n it. It can trail the order's fills: its quantity shows which fills it\n covers. Open-order reads, single-order reads without execution history\n and private stream order updates leave it unset.",
+            "doc": "Total fee of the fills across the lineage through this generation, net\n of rebates, in the order's fee asset. A fill's fee is recorded once the\n fill is settled, which can be seconds after the order ended.\n\n Order history reads and single-order reads that include execution\n history (the default) carry it, over the fills recorded so far: its\n quantity shows which fills it covers, and it is the order's whole fee\n once that quantity equals the order's filled quantity. Open-order reads,\n single-order reads without execution history and private stream order\n updates leave it unset, an ended order's update included.\n\n To show the fee of an order seen on the private stream, or the quote a\n BUY sized by a quote amount used: once an update shows the order ended\n with a filled quantity above zero, read the order by its ID, and read it\n again, a few hundred milliseconds apart, until the fee total's quantity\n equals the order's filled quantity.",
             "protoRef": "orders.v1.OrderFeeTotal"
           },
           {
             "name": "price_ticks",
             "jsonName": "priceTicks",
             "number": 15,
-            "doc": "Price in quote units scaled by 1e9. For a LIMIT order, its limit price.\n For a MARKET order, whatever placed it, its protection price: the worst\n price it may fill at, a BUY at or below it and a SELL at or above it. It\n is the order's reference price moved by its maximum slippage, or by the\n pair's default market slippage for its side (200 basis points if none is\n configured), on the pair's tick grid. A stop-loss's, take-profit's or\n trailing stop's market order takes the price that fired it as its\n reference; a buy stop's is never above the protection price at its\n trigger price.",
+            "doc": "Price in quote units scaled by 1e9. For a LIMIT order, its limit price.\n For a MARKET order, whatever placed it, its protection price: the worst\n price it may fill at, a BUY at or below it and a SELL at or above it. It\n is the order's reference price moved by its maximum slippage, or by the\n pair's default market slippage for its side (200 basis points if none is\n configured), put on the pair's tick grid toward the reference: a BUY's\n rounded down and a SELL's up, so it never allows more than the slippage.\n The reference and the slippage need not be on the tick grid themselves\n (see MarketIoc). A stop-loss's, take-profit's or\n trailing stop's market order takes the price that fired it as its\n reference; a buy stop's is never above the protection price at its\n trigger price.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4511,7 +4525,7 @@
             "name": "market_client_ref_price_ticks",
             "jsonName": "marketClientRefPriceTicks",
             "number": 23,
-            "doc": "Optional client-side reference price used for MARKET slippage protection,\n in quote units scaled by 1e9.",
+            "doc": "Client reference price the MARKET order set for its slippage protection,\n in quote units scaled by 1e9, exactly as given: it need not be on the\n pair's tick grid (see MarketIoc). Zero when the order set none.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4520,7 +4534,7 @@
             "name": "market_max_slippage_ticks",
             "jsonName": "marketMaxSlippageTicks",
             "number": 24,
-            "doc": "MARKET maximum absolute price delta the order carries, in Q9\n execution-price ticks (1 tick = 1e-9 quote units). Positive when the order\n set this cap; zero when it did not, for example because it set\n market_max_slippage_bps instead.",
+            "doc": "MARKET maximum absolute price delta the order carries, in quote units\n scaled by 1e9 (1e-9 quote units, not the pair's tick size), exactly as\n given: it need not be a multiple of the pair's tick size (see MarketIoc).\n Positive when the order set this cap; zero when it did not, for example\n because it set market_max_slippage_bps instead.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4538,16 +4552,10 @@
             "name": "version",
             "jsonName": "version",
             "number": 26,
-            "doc": "Per-order state version: 0 while the order is accepted but not yet on\n the book (status PENDING), then 1 from its first book state and higher\n for every later published execution-state change. Higher values identify\n newer execution state. Fee totals and requested enrichments are not covered\n by this version and may differ between responses with the same version.",
+            "doc": "Per-order state version: the same counter as the version of the order's\n events on the private WebSocket and the trade WebSocket. It is 0 while the\n order is accepted but not yet on the book (status PENDING), then 1 from its\n first book state, and it increases with every later published change of the\n order's state, such as an amend in place, a fill, a change of its attached\n risk, a cancel or a replace. It is an unsigned 32-bit counter that\n increases on every change of the order: it would wrap to 0 only after\n 4,294,967,295 changes to one order ID. A replace that gives the order a new\n ID starts that order's own version.\n\n A read can lag behind the order's events. Keep the highest version\n applied for each order ID, from reads and events alike, and drop any read\n whose version is below it: that read shows an older state. A stream need\n not show every version, so a gap is not an error; read the order to\n recover its current state.\n\n fee_total is not covered by this version: a fill's fee is recorded after\n the fill, so responses with the same version can show different fee\n totals. A read includes attached_risk only on request, so its absence\n from a response is no change of the order.",
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32",
-            "validate": {
-              "number": {
-                "gte": "0",
-                "lte": "2147483647"
-              }
-            }
+            "format": "int32"
           },
           {
             "name": "batch_request_id",
@@ -5477,7 +5485,7 @@
             "name": "trigger_price_source",
             "jsonName": "triggerPriceSource",
             "number": 3,
-            "doc": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "doc": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected before any fill with\n reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify\n that adds such a leg is refused with the same code, leaving the order and\n its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
             "protoRef": "orders.v1.TriggerPriceSource",
             "validate": {
               "enum": {
@@ -5522,7 +5530,7 @@
             "name": "trigger_price_source",
             "jsonName": "triggerPriceSource",
             "number": 3,
-            "doc": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "doc": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected before any fill with\n reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify\n that adds such a leg is refused with the same code, leaving the order and\n its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
             "protoRef": "orders.v1.TriggerPriceSource",
             "validate": {
               "enum": {
@@ -5619,7 +5627,7 @@
             "name": "max_slippage_ticks",
             "jsonName": "maxSlippageTicks",
             "number": 6,
-            "doc": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+            "doc": "Positive maximum absolute price delta in quote units scaled by 1e9. The\n \"ticks\" in this name are 1e-9 quote units, not the pair's tick size,\n and the value need not be a multiple of the pair's tick size: the\n child's protection price, the price that fired it moved by this delta,\n is put on the tick grid toward that price, as MarketIoc describes.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64",
@@ -5659,7 +5667,7 @@
             "name": "trigger_price_source",
             "jsonName": "triggerPriceSource",
             "number": 8,
-            "doc": "Price the trailing stop watches and trails: its peak or trough, activation\n and fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected with terminal reason\n INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg\n is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the\n order and its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
+            "doc": "Price the trailing stop watches and trails: its peak or trough, activation\n and fire all follow this price. Unspecified or LAST_PRICE watches the last\n traded price. INDEX_PRICE watches the market's index price; on a market\n without an index price the order is rejected before any fill with\n reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify\n that adds such a leg is refused with the same code, leaving the order and\n its legs unchanged. MARK_PRICE is not supported. A modify naming\n another source replaces the leg.",
             "protoRef": "orders.v1.TriggerPriceSource",
             "validate": {
               "enum": {
@@ -5755,7 +5763,7 @@
             "name": "order_id",
             "jsonName": "orderId",
             "number": 4,
-            "doc": "Order identifier as fixed64.",
+            "doc": "Public order ID of the filled order.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"

@@ -319,8 +319,8 @@ message QuickSwapQuote {
   // route order (a bridge has one set, charged at payout), then network fees.
   // Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged
   // are each rate applied to the actual execution and can differ from these
-  // amounts; QuickSwap.charged_fees reports the broker and affiliate fees as
-  // charged.
+  // amounts; QuickSwap.charged_fees reports the broker, affiliate and
+  // referral fees as charged.
   repeated QuoteFee fees = 8;
   // When the quote was priced.
   google.protobuf.Timestamp quoted_at = 9;
@@ -336,12 +336,14 @@ message QuickSwapQuote {
   ReferralPricing referral = 11;
 }
 
-// Screening is the risk screening of a QuickSwap. Deposits are screened on
-// arrival; the outcome shows in the status, its reason and each deposit's
-// disposition and reason.
+// Screening is the risk screening of a QuickSwap. A source wallet supplied
+// in the request is screened before the deposit address is issued: a
+// rejected wallet makes the QuickSwap REJECTED with
+// SOURCE_WALLET_SCREENING_FAILED.
+// Every deposit is still screened on arrival, whoever sent it; that outcome
+// shows in the status, its reason and each deposit's disposition and reason.
 message Screening {
   // Source wallet supplied in the request; empty when none was supplied.
-  // Recorded and shown; not used to accept or reject a deposit.
   string source_wallet = 2;
 }
 
@@ -393,13 +395,14 @@ message DepositInstructions {
   google.protobuf.Timestamp address_retires_at = 6;
   // Current lifecycle state of the address.
   DepositAddressState address_state = 7;
-  // Recommended gas limit, in gas units, for native-coin deposits on EVM
-  // networks: 250000. Polyester does not enforce this limit. On some networks,
-  // depositing to an address that has never received funds requires far more
-  // than 21000 gas. If the limit is too low, the transaction fails on chain
-  // without depositing funds, and the network fee is still charged. Use at
-  // least the recommended limit. Unused gas is not charged. Zero for token
-  // deposits and non-EVM networks.
+  // Recommended gas limit, in gas units, for a native-coin deposit on EVM
+  // networks to succeed reliably: 250000. Polyester does not enforce it; the
+  // sender's wallet or exchange sets the gas limit. A gas estimate from the
+  // network of at least 50000 also works, but confirms more slowly. The gas
+  // a plain transfer needs differs by network: several layer-2 networks and
+  // EVM forks do not use 21000. If the limit is too low, the transfer fails
+  // on chain without depositing, and the network fee is still charged. Zero
+  // for token deposits and non-EVM networks.
   uint64 min_native_gas_limit = 8;
 }
 
@@ -522,6 +525,10 @@ enum QuickSwapReason {
   // the deposit is returned to return_address, and the QuickSwap shows
   // RETURNING and RETURNED with this reason.
   MARKET_CLOSED = 27;
+  // The source wallet supplied in the request failed risk screening. The
+  // QuickSwap is REJECTED: it never gets a deposit address, and nothing can
+  // be deposited to it.
+  SOURCE_WALLET_SCREENING_FAILED = 28;
 }
 
 // Deposit is one deposit detected on the QuickSwap's deposit address.
@@ -614,8 +621,10 @@ message ExecutionProgress {
   // Totals and completed_slices still cover the entire execution.
   bool slices_truncated = 11;
   // Why slice history is unavailable. When set, slices is empty and
-  // slices_truncated is false. Aggregate amounts, counts, execution status
-  // and withdrawals remain available. Unspecified when history is available.
+  // slices_truncated is false. Counts, execution status and withdrawals
+  // remain available, and so do the aggregate amounts, except that with
+  // PRECISION_UNAVAILABLE an amount in a token whose precision is
+  // unavailable is unset. Unspecified when history is available.
   SlicesUnavailableReason slices_unavailable_reason = 12;
 
   // SlicesUnavailableReason explains why slice details cannot be shown.
@@ -625,7 +634,8 @@ message ExecutionProgress {
     // Recorded slice data is inconsistent; no slice amounts are fabricated.
     ACCOUNTING_INCONSISTENCY = 1;
     // The precision of one or more execution assets is unavailable, so slice
-    // amounts cannot be shown accurately. Aggregate amounts may be unknown.
+    // amounts cannot be shown accurately. Aggregate amounts in those assets
+    // are unset; the others remain available.
     PRECISION_UNAVAILABLE = 2;
   }
 }
@@ -838,20 +848,27 @@ message Withdrawal {
 // PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a
 // bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A
 // QuickSwap that cannot be issued a deposit address goes from ALLOCATING
-// straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A deposit that is dropped
+// straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A QuickSwap whose source
+// wallet failed risk screening is REJECTED from creation and never gets a
+// deposit address. A deposit that is dropped
 // or replaced on its network before it confirms brings no funds: the
 // QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to
 // AWAITING_DEPOSIT, the only status that moves back, and no longer shows
 // that deposit. HELD can be
 // entered from any non-terminal status and is not terminal; a QuickSwap HELD
 // with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are
-// COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never
+// REJECTED, COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never
 // changes, except that EXPIRED becomes HELD when a dropped or replaced
 // deposit confirms after all (see EXPIRED). Accept status values added
 // later; is_terminal is authoritative.
 enum QuickSwapStatus {
   // No status; never returned.
   STATUS_UNSPECIFIED = 0;
+  // Terminal: the source wallet supplied in the request failed risk
+  // screening (SOURCE_WALLET_SCREENING_FAILED). The QuickSwap never gets a
+  // deposit address, and every repeat of its create request returns
+  // SOURCE_WALLET_REJECTED with its swap_id.
+  REJECTED = 1;
   // The quote is fixed and the deposit address is being allocated. After
   // ADDRESS_UNAVAILABLE, allocation continues automatically until an address
   // frees up; the wait has no fixed bound.
@@ -966,7 +983,7 @@ message QuickSwap {
   // actual output and fees.
   QuickSwapQuote quote = 14;
   // Where and until when to deposit; absent while ALLOCATING and on a
-  // QuickSwap that never got an address (EXPIRED with
+  // QuickSwap that never got an address (REJECTED, or EXPIRED with
   // DEPOSIT_ADDRESS_CONFLICT).
   DepositInstructions deposit_instructions = 15;
   // Risk screening.
@@ -990,9 +1007,9 @@ message QuickSwap {
   // When status became terminal; unset while not terminal.
   google.protobuf.Timestamp terminal_at = 25;
   // Monotonic state version: a snapshot with a lower version is older. Zero
-  // while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT)
-  // or allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT);
-  // every later change increments it.
+  // while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT),
+  // allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT) or
+  // the QuickSwap is REJECTED; every later change increments it.
   uint64 version = 26;
   // Fee schedule version fixed at creation. Every execution or bridge payout
   // of this QuickSwap is charged that version's service fees, capped by the
@@ -1003,12 +1020,28 @@ message QuickSwap {
   // referral (quote.referral), the broker fee charged is broker_bps less the
   // referral's discount and commission.
   RequestedFees fees = 29;
-  // Broker and affiliate fees charged so far, as settled: one entry per fee
-  // kind, credited vault and asset, in kind, then account_id, then asset_id
-  // order. Grows while the QuickSwap executes or pays out a bridge. Each is
+  // Broker, affiliate and referral fees charged so far, as settled: one
+  // entry per fee kind, credited account and asset, in kind, then
+  // account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is
   // the requested rate applied to the actual execution, so it can differ
   // from the quote's fee lines.
   repeated ChargedFee charged_fees = 30;
+  // USD value of the credited deposit taken into execution
+  // (execution.input_amount), at the source asset's USD price when it was
+  // taken in, in base units of 18 decimals, rounded down. Set once, within
+  // minutes of that moment, and never repriced. Unset until then, and for
+  // good when no current price valued it in time or the QuickSwap predates
+  // USD values; never zero for unknown.
+  // Setting it increments version.
+  TokenAmount deposited_value_usd = 31;
+  // USD value of what the destination is paid (the DESTINATION withdrawal's
+  // amount: after service, broker and affiliate fees, before its network
+  // fee), at the destination asset's USD price when that payout was
+  // requested, in base units of 18 decimals, rounded down. Set only once
+  // that withdrawal is FINALIZED; unset for good when no current price
+  // valued the payout within minutes of its request or the QuickSwap
+  // predates USD values; never zero for unknown.
+  TokenAmount delivered_value_usd = 32;
 }
 
 // RequestedFees are the broker and affiliate fees a QuickSwap request set,
@@ -1034,6 +1067,13 @@ message ChargedFee {
   uint32 asset_id = 3;
   // Amount credited, in base units of 18 decimals.
   TokenAmount amount = 4;
+  // USD value of amount, each fee summed in it valued at its asset's USD
+  // price when it was charged, in base units of 18 decimals, rounded down.
+  // Each fee is valued once, within minutes of being charged, and never
+  // repriced. Unset while any fee summed in amount has no USD value: one
+  // charged in the last few minutes, one no current price valued in time,
+  // or one charged before USD values existed; never zero for unknown.
+  TokenAmount value_usd = 5;
 }
 
 // QuoteQuickSwapRequest prices terms, with the broker and affiliate fees,
@@ -1069,6 +1109,16 @@ message QuoteQuickSwapRequest {
   // Optional referral partner code, as CreateQuickSwapRequest.referral_code:
   // at most 64 bytes.
   string referral_code = 4 [(buf.validate.field).string.max_bytes = 64];
+  // Optional source wallet the end user will deposit from, as
+  // CreateQuickSwapRequest.source_wallet: a valid address on the source
+  // network, at most 256 UTF-8 bytes. When supplied, it is risk screened
+  // before the quote is returned, and a wallet that fails screening is
+  // refused with SOURCE_WALLET_REJECTED. Source wallets are screened in
+  // advance on Bitcoin, Solana and most EVM networks. Wallets on other
+  // networks, including the Bitcoin and Solana test networks, and wallets
+  // whose screening is unavailable at the time, are quoted without it; their
+  // deposits are still screened on arrival.
+  string source_wallet = 5 [(buf.validate.field).string.max_bytes = 256];
 }
 
 // QuoteQuickSwapResponse is an indicative quote.
@@ -1163,7 +1213,16 @@ message CreateQuickSwapRequest {
   string refund_memo = 9 [(buf.validate.field).string.max_bytes = 128];
   // Optional source wallet the end user will deposit from, for brokers that
   // know it in advance. It must be a valid address on the source network, at
-  // most 256 UTF-8 bytes, and is shown on the QuickSwap.
+  // most 256 UTF-8 bytes, and is shown on the QuickSwap. It is risk screened
+  // before the deposit address is issued: a wallet that fails screening
+  // makes the QuickSwap REJECTED, bound to the key, without a deposit
+  // address, and the request and every repeat of it fail with
+  // SOURCE_WALLET_REJECTED. Source wallets are screened in advance on
+  // Bitcoin, Solana and most EVM networks. Wallets on other networks,
+  // including the Bitcoin and Solana test networks, and wallets whose
+  // screening is unavailable at the time, get their address without it.
+  // Every deposit is still screened on arrival, so a deposit sent from
+  // another wallet is judged on its own sender.
   string source_wallet = 10 [(buf.validate.field).string.max_bytes = 256];
   // Affiliate fees, each charged on top and credited to its affiliate vault:
   // at most three distinct vaults. Fixed at creation with broker_bps.
@@ -1282,7 +1341,9 @@ enum ErrorCode {
   // expired. Complete an MFA challenge for fresh step-up and repeat the
   // request with the new proof.
   STEP_UP_REQUIRED = 23;
-  // The broker has no affiliate vault with this ID.
+  // The ID names no vault of the broker: neither its default vault nor one
+  // of its affiliate vaults. GetVault and SetVaultStatus take affiliate
+  // vaults only, so they also return it for the default vault.
   VAULT_NOT_FOUND = 24;
   // The broker has no API key with this ID, or it no longer works.
   KEY_NOT_FOUND = 25;
@@ -1309,9 +1370,9 @@ enum ErrorCode {
   // 300, no affiliates with a referral_code) fail with INVALID_ARGUMENT
   // before this check.
   FEES_INVALID = 32;
-  // The broker stats cannot be read: a QuickSwap in the window, named by
-  // ErrorDetail.swap_id, is missing a record they need. Contact Polyester
-  // broker support with the swap_id.
+  // The broker stats, or the public QuickSwap statistics, cannot be read: a
+  // QuickSwap in the window, named by ErrorDetail.swap_id, is missing a
+  // record they need. Contact Polyester support with the swap_id.
   STATS_INCOMPLETE = 33;
   // The QuickSwap (swap_id in the error) cannot be issued a deposit address
   // and never gets one, so nothing can be deposited to it; it is EXPIRED with
@@ -1382,6 +1443,14 @@ enum ErrorCode {
   // a member who may grant the role for a new invite. Invites voided by a
   // member change are cancelled by that change and answer INVITE_NOT_FOUND.
   INVITE_VOID = 55;
+  // The source_wallet failed risk screening. On QuoteQuickSwap nothing is
+  // bound. On CreateQuickSwap the QuickSwap (swap_id in the error) is
+  // REJECTED and never gets a deposit address, and every repeat of the
+  // request returns this error; the end user cannot swap from this wallet.
+  SOURCE_WALLET_REJECTED = 56;
+  // The page_token is malformed or was returned for other filters. Start
+  // again from the first page with an empty page_token.
+  PAGE_TOKEN_INVALID = 57;
 }
 
 // ErrorDetail is attached to QuickSwap errors. ConnectRPC clients receive it
@@ -1428,30 +1497,51 @@ message ErrorDetail {
 // REST errors are application/problem+json (see ErrorDetail) with these HTTP
 // statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for
 // UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for
-// IDEMPOTENCY_CONFLICT, 413 when a request body is too large, 429 for
-// RESOURCE_EXHAUSTED (with a Retry-After header when the request rate was
-// exceeded), 500 for an internal error, 503 for UNAVAILABLE and 504 for
-// DEADLINE_EXCEEDED.
+// ALREADY_EXISTS (IDEMPOTENCY_CONFLICT) and ABORTED (ADDRESS_CONFLICT), 413
+// when a request body is too large, 429 for RESOURCE_EXHAUSTED (with a
+// Retry-After header when the request rate was exceeded), 500 for an
+// internal error, and 503 for UNAVAILABLE and DEADLINE_EXCEEDED.
 service QuickSwapService {
   option (polyester.api.docs_group) = "quickswap";
 
-  // QuoteQuickSwap prices terms without creating a QuickSwap or reserving a
-  // deposit address. The quote's output and fees are estimates: the fees
+  // QuoteQuickSwap prices terms without reserving a deposit address.
+  //
+  // Nothing is created. The quote's output and fees are estimates: the fees
   // charged are their rates applied to the actual execution once the
   // deposit is credited. The quote states whether the route needs a refund
-  // address.
+  // address. A declared source_wallet is risk screened before the quote is
+  // returned.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,
-  //   DECIMALS_MISMATCH or FEES_INVALID.
-  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or
-  //   AFFILIATE_VAULT_UNKNOWN.
+  //   DECIMALS_MISMATCH, SOURCE_WALLET_INVALID, FEES_INVALID,
+  //   REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, ROUTE_SUSPENDED,
+  //   PROTECTION_UNACHIEVABLE, AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN
+  //   or REFERRAL_PARTNER_INACTIVE.
   // - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.
-  // - PERMISSION_DENIED: BROKER_DISABLED.
+  // - PERMISSION_DENIED: BROKER_DISABLED, or SOURCE_WALLET_REJECTED when the
+  //   source_wallet failed risk screening; nothing is bound.
   // - RESOURCE_EXHAUSTED: BROKER_LIMIT, the quote request rate of the key.
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc QuoteQuickSwap(QuoteQuickSwapRequest) returns (QuoteQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.error_codes) = "AFFILIATE_VAULT_UNKNOWN";
+    option (polyester.api.error_codes) = "AMOUNT_OUT_OF_RANGE";
+    option (polyester.api.error_codes) = "BROKER_DISABLED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "DECIMALS_MISMATCH";
+    option (polyester.api.error_codes) = "FEES_INVALID";
+    option (polyester.api.error_codes) = "PROTECTION_UNACHIEVABLE";
+    option (polyester.api.error_codes) = "QUOTE_UNAVAILABLE";
+    option (polyester.api.error_codes) = "REFERRAL_CODE_INVALID";
+    option (polyester.api.error_codes) = "REFERRAL_CODE_UNKNOWN";
+    option (polyester.api.error_codes) = "REFERRAL_NOT_SUPPORTED";
+    option (polyester.api.error_codes) = "REFERRAL_PARTNER_INACTIVE";
+    option (polyester.api.error_codes) = "ROUTE_SUSPENDED";
+    option (polyester.api.error_codes) = "ROUTE_UNSUPPORTED";
+    option (polyester.api.error_codes) = "SOURCE_WALLET_INVALID";
+    option (polyester.api.error_codes) = "SOURCE_WALLET_REJECTED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Quote QuickSwap"
       description: "Price QuickSwap terms, with estimated output and fees, without reserving a deposit address."
@@ -1465,19 +1555,24 @@ service QuickSwapService {
     };
   }
 
-  // CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and
-  // allocates its deposit address. It is idempotent per broker and key: a
-  // repeated or concurrent request with the same body returns the same
-  // QuickSwap, quote and address, so every unknown outcome is resolved by
-  // repeating the request unchanged.
+  // CreateQuickSwap creates or returns the QuickSwap for an idempotency key.
+  //
+  // A new QuickSwap is priced and gets its deposit address. The call is
+  // idempotent per broker and key: a repeated or concurrent request with the
+  // same body returns the same QuickSwap, quote and address, so every
+  // unknown outcome is resolved by repeating the request unchanged. A
+  // declared source_wallet is risk screened before the deposit address is
+  // issued.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,
   //   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,
-  //   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID.
-  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,
-  //   REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN; nothing is bound to
-  //   the key.
+  //   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID, FEES_INVALID,
+  //   REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED.
+  // - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, ROUTE_SUSPENDED,
+  //   PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED,
+  //   AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN or
+  //   REFERRAL_PARTNER_INACTIVE; nothing is bound to the key.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.
   // - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its
   //   address automatically; follow it with GetQuickSwap or the same request.
@@ -1487,10 +1582,36 @@ service QuickSwapService {
   // - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;
   //   retry the same request.
   // - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.
+  // - PERMISSION_DENIED: SOURCE_WALLET_REJECTED when the source_wallet failed
+  //   risk screening; the QuickSwap (swap_id in the error) is REJECTED
+  //   without a deposit address, and every repeat returns this error.
   // - RESOURCE_EXHAUSTED: BROKER_LIMIT; nothing is bound to the key.
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc CreateQuickSwap(CreateQuickSwapRequest) returns (CreateQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.error_codes) = "ADDRESS_CONFLICT";
+    option (polyester.api.error_codes) = "ADDRESS_UNAVAILABLE";
+    option (polyester.api.error_codes) = "AFFILIATE_VAULT_UNKNOWN";
+    option (polyester.api.error_codes) = "AMOUNT_OUT_OF_RANGE";
+    option (polyester.api.error_codes) = "BROKER_DISABLED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "DECIMALS_MISMATCH";
+    option (polyester.api.error_codes) = "DESTINATION_ADDRESS_INVALID";
+    option (polyester.api.error_codes) = "FEES_INVALID";
+    option (polyester.api.error_codes) = "IDEMPOTENCY_CONFLICT";
+    option (polyester.api.error_codes) = "PROTECTION_UNACHIEVABLE";
+    option (polyester.api.error_codes) = "QUOTE_UNAVAILABLE";
+    option (polyester.api.error_codes) = "REFERRAL_CODE_INVALID";
+    option (polyester.api.error_codes) = "REFERRAL_CODE_UNKNOWN";
+    option (polyester.api.error_codes) = "REFERRAL_NOT_SUPPORTED";
+    option (polyester.api.error_codes) = "REFERRAL_PARTNER_INACTIVE";
+    option (polyester.api.error_codes) = "REFUND_ADDRESS_INVALID";
+    option (polyester.api.error_codes) = "REFUND_ADDRESS_REQUIRED";
+    option (polyester.api.error_codes) = "RETURN_ADDRESS_INVALID";
+    option (polyester.api.error_codes) = "ROUTE_SUSPENDED";
+    option (polyester.api.error_codes) = "ROUTE_UNSUPPORTED";
+    option (polyester.api.error_codes) = "SOURCE_WALLET_INVALID";
+    option (polyester.api.error_codes) = "SOURCE_WALLET_REJECTED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Create QuickSwap"
       description: "Create or return the QuickSwap and deposit address for an idempotency key."
@@ -1514,6 +1635,8 @@ service QuickSwapService {
   // - UNAUTHENTICATED: missing or invalid broker API key.
   rpc GetQuickSwap(GetQuickSwapRequest) returns (GetQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "SWAP_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get QuickSwap"
       description: "Get one QuickSwap by identifier or by idempotency key."

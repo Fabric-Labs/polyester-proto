@@ -55,6 +55,10 @@ enum NotificationType {
   // member of the broker requested it, act before the address becomes
   // payable: an added address is payable 24 hours after it is listed.
   BROKER_ALLOWLIST_CHANGE = 3;
+  // A Telegram account was linked to the caller's account. Category SECURITY;
+  // detail telegram_link. The linked Telegram account also receives it. If the
+  // caller did not link it, unlink it and review the account's sessions.
+  TELEGRAM_LINKED = 4;
 }
 
 // NotificationCategory groups notification types for filtering and counts.
@@ -106,6 +110,8 @@ message Notification {
     TelegramApprovalNotice telegram_approval = 11;
     // The broker vault payout address change.
     BrokerAllowlistNotice broker_allowlist = 12;
+    // The Telegram account linked.
+    TelegramLinkNotice telegram_link = 13;
   }
 }
 
@@ -383,9 +389,13 @@ message MarkAllNotificationsReadResponse {
   uint64 changed = 1;
 }
 
-// NotificationService serves the caller's notification center. Every method
-// takes a session token: notifications of the account are read and marked on
-// the website and in the app, never with an API key.
+// NotificationService serves the caller's notification center: the
+// notifications of the caller's main account. ListNotifications,
+// GetNotification and GetNotificationCounts also take an API key of the main
+// account whose policy grants READ_NOTIFICATIONS; a key scoped to a
+// sub-account is refused with PERMISSION_DENIED (AUTH_API_KEY_ACCESS_DENIED),
+// since notifications belong to the main account. Marking notifications read
+// or unread takes a session token only.
 service NotificationService {
   option (polyester.api.docs_group) = "account";
 
@@ -393,9 +403,10 @@ service NotificationService {
   rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "List Notifications"
-      description: "List the caller's notifications, newest first."
+      description: "List the caller's notifications, newest first. An API key needs READ_NOTIFICATIONS and must be scoped to the main account."
       tags: "Notification Service"
     };
   }
@@ -404,9 +415,10 @@ service NotificationService {
   rpc GetNotification(GetNotificationRequest) returns (GetNotificationResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Notification"
-      description: "Read one notification of the caller."
+      description: "Read one notification of the caller. An API key needs READ_NOTIFICATIONS and must be scoped to the main account."
       tags: "Notification Service"
     };
   }
@@ -416,9 +428,10 @@ service NotificationService {
   rpc GetNotificationCounts(GetNotificationCountsRequest) returns (GetNotificationCountsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Notification Counts"
-      description: "Count the caller's notifications and unread notifications, by type."
+      description: "Count the caller's notifications and unread notifications, by type. An API key needs READ_NOTIFICATIONS and must be scoped to the main account."
       tags: "Notification Service"
     };
   }
@@ -460,4 +473,11 @@ service NotificationService {
       tags: "Notification Service"
     };
   }
+}
+
+// TelegramLinkNotice is a Telegram account linked to the caller's account, as
+// the link was confirmed.
+message TelegramLinkNotice {
+  // When the caller confirmed the link.
+  google.protobuf.Timestamp linked_at = 1;
 }

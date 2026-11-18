@@ -86,6 +86,29 @@
             "description": "HTTP status code.",
             "type": "integer"
           },
+          "timestampWindow": {
+            "description": "TIMESTAMP_SKEW only: the server time and the window the request's X-API-TIMESTAMP had to fall in, from serverTimeMs minus recvWindowMs to serverTimeMs plus maxFutureMs, both inclusive. Omitted for every other code.",
+            "properties": {
+              "maxFutureMs": {
+                "description": "How far a timestamp may run ahead of the server time, in milliseconds: 1000.",
+                "type": "integer"
+              },
+              "recvWindowMs": {
+                "description": "Receive window the timestamp was checked against, in milliseconds: the request's X-API-RECV-WINDOW, or 5000 when the header is omitted.",
+                "type": "integer"
+              },
+              "serverTimeMs": {
+                "description": "Server time when the request was refused, in milliseconds since the Unix epoch, as a decimal string.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "serverTimeMs",
+              "recvWindowMs",
+              "maxFutureMs"
+            ],
+            "type": "object"
+          },
           "title": {
             "description": "Short summary of the problem.",
             "type": "string"
@@ -144,7 +167,7 @@
                   "type": "string"
                 },
                 "orderId": {
-                  "description": "Order ID as fixed64. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
+                  "description": "Public order ID. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
                   "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                   "type": "string"
                 }
@@ -174,12 +197,16 @@
         "properties": {
           "acceptedCount": {
             "description": "Number of requested cancellations that were accepted.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "rejectedCount": {
             "description": "Number of requested cancellations that were rejected.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "results": {
@@ -416,7 +443,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -469,7 +496,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -497,7 +524,7 @@
                           "type": "integer"
                         },
                         "maxSlippageTicks": {
-                          "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                          "description": "Maximum absolute price delta of the exit's protection price from the price that fired it, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the firing price, a buy's down and a sell's up.",
                           "format": "int64",
                           "type": "integer"
                         },
@@ -517,7 +544,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [],
@@ -635,7 +662,7 @@
                   "description": "Market order with implicit IOC behavior.",
                   "properties": {
                     "clientRefPrice": {
-                      "description": "Optional client reference price as a decimal string in quote asset units per base asset unit, for example '61000.25'. When omitted, admission uses server-side reference pricing.",
+                      "description": "Optional client reference price for the market order's slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'. It need not be a multiple of the pair's price tick: only the protection price derived from it is. The protection price is the reference moved by the maximum slippage, up for a BUY and down for a SELL, then rounded onto the pair's tick grid toward the reference (a BUY's down, a SELL's up), so it never allows more than the slippage and can be up to one tick tighter. For example, with a 0.01 tick, a reference of '73840.125' and a maximum slippage of 50.12 quote units give a BUY protection price of 73890.24 and a SELL protection price of 73790.01. When omitted, admission uses server-side reference pricing. A reference too far from the server's is refused with STALE_QUOTE.",
                       "pattern": "^[0-9]+(\\.[0-9]+)?$",
                       "type": "string"
                     },
@@ -645,7 +672,7 @@
                       "type": "integer"
                     },
                     "maxSlippageTicks": {
-                      "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                      "description": "Maximum absolute price delta of the protection price from the reference price, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the reference, as clientRefPrice describes.",
                       "format": "int64",
                       "type": "integer"
                     }
@@ -736,12 +763,16 @@
         "properties": {
           "acceptedCount": {
             "description": "Number of requested orders that were accepted.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "rejectedCount": {
             "description": "Number of requested orders that were rejected.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "results": {
@@ -1021,7 +1052,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -1074,7 +1105,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [
@@ -1102,7 +1133,7 @@
                           "type": "integer"
                         },
                         "maxSlippageTicks": {
-                          "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                          "description": "Maximum absolute price delta of the exit's protection price from the price that fired it, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the firing price, a buy's down and a sell's up.",
                           "format": "int64",
                           "type": "integer"
                         },
@@ -1122,7 +1153,7 @@
                               "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                             }
                           ],
-                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                          "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                         }
                       },
                       "required": [],
@@ -1149,7 +1180,7 @@
                   "type": "integer"
                 },
                 "orderId": {
-                  "description": "Order ID as fixed64. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
+                  "description": "Public order ID. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
                   "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
                   "type": "string"
                 }
@@ -1185,7 +1216,9 @@
         "properties": {
           "acceptedCount": {
             "description": "Number of items admitted and handed to execution.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "acceptedTs": {
@@ -1205,7 +1238,9 @@
           },
           "rejectedCount": {
             "description": "Number of items rejected before execution handoff.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "results": {
@@ -1347,7 +1382,9 @@
                 },
                 "itemIndex": {
                   "description": "Zero-based index in the request.",
-                  "format": "int32",
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "oldOrderId": {
@@ -1425,7 +1462,9 @@
           },
           "timeoutSec": {
             "description": "Heartbeat timeout in seconds. - 0 disables the dead-man switch for this account. - 10..120 arms or refreshes the switch.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           }
         },
@@ -1454,7 +1493,9 @@
               },
               "symbolId": {
                 "description": "Symbol ID whose orders are canceled. Zero or omitted means all symbols.",
-                "format": "int32",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
                 "type": "integer"
               }
             },
@@ -1466,7 +1507,9 @@
           },
           "effectiveTimeoutSec": {
             "description": "Effective timeout in seconds (0 when disabled).",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "expiresAtTsNs": {
@@ -1565,7 +1608,9 @@
           },
           "failedCancels": {
             "description": "Number of matched orders that could not be submitted for cancellation because the cancel-all could not be recorded for their symbol. This request does not cancel them; send a new cancel-all with a new `request_id` if they are still open. Zero when `dry_run` is set.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "listingStatus": {
@@ -1578,7 +1623,9 @@
           },
           "matchedOrders": {
             "description": "Number of open orders that matched the filter when the request was accepted, including orders whose cancellation was already in progress and open orders that triggers placed. Triggers themselves are never counted. Orders placed after acceptance are not counted. Unless `dry_run` is set, equals `submitted_cancels` plus `failed_cancels`.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "status": {
@@ -1591,12 +1638,16 @@
           },
           "submittedCancels": {
             "description": "Number of matched orders for which cancellation was requested, including orders whose cancellation was already in progress. Observe order updates or reads for final outcomes; orders may execute before cancellation takes effect. Zero when `dry_run` is set.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "totalCancelled": {
             "description": "Number of orders whose cancellation was requested, including those not listed in `cancelled_orders`. Equals `submitted_cancels`. Zero when `dry_run` is set.",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
           "truncated": {
@@ -1636,7 +1687,7 @@
             "type": "string"
           },
           "orderId": {
-            "description": "Order ID as fixed64. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
+            "description": "Public order ID. Exactly one of order_id or client_order_id.\n\nPublic ID, as a base58 string.",
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "type": "string"
           },
@@ -1657,7 +1708,7 @@
         "additionalProperties": false,
         "properties": {
           "orderId": {
-            "description": "Order ID as fixed64.\n\nPublic ID, as a base58 string.",
+            "description": "Public order ID.\n\nPublic ID, as a base58 string.",
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "type": "string"
           },
@@ -1748,7 +1799,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -1801,7 +1852,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -1829,7 +1880,7 @@
                         "type": "integer"
                       },
                       "maxSlippageTicks": {
-                        "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                        "description": "Maximum absolute price delta of the exit's protection price from the price that fired it, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the firing price, a buy's down and a sell's up.",
                         "format": "int64",
                         "type": "integer"
                       },
@@ -1849,7 +1900,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [],
@@ -1967,7 +2018,7 @@
                 "description": "Market order with implicit IOC behavior.",
                 "properties": {
                   "clientRefPrice": {
-                    "description": "Optional client reference price as a decimal string in quote asset units per base asset unit, for example '61000.25'. When omitted, admission uses server-side reference pricing.",
+                    "description": "Optional client reference price for the market order's slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'. It need not be a multiple of the pair's price tick: only the protection price derived from it is. The protection price is the reference moved by the maximum slippage, up for a BUY and down for a SELL, then rounded onto the pair's tick grid toward the reference (a BUY's down, a SELL's up), so it never allows more than the slippage and can be up to one tick tighter. For example, with a 0.01 tick, a reference of '73840.125' and a maximum slippage of 50.12 quote units give a BUY protection price of 73890.24 and a SELL protection price of 73790.01. When omitted, admission uses server-side reference pricing. A reference too far from the server's is refused with STALE_QUOTE.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
                   },
@@ -1977,7 +2028,7 @@
                     "type": "integer"
                   },
                   "maxSlippageTicks": {
-                    "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                    "description": "Maximum absolute price delta of the protection price from the reference price, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the reference, as clientRefPrice describes.",
                     "format": "int64",
                     "type": "integer"
                   }
@@ -2186,7 +2237,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                       }
                     ],
-                    "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                    "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [
@@ -2239,7 +2290,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                       }
                     ],
-                    "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                    "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [
@@ -2267,7 +2318,7 @@
                     "type": "integer"
                   },
                   "maxSlippageTicks": {
-                    "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                    "description": "Maximum absolute price delta of the exit's protection price from the price that fired it, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the firing price, a buy's down and a sell's up.",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -2287,7 +2338,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                       }
                     ],
-                    "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                    "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                   }
                 },
                 "required": [],
@@ -2314,7 +2365,7 @@
             "type": "integer"
           },
           "orderId": {
-            "description": "Order ID as fixed64.\n\nPublic ID, as a base58 string.",
+            "description": "Public order ID.\n\nPublic ID, as a base58 string.",
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "type": "string"
           },
@@ -2459,7 +2510,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the stop-loss watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -2512,7 +2563,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the take-profit watches. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [
@@ -2540,7 +2591,7 @@
                         "type": "integer"
                       },
                       "maxSlippageTicks": {
-                        "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                        "description": "Maximum absolute price delta of the exit's protection price from the price that fired it, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the firing price, a buy's down and a sell's up.",
                         "format": "int64",
                         "type": "integer"
                       },
@@ -2560,7 +2611,7 @@
                             "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.TriggerPriceSource"
                           }
                         ],
-                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected with terminal reason INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg is refused with TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
+                        "description": "Price the trailing stop watches and trails: its peak or trough, activation and fire all follow this price. Unspecified or LAST_PRICE watches the last traded price. INDEX_PRICE watches the market's index price; on a market without an index price the order is rejected before any fill with reject_reason TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify that adds such a leg is refused with the same code, leaving the order and its legs unchanged. MARK_PRICE is not supported. A modify naming another source replaces the leg."
                       }
                     },
                     "required": [],
@@ -2678,7 +2729,7 @@
                 "description": "Market order with implicit IOC behavior.",
                 "properties": {
                   "clientRefPrice": {
-                    "description": "Optional client reference price as a decimal string in quote asset units per base asset unit, for example '61000.25'. When omitted, admission uses server-side reference pricing.",
+                    "description": "Optional client reference price for the market order's slippage protection, as a decimal string in quote asset units per base asset unit, for example '61000.25'. It need not be a multiple of the pair's price tick: only the protection price derived from it is. The protection price is the reference moved by the maximum slippage, up for a BUY and down for a SELL, then rounded onto the pair's tick grid toward the reference (a BUY's down, a SELL's up), so it never allows more than the slippage and can be up to one tick tighter. For example, with a 0.01 tick, a reference of '73840.125' and a maximum slippage of 50.12 quote units give a BUY protection price of 73890.24 and a SELL protection price of 73790.01. When omitted, admission uses server-side reference pricing. A reference too far from the server's is refused with STALE_QUOTE.",
                     "pattern": "^[0-9]+(\\.[0-9]+)?$",
                     "type": "string"
                   },
@@ -2688,7 +2739,7 @@
                     "type": "integer"
                   },
                   "maxSlippageTicks": {
-                    "description": "Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).",
+                    "description": "Maximum absolute price delta of the protection price from the reference price, as a positive integer in 1e-9 quote units, for example 50120000000 for 50.12. The ticks in this name are 1e-9 quote units, not the pair's price tick, and the value need not be a multiple of the pair's tick: the protection price is rounded onto the tick grid toward the reference, as clientRefPrice describes.",
                     "format": "int64",
                     "type": "integer"
                   }
@@ -2795,6 +2846,11 @@
                   }
                 ],
                 "description": "Stable error code matching the REST problem+json \"code\" field."
+              },
+              "priceBandLimit": {
+                "description": "For PRICE_BAND_VIOLATION, the price band limit the order's limit price is past, as a decimal string in quote asset units per base asset unit, for example '1837.5': the highest admitted buy price for a buy, the lowest admitted sell price for a sell, as the market last published its band. Omitted for every other code.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
               },
               "rateLimit": {
                 "additionalProperties": false,
@@ -3194,7 +3250,8 @@
           "PEG_LIMIT_VIOLATION",
           "PEG_REFERENCE_UNAVAILABLE",
           "INVALID_PEG",
-          "TRIGGER_ACTIVATION_PRICE_NOT_MODIFIABLE"
+          "TRIGGER_ACTIVATION_PRICE_NOT_MODIFIABLE",
+          "CLIENT_LIST_ID_INVALID"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
@@ -3228,6 +3285,7 @@
           "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
           "CHILD_QTY_EXCEEDS_REMAINING": "The new quantity of a TWAP order's slice would leave more than the TWAP's remaining quantity. Nothing changed; a slice can be raised up to what the TWAP still has to execute.",
           "CHILD_QTY_RAISE_NOT_ALLOWED": "The quantity of a trigger's child order or a ladder order can't be raised above its planned quantity. Nothing changed.",
+          "CLIENT_LIST_ID_INVALID": "The OCO's client list ID is empty, longer than 36 characters, or has a character other than a letter, digit, period, underscore, colon, slash or hyphen. Answered by CreateOco and by the ListTriggers client_list_id filter. Nothing changed.",
           "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
           "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
           "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID is empty, longer than 36 bytes or otherwise not valid.",
@@ -3297,7 +3355,7 @@
           "ORDER_REPAIRING": "This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.",
           "ORDER_SEQUENCE_EXHAUSTED": "The account used every order identifier available to it in this market. Retrying does not help; contact support.",
           "ORDER_TYPE_NOT_ALLOWED_IN_AUCTION": "This market is in an auction call and takes only limit orders that rest without crossing the book; market, immediate-or-cancel and fill-or-kill orders are refused. Nothing changed.",
-          "ORDER_UNKNOWN": "Referenced order could not be resolved.",
+          "ORDER_UNKNOWN": "Referenced order could not be resolved: no order of the account has that order ID or client order ID, or an ended order can no longer be confirmed under it (see OrdersService.CancelOrder). Read the order to tell an ended order from one that was never placed.",
           "OVERLOADED": "The account already has its maximum order requests in flight; nothing was admitted. ConnectRPC returns RESOURCE_EXHAUSTED (HTTP 429); REST returns HTTP 503. No Retry-After or RateLimit-* headers are supplied. Retry after one of the outstanding requests completes.",
           "PAIR_BACKLOGGED": "The trading pair is busy with the account's earlier requests, so this one was not admitted and nothing was reserved. Retry shortly.",
           "PAIR_CANCEL_ONLY": "Pair is in cancel-only mode.",
@@ -4142,8 +4200,7 @@
               "example": {
                 "items": [
                   {
-                    "clientOrderId": "cli-ord-20250101-001",
-                    "orderId": "5USXJZmk"
+                    "clientOrderId": "cli-ord-20250101-001"
                   }
                 ],
                 "requestId": "request_01J0EXAMPLE",

@@ -187,6 +187,22 @@
             "number": 2,
             "doc": "Total, in base units of 18 decimals.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "value_usd",
+            "jsonName": "valueUsd",
+            "number": 3,
+            "doc": "USD value of the amounts summed in amount that have one, each valued at\n the asset's USD price when it happened, as the field holding this entry\n says, in base units of 18 decimals, rounded down. Each amount is valued\n once, within minutes of happening, and never repriced, so a past period\n keeps its value. Unset when none has one; never zero for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 4,
+            "doc": "Amounts summed in amount without a USD value (one per QuickSwap for a\n volume, one per fee for a fee total), and so left out of value_usd:\n from the last few minutes, not valued by a current price in time, or\n from before USD values existed. Zero when value_usd covers all of\n amount.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -259,7 +275,7 @@
             "name": "default_vault_account_id",
             "jsonName": "defaultVaultAccountId",
             "number": 5,
-            "doc": "Public sub-account ID of the default vault, credited with broker fees\n that name no affiliate.",
+            "doc": "Public sub-account ID of the default vault, credited with every broker\n fee (FeeKind BROKER); affiliate fees go to affiliate vaults.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -424,7 +440,7 @@
           {
             "name": "FINANCE",
             "number": 3,
-            "doc": "Internal transfers, withdrawals and payout settings."
+            "doc": "Reads, and the payout settings and withdrawals of the broker's vaults:\n changes a vault's payout address allowlist (RequestVaultAllowlistChange),\n sets its payout rule (chain.withdraw.v1.AutoWithdrawService) and\n withdraws from it\n (chain.withdraw.v1.WithdrawService.CreateWalletTradingWithdraw), naming\n the vault as the subaccount_id. Manages no vaults, keys or members."
           },
           {
             "name": "AFFILIATE_MANAGER",
@@ -475,7 +491,7 @@
             "name": "deposited",
             "jsonName": "deposited",
             "number": 4,
-            "doc": "Deposits credited to those QuickSwaps and taken in for execution, per\n asset, in asset_id order: including a deposit later found ineligible\n and returned, excluding a deposit held for review before credit.",
+            "doc": "Deposits credited to those QuickSwaps and taken in for execution, per\n asset, in asset_id order: including a deposit later found ineligible\n and returned, excluding a deposit held for review before credit. Each\n deposit's USD value is fixed when it was taken in, as\n QuickSwap.deposited_value_usd.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.AssetVolume"
           },
@@ -483,7 +499,7 @@
             "name": "delivered",
             "jsonName": "delivered",
             "number": 5,
-            "doc": "Paid to the destination of those QuickSwaps whose DESTINATION\n withdrawal is FINALIZED, per asset, in asset_id order: after service,\n broker and affiliate fees, before the destination network fee.",
+            "doc": "Paid to the destination of those QuickSwaps whose DESTINATION\n withdrawal is FINALIZED, per asset, in asset_id order: after service,\n broker and affiliate fees, before the destination network fee. Each\n payout's USD value is fixed when it was requested, as\n QuickSwap.delivered_value_usd.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.AssetVolume"
           },
@@ -570,6 +586,13 @@
             "jsonName": "amount",
             "number": 4,
             "doc": "Amount credited, in base units of 18 decimals.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "value_usd",
+            "jsonName": "valueUsd",
+            "number": 5,
+            "doc": "USD value of amount, each fee summed in it valued at its asset's USD\n price when it was charged, in base units of 18 decimals, rounded down.\n Each fee is valued once, within minutes of being charged, and never\n repriced. Unset while any fee summed in amount has no USD value: one\n charged in the last few minutes, one no current price valued in time,\n or one charged before USD values existed; never zero for unknown.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
@@ -850,7 +873,7 @@
             "name": "source_wallet",
             "jsonName": "sourceWallet",
             "number": 10,
-            "doc": "Optional source wallet the end user will deposit from, for brokers that\n know it in advance. It must be a valid address on the source network, at\n most 256 UTF-8 bytes, and is shown on the QuickSwap.",
+            "doc": "Optional source wallet the end user will deposit from, for brokers that\n know it in advance. It must be a valid address on the source network, at\n most 256 UTF-8 bytes, and is shown on the QuickSwap. It is risk screened\n before the deposit address is issued: a wallet that fails screening\n makes the QuickSwap REJECTED, bound to the key, without a deposit\n address, and the request and every repeat of it fail with\n SOURCE_WALLET_REJECTED. Source wallets are screened in advance on\n Bitcoin, Solana and most EVM networks. Wallets on other networks,\n including the Bitcoin and Solana test networks, and wallets whose\n screening is unavailable at the time, get their address without it.\n Every deposit is still screened on arrival, so a deposit sent from\n another wallet is judged on its own sender.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -1151,7 +1174,7 @@
             "name": "min_native_gas_limit",
             "jsonName": "minNativeGasLimit",
             "number": 8,
-            "doc": "Recommended gas limit, in gas units, for native-coin deposits on EVM\n networks: 250000. Polyester does not enforce this limit. On some networks,\n depositing to an address that has never received funds requires far more\n than 21000 gas. If the limit is too low, the transaction fails on chain\n without depositing funds, and the network fee is still charged. Use at\n least the recommended limit. Unused gas is not charged. Zero for token\n deposits and non-EVM networks.",
+            "doc": "Recommended gas limit, in gas units, for a native-coin deposit on EVM\n networks to succeed reliably: 250000. Polyester does not enforce it; the\n sender's wallet or exchange sets the gas limit. A gas estimate from the\n network of at least 50000 also works, but confirms more slowly. The gas\n a plain transfer needs differs by network: several layer-2 networks and\n EVM forks do not use 21000. If the limit is too low, the transfer fails\n on chain without depositing, and the network fee is still charged. Zero\n for token deposits and non-EVM networks.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1316,7 +1339,7 @@
           {
             "name": "VAULT_NOT_FOUND",
             "number": 24,
-            "doc": "The broker has no affiliate vault with this ID."
+            "doc": "The ID names no vault of the broker: neither its default vault nor one\n of its affiliate vaults. GetVault and SetVaultStatus take affiliate\n vaults only, so they also return it for the default vault."
           },
           {
             "name": "KEY_NOT_FOUND",
@@ -1361,7 +1384,7 @@
           {
             "name": "STATS_INCOMPLETE",
             "number": 33,
-            "doc": "The broker stats cannot be read: a QuickSwap in the window, named by\n ErrorDetail.swap_id, is missing a record they need. Contact Polyester\n broker support with the swap_id."
+            "doc": "The broker stats, or the public QuickSwap statistics, cannot be read: a\n QuickSwap in the window, named by ErrorDetail.swap_id, is missing a\n record they need. Contact Polyester support with the swap_id."
           },
           {
             "name": "ADDRESS_CONFLICT",
@@ -1472,6 +1495,16 @@
             "name": "INVITE_VOID",
             "number": 55,
             "doc": "The invite is void: the member who sent it has left the broker or may no\n longer grant its role. Accepting it granted nothing and cancelled it; ask\n a member who may grant the role for a new invite. Invites voided by a\n member change are cancelled by that change and answer INVITE_NOT_FOUND."
+          },
+          {
+            "name": "SOURCE_WALLET_REJECTED",
+            "number": 56,
+            "doc": "The source_wallet failed risk screening. On QuoteQuickSwap nothing is\n bound. On CreateQuickSwap the QuickSwap (swap_id in the error) is\n REJECTED and never gets a deposit address, and every repeat of the\n request returns this error; the end user cannot swap from this wallet."
+          },
+          {
+            "name": "PAGE_TOKEN_INVALID",
+            "number": 57,
+            "doc": "The page_token is malformed or was returned for other filters. Start\n again from the first page with an empty page_token."
           }
         ]
       }
@@ -1649,7 +1682,7 @@
             "name": "slices_unavailable_reason",
             "jsonName": "slicesUnavailableReason",
             "number": 12,
-            "doc": "Why slice history is unavailable. When set, slices is empty and\n slices_truncated is false. Aggregate amounts, counts, execution status\n and withdrawals remain available. Unspecified when history is available.",
+            "doc": "Why slice history is unavailable. When set, slices is empty and\n slices_truncated is false. Counts, execution status and withdrawals\n remain available, and so do the aggregate amounts, except that with\n PRECISION_UNAVAILABLE an amount in a token whose precision is\n unavailable is unset. Unspecified when history is available.",
             "protoRef": "swap.quickswap.v1.ExecutionProgress.SlicesUnavailableReason"
           }
         ]
@@ -1766,6 +1799,157 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.ExplorerDeposit",
+      "kind": "message",
+      "doc": "ExplorerDeposit is one deposit a completed QuickSwap executed: the\n credited deposit that funded it. A deposit that was returned or held is\n never listed.",
+      "message": {
+        "fields": [
+          {
+            "name": "tx_hash",
+            "jsonName": "txHash",
+            "number": 1,
+            "doc": "Source-network transaction that sent the deposit, in the network's\n canonical text form, as GetQuickSwap reports it in Deposit.tx_hash.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "address",
+            "jsonName": "address",
+            "number": 2,
+            "doc": "QuickSwap deposit address the deposit was paid into, in the source\n network's canonical text form, without a destination tag or memo.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ExplorerQuickSwap",
+      "kind": "message",
+      "doc": "ExplorerQuickSwap is the public view of one completed QuickSwap. Besides\n its assets, amounts and markets, it carries the transactions and\n addresses of its deposit and destination payout. It never carries a\n destination tag or memo, a return or refund address or transaction, the\n broker, a fee, an idempotency key or the quote. Fields may be added;\n clients ignore the ones they do not know.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 1,
+            "doc": "Public QuickSwap identifier.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "completed_at",
+            "jsonName": "completedAt",
+            "number": 2,
+            "doc": "When the QuickSwap completed: its destination payout was final.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "source_zipped_asset_id",
+            "jsonName": "sourceZippedAssetId",
+            "number": 3,
+            "doc": "Source asset and network, as an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_zipped_asset_id",
+            "jsonName": "destinationZippedAssetId",
+            "number": 4,
+            "doc": "Destination asset and network, as an AssetChainVariant.zipped_asset_id\n from GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "source_amount",
+            "jsonName": "sourceAmount",
+            "number": 5,
+            "doc": "Amount deposited, in source token units, before the deposit network\n fee.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_amount",
+            "jsonName": "destinationAmount",
+            "number": 6,
+            "doc": "Amount delivered to the destination, in destination token units, after\n the withdrawal network fee.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "legs",
+            "jsonName": "legs",
+            "number": 7,
+            "doc": "Markets traded, in route order: one for a direct route, two for a route\n through an intermediate asset, none for a bridge, which moves one asset\n between networks without trading.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ExplorerRouteLeg"
+          },
+          {
+            "name": "deposits",
+            "jsonName": "deposits",
+            "number": 8,
+            "doc": "The credited deposits that funded the QuickSwap, oldest first: one in\n practice.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ExplorerDeposit"
+          },
+          {
+            "name": "withdrawals",
+            "jsonName": "withdrawals",
+            "number": 9,
+            "doc": "The finalized payouts to the destination, oldest first: one in\n practice. destination_amount is their total.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ExplorerWithdrawal"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ExplorerRouteLeg",
+      "kind": "message",
+      "doc": "ExplorerRouteLeg is one market a completed QuickSwap traded on, in route\n order.",
+      "message": {
+        "fields": [
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 1,
+            "doc": "Numeric spot market identifier of the pair traded; resolve its symbol\n with GetSpotConfig.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ExplorerWithdrawal",
+      "kind": "message",
+      "doc": "ExplorerWithdrawal is one finalized payout of a completed QuickSwap's\n output to its destination. A refund or return is never listed.",
+      "message": {
+        "fields": [
+          {
+            "name": "tx_hash",
+            "jsonName": "txHash",
+            "number": 1,
+            "doc": "Destination-network transaction that paid the output, in the network's\n canonical text form, as GetQuickSwap reports it in Withdrawal.tx_hash.\n Like there, it can be corrected for up to 24 hours after completed_at.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "address",
+            "jsonName": "address",
+            "number": 2,
+            "doc": "Address the output was paid to, in the destination network's canonical\n text form (for example lowercase hex on EVM networks), without a\n destination tag or memo.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.FeeKind",
       "kind": "enum",
       "doc": "FeeKind identifies one component of a QuickSwap's fees.",
@@ -1846,6 +2030,43 @@
             "number": 5,
             "doc": "Referral commissions, credited to referral partners rather than to a\n vault of the broker, in base units of 18 decimals.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "service_fee_usd",
+            "jsonName": "serviceFeeUsd",
+            "number": 6,
+            "doc": "USD value of service_fee: each fee valued at the asset's USD price when\n it was charged, once, within minutes, and never repriced, in base units\n of 18 decimals, rounded down. Zero when service_fee is zero; otherwise\n the value of its fees that have one, unset when none has; never zero\n for unknown. unvalued_count counts the fees left out.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "broker_fee_usd",
+            "jsonName": "brokerFeeUsd",
+            "number": 7,
+            "doc": "USD value of broker_fee, as service_fee_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "affiliate_fee_usd",
+            "jsonName": "affiliateFeeUsd",
+            "number": 8,
+            "doc": "USD value of affiliate_fee, as service_fee_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "referral_fee_usd",
+            "jsonName": "referralFeeUsd",
+            "number": 9,
+            "doc": "USD value of referral_fee, as service_fee_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 10,
+            "doc": "Fees of the split without a USD value, and so left out of the USD\n fields: charged in the last few minutes, not valued by a current price\n in time, or charged before USD values existed. Zero when the USD fields\n cover every fee.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }
@@ -1895,6 +2116,22 @@
             "jsonName": "swapCount",
             "number": 5,
             "doc": "QuickSwaps that were charged a fee in this group and asset.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "value_usd",
+            "jsonName": "valueUsd",
+            "number": 6,
+            "doc": "USD value of the fees in amount that have one, each valued at the\n asset's USD price when it was charged, in base units of 18 decimals,\n rounded down. Each fee is valued once, within minutes of being charged,\n and never repriced, so a past group keeps its value. Unset when none\n has one; never zero for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 7,
+            "doc": "Fees summed in amount without a USD value, and so left out of value_usd:\n charged in the last few minutes, not valued by a current price in time,\n or charged before USD values existed. Zero when value_usd covers all of\n amount.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -2267,6 +2504,110 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.GetQuickSwapStatsRequest",
+      "kind": "message",
+      "doc": "GetQuickSwapStatsRequest reads the statistics of one window.",
+      "message": {
+        "fields": [
+          {
+            "name": "window",
+            "jsonName": "window",
+            "number": 1,
+            "doc": "The window.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsWindow",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  0
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetQuickSwapStatsResponse",
+      "kind": "message",
+      "doc": "GetQuickSwapStatsResponse is the activity of completed QuickSwaps of every\n broker over a window, with the window just before it for comparison.\n Amounts are exact, with their USD values fixed when they happened.",
+      "message": {
+        "fields": [
+          {
+            "name": "window",
+            "jsonName": "window",
+            "number": 1,
+            "doc": "The window.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsWindow"
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 2,
+            "doc": "Start of the window, inclusive.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 3,
+            "doc": "End of the window, exclusive: the end of the current bucket.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "bucket_size",
+            "jsonName": "bucketSize",
+            "number": 4,
+            "doc": "Length of each bucket.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsBucketSize"
+          },
+          {
+            "name": "totals",
+            "jsonName": "totals",
+            "number": 5,
+            "doc": "Totals of the window.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
+          },
+          {
+            "name": "previous_totals",
+            "jsonName": "previousTotals",
+            "number": 6,
+            "doc": "Totals of the previous window: the same length, ending at start_time.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
+          },
+          {
+            "name": "buckets",
+            "jsonName": "buckets",
+            "number": 7,
+            "doc": "Every bucket of the window, oldest first, empty ones included.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsBucket"
+          },
+          {
+            "name": "routes",
+            "jsonName": "routes",
+            "number": 8,
+            "doc": "Every route with a completed QuickSwap in the window, in ascending\n source then destination order. The set is small: the client ranks\n routes, source assets and destination assets from it.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.QuickSwapRouteStats"
+          },
+          {
+            "name": "as_of",
+            "jsonName": "asOf",
+            "number": 9,
+            "doc": "When the statistics were computed. Each window's outcome, answer or\n error, is shared for about a minute, so an answer can be that old.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.GetReferralPartnerRequest",
       "kind": "message",
       "doc": "GetReferralPartnerRequest reads the caller's partner record.",
@@ -2520,6 +2861,85 @@
             "number": 1,
             "doc": "The invite.",
             "protoRef": "swap.quickswap.v1.Invite"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListCompletedQuickSwapsRequest",
+      "kind": "message",
+      "doc": "ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker.",
+      "message": {
+        "fields": [
+          {
+            "name": "source_zipped_asset_id",
+            "jsonName": "sourceZippedAssetId",
+            "number": 1,
+            "doc": "Only QuickSwaps from this source asset and network, as a zipped_asset_id;\n 0 for every source.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_zipped_asset_id",
+            "jsonName": "destinationZippedAssetId",
+            "number": 2,
+            "doc": "Only QuickSwaps to this destination asset and network, as a\n zipped_asset_id; 0 for every destination.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Maximum number of QuickSwaps to return; 0 means 50, at most 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 4,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the asset filters and the newest-first order. Reuse it with the same\n filters. Empty for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListCompletedQuickSwapsResponse",
+      "kind": "message",
+      "doc": "ListCompletedQuickSwapsResponse lists completed QuickSwaps newest\n completion first; QuickSwaps that completed at the same time are in a\n fixed order. Every QuickSwap that completed before the first page was\n read is listed exactly once across the pages.",
+      "message": {
+        "fields": [
+          {
+            "name": "quick_swaps",
+            "jsonName": "quickSwaps",
+            "number": 1,
+            "doc": "The QuickSwaps.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ExplorerQuickSwap"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -3933,7 +4353,7 @@
           {
             "name": "PAYOUT_ROLLED_OVER",
             "number": 4,
-            "doc": "Nothing was paid, and the balance stays in the vault for the next run.\n reason is nothing_to_pay (no asset reached its minimum), below_minimum\n (an amount was below the least a withdrawal on its network pays),\n price_unavailable (the rule has a USD minimum and no current price\n valued an asset), destination_cooling_down (the destination was added\n to the vault's external withdraw whitelist less than 24 hours ago) or\n route_suspended (withdrawals to the destination's network were\n suspended). Each\n step carries the balance evaluated, its value and the minimum it was\n held to."
+            "doc": "Nothing was paid, and the balance stays in the vault for the next run.\n reason is nothing_to_pay (no asset reached its minimum), below_minimum\n (an amount was below the least a withdrawal on its network pays),\n price_unavailable (the rule has a USD minimum and no current price\n valued an asset), destination_cooling_down (the destination was added\n to the vault's external withdraw whitelist less than 24 hours ago),\n route_suspended (withdrawals to the destination's network were\n suspended) or supply_unavailable (the destination route's zToken supply\n was not known or not current). Each\n step carries the balance evaluated, its value and the minimum it was\n held to."
           },
           {
             "name": "PAYOUT_HELD",
@@ -3991,7 +4411,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 5,
-            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), route_suspended (withdrawals to the destination's\n network were suspended; the balance stays for a later run),\n destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
+            "doc": "Machine-readable reason of a skipped or failed step: below_minimum,\n price_unavailable, rule_superseded, destination_not_whitelisted,\n destination_cooling_down (the destination was added to the vault's\n external withdraw whitelist less than 24 hours ago; the balance stays\n for a later run), route_suspended (withdrawals to the destination's\n network were suspended; the balance stays for a later run),\n supply_unavailable (the destination route's zToken supply was not known\n or not current; the balance stays for a later run),\n destination_invalid, authority_revoked,\n withdrawal_refused,\n gateway_capacity_insufficient, withdrawal_released (the withdrawal was\n released before it was sent; nothing left the vault) or\n withdrawal_failed (the withdrawal ended without paying; close says\n where its funds went, see PAYOUT_FAILED); empty otherwise.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -4266,7 +4686,7 @@
             "name": "deposit_instructions",
             "jsonName": "depositInstructions",
             "number": 15,
-            "doc": "Where and until when to deposit; absent while ALLOCATING and on a\n QuickSwap that never got an address (EXPIRED with\n DEPOSIT_ADDRESS_CONFLICT).",
+            "doc": "Where and until when to deposit; absent while ALLOCATING and on a\n QuickSwap that never got an address (REJECTED, or EXPIRED with\n DEPOSIT_ADDRESS_CONFLICT).",
             "protoRef": "swap.quickswap.v1.DepositInstructions"
           },
           {
@@ -4346,7 +4766,7 @@
             "name": "version",
             "jsonName": "version",
             "number": 26,
-            "doc": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT)\n or allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT);\n every later change increments it.",
+            "doc": "Monotonic state version: a snapshot with a lower version is older. Zero\n while ALLOCATING; 1 once the deposit address is issued (AWAITING_DEPOSIT),\n allocation ends without one (EXPIRED with DEPOSIT_ADDRESS_CONFLICT) or\n the QuickSwap is REJECTED; every later change increments it.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -4371,9 +4791,23 @@
             "name": "charged_fees",
             "jsonName": "chargedFees",
             "number": 30,
-            "doc": "Broker and affiliate fees charged so far, as settled: one entry per fee\n kind, credited vault and asset, in kind, then account_id, then asset_id\n order. Grows while the QuickSwap executes or pays out a bridge. Each is\n the requested rate applied to the actual execution, so it can differ\n from the quote's fee lines.",
+            "doc": "Broker, affiliate and referral fees charged so far, as settled: one\n entry per fee kind, credited account and asset, in kind, then\n account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is\n the requested rate applied to the actual execution, so it can differ\n from the quote's fee lines.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ChargedFee"
+          },
+          {
+            "name": "deposited_value_usd",
+            "jsonName": "depositedValueUsd",
+            "number": 31,
+            "doc": "USD value of the credited deposit taken into execution\n (execution.input_amount), at the source asset's USD price when it was\n taken in, in base units of 18 decimals, rounded down. Set once, within\n minutes of that moment, and never repriced. Unset until then, and for\n good when no current price valued it in time or the QuickSwap predates\n USD values; never zero for unknown.\n Setting it increments version.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "delivered_value_usd",
+            "jsonName": "deliveredValueUsd",
+            "number": 32,
+            "doc": "USD value of what the destination is paid (the DESTINATION withdrawal's\n amount: after service, broker and affiliate fees, before its network\n fee), at the destination asset's USD price when that payout was\n requested, in base units of 18 decimals, rounded down. Set only once\n that withdrawal is FINALIZED; unset for good when no current price\n valued the payout within minutes of its request or the QuickSwap\n predates USD values; never zero for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }
@@ -4492,7 +4926,7 @@
             "name": "fees",
             "jsonName": "fees",
             "number": 8,
-            "doc": "Estimated fee components for deposit_amount at quoted_at: each leg's\n service, broker and affiliate or referral fees, in that order, legs in\n route order (a bridge has one set, charged at payout), then network fees.\n Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged\n are each rate applied to the actual execution and can differ from these\n amounts; QuickSwap.charged_fees reports the broker and affiliate fees as\n charged.",
+            "doc": "Estimated fee components for deposit_amount at quoted_at: each leg's\n service, broker and affiliate or referral fees, in that order, legs in\n route order (a bridge has one set, charged at payout), then network fees.\n Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged\n are each rate applied to the actual execution and can differ from these\n amounts; QuickSwap.charged_fees reports the broker, affiliate and\n referral fees as charged.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.QuoteFee"
           },
@@ -4624,6 +5058,239 @@
             "name": "MARKET_CLOSED",
             "number": 27,
             "doc": "A market on the route was halted, restricted or delisted when the deposit\n was credited and did not reopen within a bounded wait after the deposit\n was credited, the same for market and TWAP execution. Nothing was traded:\n the deposit is returned to return_address, and the QuickSwap shows\n RETURNING and RETURNED with this reason."
+          },
+          {
+            "name": "SOURCE_WALLET_SCREENING_FAILED",
+            "number": 28,
+            "doc": "The source wallet supplied in the request failed risk screening. The\n QuickSwap is REJECTED: it never gets a deposit address, and nothing can\n be deposited to it."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapRouteStats",
+      "kind": "message",
+      "doc": "QuickSwapRouteStats are the totals of one route over the window.",
+      "message": {
+        "fields": [
+          {
+            "name": "source_zipped_asset_id",
+            "jsonName": "sourceZippedAssetId",
+            "number": 1,
+            "doc": "Source asset and network, as a zipped_asset_id.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_zipped_asset_id",
+            "jsonName": "destinationZippedAssetId",
+            "number": 2,
+            "doc": "Destination asset and network, as a zipped_asset_id.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "swap_count",
+            "jsonName": "swapCount",
+            "number": 3,
+            "doc": "Completed QuickSwaps on the route.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "source_volume",
+            "jsonName": "sourceVolume",
+            "number": 4,
+            "doc": "Exact amount deposited, in source token units.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_volume",
+            "jsonName": "destinationVolume",
+            "number": 5,
+            "doc": "Exact amount delivered, in destination token units.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "source_volume_usd",
+            "jsonName": "sourceVolumeUsd",
+            "number": 6,
+            "doc": "USD value of the deposited amounts that have one, as\n QuickSwapStatsTotals.source_volume_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_volume_usd",
+            "jsonName": "destinationVolumeUsd",
+            "number": 7,
+            "doc": "USD value of the delivered amounts that have one, as\n QuickSwapStatsTotals.destination_volume_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 8,
+            "doc": "Completed QuickSwaps on the route whose deposited or delivered amount\n has no USD value, and so is left out of the USD fields.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsBucket",
+      "kind": "message",
+      "doc": "QuickSwapStatsBucket is one bucket of the time series.",
+      "message": {
+        "fields": [
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 1,
+            "doc": "Start of the bucket, inclusive; it ends where the next one starts.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "totals",
+            "jsonName": "totals",
+            "number": 2,
+            "doc": "Totals of the QuickSwaps that completed in the bucket.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsBucketSize",
+      "kind": "enum",
+      "doc": "QuickSwapStatsBucketSize is the length of one statistics bucket.",
+      "enum": {
+        "values": [
+          {
+            "name": "HOURLY",
+            "number": 1,
+            "doc": "One hour."
+          },
+          {
+            "name": "DAILY",
+            "number": 2,
+            "doc": "One UTC day."
+          },
+          {
+            "name": "WEEKLY",
+            "number": 3,
+            "doc": "Seven UTC days, counted back from the window's end."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsTotals",
+      "kind": "message",
+      "doc": "QuickSwapStatsTotals are the totals of the completed QuickSwaps of a\n period, counted by completion time. Every list has one entry per asset\n with a non-zero total, in ascending ID order. The USD values are fixed when\n each amount happened: a deposit when it was taken into execution, a\n delivery when its payout was requested and a fee when it was charged. Each\n is valued once, within minutes, and never repriced, so a past period keeps\n its value.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_count",
+            "jsonName": "swapCount",
+            "number": 1,
+            "doc": "Completed QuickSwaps.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "source_volume",
+            "jsonName": "sourceVolume",
+            "number": 2,
+            "doc": "Amounts deposited, per source asset and network.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ZippedAssetVolume"
+          },
+          {
+            "name": "destination_volume",
+            "jsonName": "destinationVolume",
+            "number": 3,
+            "doc": "Amounts delivered, per destination asset and network.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.ZippedAssetVolume"
+          },
+          {
+            "name": "fees",
+            "jsonName": "fees",
+            "number": 4,
+            "doc": "Fees charged on those QuickSwaps, per asset: the service, broker,\n affiliate and referral fees actually charged, summed over every broker.\n Network fees are not included. Each asset is an AssetConfig.ledger_id\n from GET /v1/chain/deposit-withdraw/config, in base units of 18\n decimals. Each entry carries its USD value.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.AssetVolume"
+          },
+          {
+            "name": "source_volume_usd",
+            "jsonName": "sourceVolumeUsd",
+            "number": 5,
+            "doc": "USD value of the deposited amounts that have one, in base units of 18\n decimals, rounded down; unset when none has; never zero for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_volume_usd",
+            "jsonName": "destinationVolumeUsd",
+            "number": 6,
+            "doc": "USD value of the delivered amounts that have one, as source_volume_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "fees_usd",
+            "jsonName": "feesUsd",
+            "number": 7,
+            "doc": "USD value of the fees that have one, as source_volume_usd.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 8,
+            "doc": "Completed QuickSwaps counted here whose deposited or delivered amount\n has no USD value, and so is left out of source_volume_usd or\n destination_volume_usd: not valued by a current price in time, or from\n before USD values existed. Fees without one are counted per asset, in\n fees. Zero when the volume USD totals cover every QuickSwap.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsWindow",
+      "kind": "enum",
+      "doc": "QuickSwapStatsWindow is a statistics window ending at the end of the\n current bucket, so the latest bucket is still filling. Each has its own\n bucket size.",
+      "enum": {
+        "values": [
+          {
+            "name": "LAST_24_HOURS",
+            "number": 1,
+            "doc": "The last 24 hours: 24 hourly buckets, ending at the end of the current\n UTC hour."
+          },
+          {
+            "name": "LAST_7_DAYS",
+            "number": 2,
+            "doc": "The last 7 days: 7 daily buckets, ending at the end of the current UTC\n day."
+          },
+          {
+            "name": "LAST_30_DAYS",
+            "number": 3,
+            "doc": "The last 30 days: 30 daily buckets, ending at the end of the current\n UTC day."
+          },
+          {
+            "name": "LAST_90_DAYS",
+            "number": 4,
+            "doc": "The last 90 days: 90 daily buckets, ending at the end of the current\n UTC day."
+          },
+          {
+            "name": "LAST_26_WEEKS",
+            "number": 5,
+            "doc": "The last 26 weeks: 26 weekly buckets of 7 days, ending at the end of\n the current UTC day."
           }
         ]
       }
@@ -4631,9 +5298,14 @@
     {
       "name": "swap.quickswap.v1.QuickSwapStatus",
       "kind": "enum",
-      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A deposit that is dropped\n or replaced on its network before it confirms brings no funds: the\n QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to\n AWAITING_DEPOSIT, the only status that moves back, and no longer shows\n that deposit. HELD can be\n entered from any non-terminal status and is not terminal; a QuickSwap HELD\n with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes, except that EXPIRED becomes HELD when a dropped or replaced\n deposit confirms after all (see EXPIRED). Accept status values added\n later; is_terminal is authoritative.",
+      "doc": "QuickSwapStatus is the current state of a QuickSwap. While funds progress,\n the status names the earliest gate still outstanding; gates that complete\n concurrently are not reported separately.\n\n Flow: ALLOCATING → AWAITING_DEPOSIT → (WAITING_FOR_CAPACITY |\n PREPARING_DEPOSIT | CONFIRMING) → CREDITED → EXECUTING (skipped for a\n bridge) → PAYING_OUT | REFUNDING | RETURNING → a terminal status. A\n QuickSwap that cannot be issued a deposit address goes from ALLOCATING\n straight to EXPIRED (DEPOSIT_ADDRESS_CONFLICT). A QuickSwap whose source\n wallet failed risk screening is REJECTED from creation and never gets a\n deposit address. A deposit that is dropped\n or replaced on its network before it confirms brings no funds: the\n QuickSwap goes back from PREPARING_DEPOSIT or WAITING_FOR_CAPACITY to\n AWAITING_DEPOSIT, the only status that moves back, and no longer shows\n that deposit. HELD can be\n entered from any non-terminal status and is not terminal; a QuickSwap HELD\n with SOURCE_SCREENING_BLOCKED can end CLOSED. The terminal statuses are\n REJECTED, COMPLETED, REFUNDED, RETURNED, EXPIRED and CLOSED; a terminal status never\n changes, except that EXPIRED becomes HELD when a dropped or replaced\n deposit confirms after all (see EXPIRED). Accept status values added\n later; is_terminal is authoritative.",
       "enum": {
         "values": [
+          {
+            "name": "REJECTED",
+            "number": 1,
+            "doc": "Terminal: the source wallet supplied in the request failed risk\n screening (SOURCE_WALLET_SCREENING_FAILED). The QuickSwap never gets a\n deposit address, and every repeat of its create request returns\n SOURCE_WALLET_REJECTED with its swap_id."
+          },
           {
             "name": "ALLOCATING",
             "number": 2,
@@ -4780,7 +5452,7 @@
             "name": "charged_fees",
             "jsonName": "chargedFees",
             "number": 8,
-            "doc": "Broker and affiliate fees charged so far, as settled, as on QuickSwap.",
+            "doc": "Broker, affiliate and referral fees charged so far, as settled, as on\n QuickSwap.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ChargedFee"
           },
@@ -4801,6 +5473,20 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "deposited_value_usd",
+            "jsonName": "depositedValueUsd",
+            "number": 11,
+            "doc": "USD value of the credited deposit taken into execution\n (execution.input_amount), at the source asset's USD price when it was\n taken in, in base units of 18 decimals, rounded down. Set once, within\n minutes of that moment, and never repriced. Unset until then, and for\n good when no current price valued it in time or the QuickSwap predates\n USD values; never zero for unknown.\n As on QuickSwap.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "delivered_value_usd",
+            "jsonName": "deliveredValueUsd",
+            "number": 12,
+            "doc": "USD value of what the destination is paid (the DESTINATION withdrawal's\n amount: after service, broker and affiliate fees, before its network\n fee), at the destination asset's USD price when that payout was\n requested, in base units of 18 decimals, rounded down. Set only once\n that withdrawal is FINALIZED; unset for good when no current price\n valued the payout within minutes of its request or the QuickSwap\n predates USD values; never zero for unknown.\n As on QuickSwap.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }
@@ -5037,6 +5723,14 @@
             "jsonName": "referralCode",
             "number": 4,
             "doc": "Optional referral partner code, as CreateQuickSwapRequest.referral_code:\n at most 64 bytes.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "source_wallet",
+            "jsonName": "sourceWallet",
+            "number": 5,
+            "doc": "Optional source wallet the end user will deposit from, as\n CreateQuickSwapRequest.source_wallet: a valid address on the source\n network, at most 256 UTF-8 bytes. When supplied, it is risk screened\n before the quote is returned, and a wallet that fails screening is\n refused with SOURCE_WALLET_REJECTED. Source wallets are screened in\n advance on Bitcoin, Solana and most EVM networks. Wallets on other\n networks, including the Bitcoin and Solana test networks, and wallets\n whose screening is unavailable at the time, are quoted without it; their\n deposits are still screened on arrival.",
             "protoScalar": "string",
             "jsonType": "string"
           }
@@ -5967,14 +6661,14 @@
     {
       "name": "swap.quickswap.v1.Screening",
       "kind": "message",
-      "doc": "Screening is the risk screening of a QuickSwap. Deposits are screened on\n arrival; the outcome shows in the status, its reason and each deposit's\n disposition and reason.",
+      "doc": "Screening is the risk screening of a QuickSwap. A source wallet supplied\n in the request is screened before the deposit address is issued: a\n rejected wallet makes the QuickSwap REJECTED with\n SOURCE_WALLET_SCREENING_FAILED.\n Every deposit is still screened on arrival, whoever sent it; that outcome\n shows in the status, its reason and each deposit's disposition and reason.",
       "message": {
         "fields": [
           {
             "name": "source_wallet",
             "jsonName": "sourceWallet",
             "number": 2,
-            "doc": "Source wallet supplied in the request; empty when none was supplied.\n Recorded and shown; not used to accept or reject a deposit.",
+            "doc": "Source wallet supplied in the request; empty when none was supplied.",
             "protoScalar": "string",
             "jsonType": "string"
           }
@@ -7328,6 +8022,31 @@
             "name": "NOT_SENT",
             "number": 5,
             "doc": "Final: no transaction was or will be made for this withdrawal, because\n its amount was below the withdrawal minimum of its asset and network\n (REFUND_BELOW_MINIMUM); unsent_amount is that amount."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ZippedAssetVolume",
+      "kind": "message",
+      "doc": "ZippedAssetVolume is a total amount of one asset on one network.",
+      "message": {
+        "fields": [
+          {
+            "name": "zipped_asset_id",
+            "jsonName": "zippedAssetId",
+            "number": 1,
+            "doc": "Asset and network, as an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 2,
+            "doc": "Exact total, in that asset's token units.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }

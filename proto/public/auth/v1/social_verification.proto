@@ -113,6 +113,15 @@ message SocialVerification {
   // failed with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN or
   // AUTH_SOCIAL_CHANGE_LIMIT_REACHED. Empty otherwise.
   google.protobuf.Timestamp retry_after = 18;
+  // Time in UTC from which the caller may change or unlink its X/Twitter or
+  // Discord account again. Each provider allows one change or unlink per 30
+  // days; until this time, changing or unlinking the linked account fails with
+  // AUTH_SOCIAL_CHANGE_LIMIT_REACHED and a retry_after equal to it. Set
+  // whenever the limit applies, whether or not a verification failed. Empty
+  // when a change or unlink is allowed now, and always for Telegram. A first
+  // link, a link after an unlink, and a re-verification of the linked
+  // X/Twitter handle are not changes and are allowed while it is set.
+  google.protobuf.Timestamp change_available_at = 19;
 }
 
 // StartSocialVerificationRequest starts or restarts social account verification.
@@ -303,12 +312,14 @@ service SocialVerificationService {
   // confirm the account with ConfirmSocialVerification.
   // AUTH_SOCIAL_VERIFICATION_INVALID_STATE for Telegram means a Telegram account is already linked; unlink it first.
   // While an X/Twitter or Discord account is linked, starting again can change
-  // it, so the caller needs enrolled MFA and a fresh, single-use step-up proof
-  // in the X-Auth-Step-Up header: AUTH_MFA_NOT_ENROLLED means enroll MFA first;
-  // AUTH_STEP_UP_REQUIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean complete a new
-  // fresh step-up and retry. AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account
-  // changed or unlinked that provider's account less than 30 days ago; the
-  // detail's retry_after says when it may again.
+  // it. AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account changed or unlinked
+  // that provider's account less than 30 days ago; the detail's retry_after
+  // says when it may again, as change_available_at from GetSocialVerification
+  // does beforehand. That limit is checked before any step-up is asked for.
+  // Otherwise the caller needs enrolled MFA and a fresh, single-use step-up
+  // proof in the X-Auth-Step-Up header: AUTH_MFA_NOT_ENROLLED means enroll MFA
+  // first; AUTH_STEP_UP_REQUIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean
+  // complete a new fresh step-up and retry.
   // The new verification fails with error_code AUTH_SOCIAL_ACCOUNT_COOLDOWN when
   // the verified account was unlinked from another Polyester account less than
   // 30 days ago, and AUTH_SOCIAL_CHANGE_LIMIT_REACHED when it would replace a
@@ -322,7 +333,7 @@ service SocialVerificationService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Start Social Verification"
-      description: "Issue a challenge code for the caller to submit through the provider-specific verification flow. While an X/Twitter or Discord account is linked, it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header; AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after."
+      description: "Issue a challenge code for the caller to submit through the provider-specific verification flow. While an X/Twitter or Discord account is linked, AUTH_SOCIAL_CHANGE_LIMIT_REACHED, checked before any step-up, means wait until retry_after; otherwise it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header."
       tags: "Auth Service"
     };
   }
@@ -349,23 +360,24 @@ service SocialVerificationService {
   // linked Telegram account becomes a channel to the account, so the caller
   // needs enrolled MFA and a fresh, single-use step-up proof in the
   // X-Auth-Step-Up header, obtained by completing an MFA challenge for fresh
-  // step-up. The link consumes the proof; a retried confirmation of an existing
-  // link needs no new proof.
+  // step-up, which the link consumes. While the session's recent-MFA window
+  // is open for RECENT_MFA_ACTION_TELEGRAM_LINK (GetRecentMFA), no proof is
+  // needed. A retried confirmation of an existing link needs no new proof.
   // AUTH_RESOURCE_NOT_FOUND means no verification exists; start one first.
   // AUTH_SOCIAL_VERIFICATION_EXPIRED means the challenge window passed; start a new verification.
   // AUTH_SOCIAL_VERIFICATION_INVALID_STATE means no submitted account awaits confirmation, or provider_user_id is not the account that submitted the code.
   // AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED means that Telegram account is linked to another Polyester account; the verification fails.
-  // AUTH_MFA_NOT_ENROLLED means enroll MFA first; AUTH_STEP_UP_REQUIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean complete a new fresh step-up and retry.
+  // AUTH_MFA_NOT_ENROLLED means enroll MFA first; AUTH_STEP_UP_REQUIRED, AUTH_RECENT_MFA_EXPIRED and AUTH_STEP_UP_PROOF_UNAVAILABLE mean complete a new fresh step-up and retry.
   rpc ConfirmSocialVerification(ConfirmSocialVerificationRequest) returns (ConfirmSocialVerificationResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.mfa_requirement) = MFA_RECENT;
     option (google.api.http) = {
       post: "/v1/auth/social/verification:confirm"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Confirm Social Verification"
-      description: "Link the Telegram account that submitted the caller's challenge code, after the user confirmed it. Requires enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header. AUTH_MFA_NOT_ENROLLED means enroll MFA first. AUTH_SOCIAL_VERIFICATION_EXPIRED means start a new challenge. AUTH_SOCIAL_VERIFICATION_INVALID_STATE means no matching account awaits confirmation. AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED means the account is linked to another Polyester account."
+      description: "Link the Telegram account that submitted the caller's challenge code, after the user confirmed it. Requires enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header, or none while the recent-MFA window is open. AUTH_MFA_NOT_ENROLLED means enroll MFA first. AUTH_SOCIAL_VERIFICATION_EXPIRED means start a new challenge. AUTH_SOCIAL_VERIFICATION_INVALID_STATE means no matching account awaits confirmation. AUTH_SOCIAL_ACCOUNT_ALREADY_LINKED means the account is linked to another Polyester account."
       tags: "Auth Service"
     };
   }
@@ -373,13 +385,15 @@ service SocialVerificationService {
   // Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link
   // in progress. Unlinking again succeeds and changes nothing. To link again,
   // start a new verification.
-  // Unlinking a linked X/Twitter or Discord account needs enrolled MFA and a
-  // fresh, single-use step-up proof in the X-Auth-Step-Up header
+  // Unlinking a linked X/Twitter or Discord account counts as the provider's
+  // one change per 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account
+  // changed or unlinked that provider's account less than 30 days ago, and the
+  // detail's retry_after says when it may again, as change_available_at from
+  // GetSocialVerification does beforehand. That limit is checked before any
+  // step-up is asked for. Otherwise the unlink needs enrolled MFA and a fresh,
+  // single-use step-up proof in the X-Auth-Step-Up header
   // (AUTH_MFA_NOT_ENROLLED, AUTH_STEP_UP_REQUIRED, AUTH_STEP_UP_PROOF_UNAVAILABLE
-  // as for StartSocialVerification), and counts as the provider's one change per
-  // 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means the account changed or
-  // unlinked that provider's account less than 30 days ago, and the detail's
-  // retry_after says when it may again. For 30 days after it is unlinked, the
+  // as for StartSocialVerification). For 30 days after it is unlinked, the
   // account can be linked again only to this Polyester account.
   rpc UnlinkSocialAccount(UnlinkSocialAccountRequest) returns (UnlinkSocialAccountResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -390,13 +404,16 @@ service SocialVerificationService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Unlink Social Account"
-      description: "Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link in progress. Repeating it changes nothing. An X/Twitter or Discord unlink needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header, and counts as the provider's one change per 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED means wait until retry_after."
+      description: "Unlink the caller's X/Twitter, Discord or Telegram account, or cancel a link in progress. Repeating it changes nothing. An X/Twitter or Discord unlink counts as the provider's one change per 30 days: AUTH_SOCIAL_CHANGE_LIMIT_REACHED, checked before any step-up, means wait until retry_after; otherwise it needs enrolled MFA and a fresh step-up proof in the X-Auth-Step-Up header."
       tags: "Auth Service"
     };
   }
 
   // Get current verification status for the caller.
   // A failed verification uses error_code for its machine-readable outcome.
+  // change_available_at says, before the caller starts, whether the linked
+  // X/Twitter or Discord account can be changed or unlinked now, and if not,
+  // when.
   // An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main
   // account. It reads the status only: provider, method, handle, status, and
   // verification time, with every other field left empty.
@@ -406,7 +423,7 @@ service SocialVerificationService {
     option (google.api.http) = {get: "/v1/auth/social/verification"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Social Verification"
-      description: "Retrieve current social verification status and any typed failure code for the caller. An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main account; it reads the status only: provider, method, handle, status, and verification time."
+      description: "Retrieve current social verification status, any typed failure code, and when a linked X/Twitter or Discord account can next be changed or unlinked (change_available_at). An API key needs READ_SOCIAL_VERIFICATION and must be scoped to the main account; it reads the status only: provider, method, handle, status, and verification time."
       tags: "Auth Service"
     };
   }

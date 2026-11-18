@@ -3,20 +3,19 @@
     {
       "name": "transfer.v1.BatchCreateInternalTransfersRequest",
       "kind": "message",
-      "doc": "BatchCreateInternalTransfersRequest submits up to 10 independent Trading to\n Trading transfers under one idempotency key and one MFA check.",
+      "doc": "BatchCreateInternalTransfersRequest submits Trading to Trading transfers\n that move together or not at all, under one idempotency key and one MFA\n check.",
       "message": {
         "fields": [
           {
             "name": "legs",
             "jsonName": "legs",
             "number": 1,
-            "doc": "Transfers to run, in order. At most 10 legs; each leg counts as one\n internal transfer against the caller's rate limit. Legs may repeat an asset,\n a source or a destination.",
+            "doc": "Transfers to move, in order. A batch holds at most 500 legs, debiting at\n most 50 distinct source account and asset pairs from at most 10 distinct\n source accounts. A source, destination and asset combination appears at\n most once; legs may otherwise repeat an asset, a source or a destination.",
             "repeated": true,
             "protoRef": "transfer.v1.InternalTransferBatchLeg",
             "validate": {
               "repeated": {
-                "minItems": 1,
-                "maxItems": 10
+                "minItems": 1
               }
             }
           },
@@ -40,14 +39,14 @@
     {
       "name": "transfer.v1.BatchCreateInternalTransfersResponse",
       "kind": "message",
-      "doc": "BatchCreateInternalTransfersResponse returns the outcome of every leg.",
+      "doc": "BatchCreateInternalTransfersResponse returns the batch's outcome and the\n state of every leg.",
       "message": {
         "fields": [
           {
             "name": "request_id",
             "jsonName": "requestId",
             "number": 1,
-            "doc": "Stable server-owned identifier of the batch request. Empty when the batch\n was refused.",
+            "doc": "Stable server-owned identifier of the batch. Empty when the batch was\n refused before it was accepted for processing.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -620,7 +619,7 @@
     {
       "name": "transfer.v1.ErrorCode",
       "kind": "enum",
-      "doc": "ErrorCode identifies stable, machine-readable Internal Transfer API errors.\n Values mirror the REST problem+json code field.",
+      "doc": "ErrorCode identifies stable, machine-readable Internal Transfer API errors.\n Values mirror the REST problem+json code field, except for authentication\n refusals: an error that also carries an auth.v1.AuthErrorDetail, such as a\n missing fresh step-up, answers REST with that detail's auth.v1.AuthErrorCode\n name, for example AUTH_STEP_UP_REQUIRED.",
       "enum": {
         "values": [
           {
@@ -802,6 +801,11 @@
             "name": "ERROR_CODE_DUST_CONVERSION_FAILED",
             "number": 36,
             "doc": "The dust conversion could not complete. Nothing moved; quote again."
+          },
+          {
+            "name": "ERROR_CODE_BATCH_TOO_MANY_SOURCES",
+            "number": 37,
+            "doc": "The batch debits more distinct source accounts than its limit of 10."
           }
         ]
       }
@@ -816,7 +820,7 @@
             "name": "code",
             "jsonName": "code",
             "number": 1,
-            "doc": "Stable error code matching the REST problem+json code field.",
+            "doc": "Stable error code matching the REST problem+json code field. An\n authentication refusal answers REST with its auth.v1.AuthErrorDetail code\n instead; see ErrorCode.",
             "protoRef": "transfer.v1.ErrorCode"
           }
         ]
@@ -867,6 +871,62 @@
             "number": 1,
             "doc": "The conversion.",
             "protoRef": "transfer.v1.DustConversion"
+          }
+        ]
+      }
+    },
+    {
+      "name": "transfer.v1.GetInternalTransferBatchRequest",
+      "kind": "message",
+      "doc": "GetInternalTransferBatchRequest selects a batch by the request ID\n BatchCreateInternalTransfers returned.",
+      "message": {
+        "fields": [
+          {
+            "name": "request_id",
+            "jsonName": "requestId",
+            "number": 1,
+            "doc": "Batch request ID returned by BatchCreateInternalTransfers.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 39,
+                "pattern": "^[1-9][0-9]*$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "transfer.v1.GetInternalTransferBatchResponse",
+      "kind": "message",
+      "doc": "GetInternalTransferBatchResponse returns the batch's current outcome and\n the state of every leg, as BatchCreateInternalTransfers answers them.",
+      "message": {
+        "fields": [
+          {
+            "name": "request_id",
+            "jsonName": "requestId",
+            "number": 1,
+            "doc": "Stable server-owned identifier of the batch.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 2,
+            "doc": "Outcome of the batch as a whole.",
+            "protoRef": "transfer.v1.InternalTransferBatchStatus"
+          },
+          {
+            "name": "legs",
+            "jsonName": "legs",
+            "number": 3,
+            "doc": "One result per leg, in request order.",
+            "repeated": true,
+            "protoRef": "transfer.v1.InternalTransferBatchLegResult"
           }
         ]
       }
@@ -1078,7 +1138,7 @@
     {
       "name": "transfer.v1.InternalTransferBatchLegResult",
       "kind": "message",
-      "doc": "InternalTransferBatchLegResult is the outcome of one leg, in request order.",
+      "doc": "InternalTransferBatchLegResult is the state of one leg, in request order.",
       "message": {
         "fields": [
           {
@@ -1094,22 +1154,14 @@
             "name": "status",
             "jsonName": "status",
             "number": 2,
-            "doc": "Outcome of the leg.",
+            "doc": "State of the leg.",
             "protoRef": "transfer.v1.InternalTransferBatchLegStatus"
-          },
-          {
-            "name": "request_id",
-            "jsonName": "requestId",
-            "number": 3,
-            "doc": "Stable server-owned request identifier of the leg's transfer. Use it with\n GetInternalTransfer. Empty while the leg has not been submitted.",
-            "protoScalar": "string",
-            "jsonType": "string"
           },
           {
             "name": "transfer_id",
             "jsonName": "transferId",
             "number": 4,
-            "doc": "Stable transfer identifier, set once the leg is accepted.",
+            "doc": "Stable transfer identifier of the leg, set once the batch is accepted\n for processing.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -1117,15 +1169,15 @@
             "name": "flow_id",
             "jsonName": "flowId",
             "number": 5,
-            "doc": "Authoritative lifecycle flow identifier, set once the leg is accepted.",
+            "doc": "Lifecycle flow of the leg, readable by its sender and its recipient\n with GetAccountFlow. Set once the leg is credited.",
             "protoScalar": "string",
             "jsonType": "string"
           },
           {
-            "name": "accepted_at_ts_ns",
-            "jsonName": "acceptedAtTsNs",
+            "name": "credited_at_ts_ns",
+            "jsonName": "creditedAtTsNs",
             "number": 6,
-            "doc": "Acceptance timestamp in nanoseconds since epoch (server time), set once\n the leg is accepted.",
+            "doc": "Credit timestamp in nanoseconds since epoch (server time), set once the\n leg is credited.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1143,7 +1195,7 @@
             "name": "asset_code",
             "jsonName": "assetCode",
             "number": 8,
-            "doc": "Resolved asset code, set once the leg is submitted.",
+            "doc": "Resolved asset code, set once the leg passed its checks.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -1158,14 +1210,14 @@
             "name": "destination",
             "jsonName": "destination",
             "number": 10,
-            "doc": "Server-resolved destination summary, set once the leg is submitted.",
+            "doc": "Server-resolved destination summary, set once the leg passed its checks.",
             "protoRef": "transfer.v1.ResolvedDestination"
           },
           {
             "name": "error_code",
             "jsonName": "errorCode",
             "number": 11,
-            "doc": "Why the leg was refused, or why its outcome is not known yet. Unset for an\n accepted leg and for a leg that was not submitted.",
+            "doc": "Why the leg caused its batch's refusal. Unset for every other leg.",
             "protoRef": "transfer.v1.ErrorCode"
           },
           {
@@ -1182,28 +1234,23 @@
     {
       "name": "transfer.v1.InternalTransferBatchLegStatus",
       "kind": "enum",
-      "doc": "InternalTransferBatchLegStatus is the outcome of one leg of a batch.",
+      "doc": "InternalTransferBatchLegStatus is the state of one leg of a batch.",
       "enum": {
         "values": [
           {
-            "name": "LEG_ACCEPTED",
-            "number": 1,
-            "doc": "The leg's transfer was accepted and has a durable transfer identifier."
+            "name": "LEG_PROCESSING",
+            "number": 5,
+            "doc": "The leg's outcome is the batch's, not known yet."
           },
           {
-            "name": "LEG_PENDING",
-            "number": 2,
-            "doc": "The leg's outcome is not known yet. The transfer runs to its outcome\n without the caller: read it with GetInternalTransfer, or retry the batch\n with the same idempotency key."
+            "name": "LEG_CREDITED",
+            "number": 6,
+            "doc": "The leg is credited to its destination."
           },
           {
-            "name": "LEG_REFUSED",
-            "number": 3,
-            "doc": "The leg moved no funds; error_code gives the reason. A retry of the batch\n with the same idempotency key runs a submitted leg again."
-          },
-          {
-            "name": "LEG_NOT_SUBMITTED",
-            "number": 4,
-            "doc": "The leg did not run: its batch was refused, or the request ended before\n the leg started. A retry with the same idempotency key runs it."
+            "name": "LEG_NOT_MOVED",
+            "number": 7,
+            "doc": "The leg moved nothing: its batch was refused. error_code is set on the\n legs that caused the refusal."
           }
         ]
       }
@@ -1211,18 +1258,23 @@
     {
       "name": "transfer.v1.InternalTransferBatchStatus",
       "kind": "enum",
-      "doc": "InternalTransferBatchStatus is the outcome of a batch request as a whole.",
+      "doc": "InternalTransferBatchStatus is the outcome of a batch request as a whole.\n No status claims more than is known: a batch is accepted only once every\n leg is credited, and refused only once it is certain nothing moved.",
       "enum": {
         "values": [
           {
-            "name": "BATCH_SUBMITTED",
-            "number": 1,
-            "doc": "Every leg passed its checks and the batch was submitted. Legs run\n independently: read each leg's status."
-          },
-          {
             "name": "BATCH_REFUSED",
             "number": 2,
-            "doc": "At least one leg failed its checks, so no leg ran, no funds moved and no\n step-up verification was used. Failed legs carry their reason; the other\n legs are LEG_NOT_SUBMITTED."
+            "doc": "Nothing moved, and nothing will under this idempotency key: a leg failed\n its checks, a source could not cover its legs, or the batch could not\n complete. Legs that caused it carry their reason; the others are\n LEG_NOT_MOVED without one."
+          },
+          {
+            "name": "BATCH_PROCESSING",
+            "number": 3,
+            "doc": "The outcome is not known yet: the batch completes without the caller,\n ending accepted or refused. Retry with the same idempotency key to read\n it."
+          },
+          {
+            "name": "BATCH_ACCEPTED",
+            "number": 4,
+            "doc": "Every leg is credited to its destination."
           }
         ]
       }

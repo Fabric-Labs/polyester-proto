@@ -1,0 +1,323 @@
+syntax = "proto3";
+
+package swap.quickswap.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+import "swap/quickswap/v1/quickswap.proto";
+import "swap/quickswap/v1/quickswap_broker.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "QuickSwap Explorer"
+      description: "Public, read-only view of completed QuickSwaps across every broker, and their aggregate statistics."
+    }
+  ]
+};
+
+// ExplorerRouteLeg is one market a completed QuickSwap traded on, in route
+// order.
+message ExplorerRouteLeg {
+  // Numeric spot market identifier of the pair traded; resolve its symbol
+  // with GetSpotConfig.
+  uint32 symbol_id = 1;
+}
+
+// ExplorerDeposit is one deposit a completed QuickSwap executed: the
+// credited deposit that funded it. A deposit that was returned or held is
+// never listed.
+message ExplorerDeposit {
+  // Source-network transaction that sent the deposit, in the network's
+  // canonical text form, as GetQuickSwap reports it in Deposit.tx_hash.
+  string tx_hash = 1;
+  // QuickSwap deposit address the deposit was paid into, in the source
+  // network's canonical text form, without a destination tag or memo.
+  string address = 2;
+}
+
+// ExplorerWithdrawal is one finalized payout of a completed QuickSwap's
+// output to its destination. A refund or return is never listed.
+message ExplorerWithdrawal {
+  // Destination-network transaction that paid the output, in the network's
+  // canonical text form, as GetQuickSwap reports it in Withdrawal.tx_hash.
+  // Like there, it can be corrected for up to 24 hours after completed_at.
+  string tx_hash = 1;
+  // Address the output was paid to, in the destination network's canonical
+  // text form (for example lowercase hex on EVM networks), without a
+  // destination tag or memo.
+  string address = 2;
+}
+
+// ExplorerQuickSwap is the public view of one completed QuickSwap. Besides
+// its assets, amounts and markets, it carries the transactions and
+// addresses of its deposit and destination payout. It never carries a
+// destination tag or memo, a return or refund address or transaction, the
+// broker, a fee, an idempotency key or the quote. Fields may be added;
+// clients ignore the ones they do not know.
+message ExplorerQuickSwap {
+  // Public QuickSwap identifier.
+  fixed64 swap_id = 1;
+  // When the QuickSwap completed: its destination payout was final.
+  google.protobuf.Timestamp completed_at = 2;
+  // Source asset and network, as an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 source_zipped_asset_id = 3;
+  // Destination asset and network, as an AssetChainVariant.zipped_asset_id
+  // from GET /v1/chain/deposit-withdraw/config.
+  uint32 destination_zipped_asset_id = 4;
+  // Amount deposited, in source token units, before the deposit network
+  // fee.
+  TokenAmount source_amount = 5;
+  // Amount delivered to the destination, in destination token units, after
+  // the withdrawal network fee.
+  TokenAmount destination_amount = 6;
+  // Markets traded, in route order: one for a direct route, two for a route
+  // through an intermediate asset, none for a bridge, which moves one asset
+  // between networks without trading.
+  repeated ExplorerRouteLeg legs = 7;
+  // The credited deposits that funded the QuickSwap, oldest first: one in
+  // practice.
+  repeated ExplorerDeposit deposits = 8;
+  // The finalized payouts to the destination, oldest first: one in
+  // practice. destination_amount is their total.
+  repeated ExplorerWithdrawal withdrawals = 9;
+}
+
+// ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker.
+message ListCompletedQuickSwapsRequest {
+  // Only QuickSwaps from this source asset and network, as a zipped_asset_id;
+  // 0 for every source.
+  uint32 source_zipped_asset_id = 1;
+  // Only QuickSwaps to this destination asset and network, as a
+  // zipped_asset_id; 0 for every destination.
+  uint32 destination_zipped_asset_id = 2;
+  // Maximum number of QuickSwaps to return; 0 means 50, at most 100.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 100];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound
+  // to the asset filters and the newest-first order. Reuse it with the same
+  // filters. Empty for the first page.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListCompletedQuickSwapsResponse lists completed QuickSwaps newest
+// completion first; QuickSwaps that completed at the same time are in a
+// fixed order. Every QuickSwap that completed before the first page was
+// read is listed exactly once across the pages.
+message ListCompletedQuickSwapsResponse {
+  // The QuickSwaps.
+  repeated ExplorerQuickSwap quick_swaps = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// QuickSwapStatsWindow is a statistics window ending at the end of the
+// current bucket, so the latest bucket is still filling. Each has its own
+// bucket size.
+enum QuickSwapStatsWindow {
+  // No window; rejected.
+  STATS_WINDOW_UNSPECIFIED = 0;
+  // The last 24 hours: 24 hourly buckets, ending at the end of the current
+  // UTC hour.
+  LAST_24_HOURS = 1;
+  // The last 7 days: 7 daily buckets, ending at the end of the current UTC
+  // day.
+  LAST_7_DAYS = 2;
+  // The last 30 days: 30 daily buckets, ending at the end of the current
+  // UTC day.
+  LAST_30_DAYS = 3;
+  // The last 90 days: 90 daily buckets, ending at the end of the current
+  // UTC day.
+  LAST_90_DAYS = 4;
+  // The last 26 weeks: 26 weekly buckets of 7 days, ending at the end of
+  // the current UTC day.
+  LAST_26_WEEKS = 5;
+}
+
+// QuickSwapStatsBucketSize is the length of one statistics bucket.
+enum QuickSwapStatsBucketSize {
+  // No size; never returned.
+  BUCKET_SIZE_UNSPECIFIED = 0;
+  // One hour.
+  HOURLY = 1;
+  // One UTC day.
+  DAILY = 2;
+  // Seven UTC days, counted back from the window's end.
+  WEEKLY = 3;
+}
+
+// ZippedAssetVolume is a total amount of one asset on one network.
+message ZippedAssetVolume {
+  // Asset and network, as an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 zipped_asset_id = 1;
+  // Exact total, in that asset's token units.
+  TokenAmount amount = 2;
+}
+
+// QuickSwapStatsTotals are the totals of the completed QuickSwaps of a
+// period, counted by completion time. Every list has one entry per asset
+// with a non-zero total, in ascending ID order. The USD values are fixed when
+// each amount happened: a deposit when it was taken into execution, a
+// delivery when its payout was requested and a fee when it was charged. Each
+// is valued once, within minutes, and never repriced, so a past period keeps
+// its value.
+message QuickSwapStatsTotals {
+  // Completed QuickSwaps.
+  uint64 swap_count = 1;
+  // Amounts deposited, per source asset and network.
+  repeated ZippedAssetVolume source_volume = 2;
+  // Amounts delivered, per destination asset and network.
+  repeated ZippedAssetVolume destination_volume = 3;
+  // Fees charged on those QuickSwaps, per asset: the service, broker,
+  // affiliate and referral fees actually charged, summed over every broker.
+  // Network fees are not included. Each asset is an AssetConfig.ledger_id
+  // from GET /v1/chain/deposit-withdraw/config, in base units of 18
+  // decimals. Each entry carries its USD value.
+  repeated AssetVolume fees = 4;
+  // USD value of the deposited amounts that have one, in base units of 18
+  // decimals, rounded down; unset when none has; never zero for unknown.
+  TokenAmount source_volume_usd = 5;
+  // USD value of the delivered amounts that have one, as source_volume_usd.
+  TokenAmount destination_volume_usd = 6;
+  // USD value of the fees that have one, as source_volume_usd.
+  TokenAmount fees_usd = 7;
+  // Completed QuickSwaps counted here whose deposited or delivered amount
+  // has no USD value, and so is left out of source_volume_usd or
+  // destination_volume_usd: not valued by a current price in time, or from
+  // before USD values existed. Fees without one are counted per asset, in
+  // fees. Zero when the volume USD totals cover every QuickSwap.
+  uint64 unvalued_count = 8;
+}
+
+// QuickSwapStatsBucket is one bucket of the time series.
+message QuickSwapStatsBucket {
+  // Start of the bucket, inclusive; it ends where the next one starts.
+  google.protobuf.Timestamp start_time = 1;
+  // Totals of the QuickSwaps that completed in the bucket.
+  QuickSwapStatsTotals totals = 2;
+}
+
+// QuickSwapRouteStats are the totals of one route over the window.
+message QuickSwapRouteStats {
+  // Source asset and network, as a zipped_asset_id.
+  uint32 source_zipped_asset_id = 1;
+  // Destination asset and network, as a zipped_asset_id.
+  uint32 destination_zipped_asset_id = 2;
+  // Completed QuickSwaps on the route.
+  uint64 swap_count = 3;
+  // Exact amount deposited, in source token units.
+  TokenAmount source_volume = 4;
+  // Exact amount delivered, in destination token units.
+  TokenAmount destination_volume = 5;
+  // USD value of the deposited amounts that have one, as
+  // QuickSwapStatsTotals.source_volume_usd.
+  TokenAmount source_volume_usd = 6;
+  // USD value of the delivered amounts that have one, as
+  // QuickSwapStatsTotals.destination_volume_usd.
+  TokenAmount destination_volume_usd = 7;
+  // Completed QuickSwaps on the route whose deposited or delivered amount
+  // has no USD value, and so is left out of the USD fields.
+  uint64 unvalued_count = 8;
+}
+
+// GetQuickSwapStatsRequest reads the statistics of one window.
+message GetQuickSwapStatsRequest {
+  // The window.
+  QuickSwapStatsWindow window = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// GetQuickSwapStatsResponse is the activity of completed QuickSwaps of every
+// broker over a window, with the window just before it for comparison.
+// Amounts are exact, with their USD values fixed when they happened.
+message GetQuickSwapStatsResponse {
+  // The window.
+  QuickSwapStatsWindow window = 1;
+  // Start of the window, inclusive.
+  google.protobuf.Timestamp start_time = 2;
+  // End of the window, exclusive: the end of the current bucket.
+  google.protobuf.Timestamp end_time = 3;
+  // Length of each bucket.
+  QuickSwapStatsBucketSize bucket_size = 4;
+  // Totals of the window.
+  QuickSwapStatsTotals totals = 5;
+  // Totals of the previous window: the same length, ending at start_time.
+  QuickSwapStatsTotals previous_totals = 6;
+  // Every bucket of the window, oldest first, empty ones included.
+  repeated QuickSwapStatsBucket buckets = 7;
+  // Every route with a completed QuickSwap in the window, in ascending
+  // source then destination order. The set is small: the client ranks
+  // routes, source assets and destination assets from it.
+  repeated QuickSwapRouteStats routes = 8;
+  // When the statistics were computed. Each window's outcome, answer or
+  // error, is shared for about a minute, so an answer can be that old.
+  google.protobuf.Timestamp as_of = 9;
+}
+
+// QuickSwapExplorerService is the public, read-only view of QuickSwaps, over
+// ConnectRPC and REST. It needs no credentials and lists QuickSwaps of every
+// broker, Polyester's own QuickSwap app included.
+//
+// Only completed QuickSwaps are shown: one in progress, refunded, returned
+// or expired never is. Each shows its assets and networks, the amounts
+// deposited and delivered, the markets traded, and the transactions and
+// addresses of its deposit and destination payout, as public on their
+// networks. It shows no memo or destination tag, no return or refund
+// address and nothing about the broker (see ExplorerQuickSwap).
+//
+// GetQuickSwapStats aggregates the same completed QuickSwaps over a window:
+// totals, a time series and per-route totals, each with exact amounts per
+// asset and their USD values fixed when they happened.
+//
+// QuickSwaps created before the Explorer launched are listed, but never
+// match a source or destination filter and are not counted in statistics.
+//
+// Calls are rate limited per client address: over the limit a call fails
+// with RESOURCE_EXHAUSTED and a Retry-After header.
+service QuickSwapExplorerService {
+  option (polyester.api.docs_group) = "quickswap";
+
+  // ListCompletedQuickSwaps lists completed QuickSwaps of every broker,
+  // newest completion first, optionally by source or destination asset and
+  // network.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or PAGE_TOKEN_INVALID for a
+  //   page_token that is malformed or from other filters.
+  rpc ListCompletedQuickSwaps(ListCompletedQuickSwapsRequest) returns (ListCompletedQuickSwapsResponse) {
+    option (polyester.api.public) = true;
+    option (polyester.api.error_codes) = "PAGE_TOKEN_INVALID";
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List completed QuickSwaps"
+      description: "List completed QuickSwaps of every broker, newest first, by source or destination asset."
+      tags: "QuickSwap Explorer"
+    };
+  }
+
+  // GetQuickSwapStats returns the activity of completed QuickSwaps of every
+  // broker over a window: its totals and the previous window's, a time
+  // series and every route's totals.
+  //
+  // Each window's outcome is shared for about a minute: an error too is
+  // returned for up to a minute before the statistics are read again.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: no window, or an unknown one.
+  // - INTERNAL: STATS_INCOMPLETE when a completed QuickSwap in the window
+  //   lacks its deposited or delivered amount; the error names its swap_id.
+  rpc GetQuickSwapStats(GetQuickSwapStatsRequest) returns (GetQuickSwapStatsResponse) {
+    option (polyester.api.public) = true;
+    option (polyester.api.error_codes) = "STATS_INCOMPLETE";
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get QuickSwap statistics"
+      description: "Get totals, a time series and per-route totals of completed QuickSwaps of every broker over a window."
+      tags: "QuickSwap Explorer"
+    };
+  }
+}

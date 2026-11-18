@@ -249,8 +249,11 @@ enum AuthErrorCode {
   AUTH_SIGNATURE_INVALID = 48;
   // The API key request timestamp is malformed, more than 1 second ahead of the server
   // clock, or older than the request's receive window (X-API-RECV-WINDOW, 5 seconds when
-  // omitted) when the request arrived. The request was not processed. Sync the clock, then
-  // sign the request again with a fresh timestamp. The REST problem code is TIMESTAMP_SKEW.
+  // omitted) when the request arrived. The request was not processed. The detail's
+  // timestamp_window carries the server time and the window the timestamp was checked
+  // against; the REST problem carries the same as its timestampWindow member. Sync the
+  // clock, for example with the server time from GET /v1/time or this refusal, then sign
+  // the request again with a fresh timestamp. The REST problem code is TIMESTAMP_SKEW.
   AUTH_TIMESTAMP_SKEW = 49;
   // The API key request lacks its timestamp or signature header, or a signed
   // WebSocket login lacks a valid X-API-NONCE. The REST problem code is
@@ -309,6 +312,10 @@ enum AuthErrorCode {
   // less than 30 days ago: one change per provider every 30 days. retry_after
   // says when the next one is allowed. HTTP 412, SOCIAL_CHANGE_LIMIT_REACHED.
   AUTH_SOCIAL_CHANGE_LIMIT_REACHED = 65;
+  // The session's recent-MFA window has closed: the action needs a new
+  // step-up. Complete an MFA challenge for fresh step-up and retry; the
+  // step-up opens a new window. PermissionDenied.
+  AUTH_RECENT_MFA_EXPIRED = 66;
 }
 
 // AuthErrorDetail describes an authentication or account-domain failure.
@@ -321,6 +328,27 @@ message AuthErrorDetail {
   // AUTH_SOCIAL_ACCOUNT_COOLDOWN and AUTH_SOCIAL_CHANGE_LIMIT_REACHED; empty
   // otherwise.
   google.protobuf.Timestamp retry_after = 3;
+  // The server time and the window a signed request's timestamp must fall in.
+  // Set for AUTH_TIMESTAMP_SKEW; empty otherwise.
+  TimestampWindow timestamp_window = 4;
+}
+
+// TimestampWindow is the window in which the server accepts the timestamp of
+// a request signed with an API key: from server_time_ms minus recv_window_ms
+// to server_time_ms plus max_future_ms, both inclusive. Compare
+// server_time_ms with the clock that signed the request to correct its
+// offset.
+message TimestampWindow {
+  // Server time when the request was refused, in milliseconds since the Unix
+  // epoch (UTC).
+  int64 server_time_ms = 1;
+  // Receive window the timestamp was checked against, in milliseconds: the
+  // request's X-API-RECV-WINDOW, from 1 to 60000, or 5000 when the header is
+  // omitted.
+  uint32 recv_window_ms = 2;
+  // How far a timestamp may run ahead of the server time, in milliseconds:
+  // 1000, whatever the receive window.
+  uint32 max_future_ms = 3;
 }
 
 // AcceptTermsRequest records explicit consent to the terms that apply to the caller's root account.

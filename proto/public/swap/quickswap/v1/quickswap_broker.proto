@@ -31,7 +31,12 @@ enum BrokerRole {
   // transferring ownership: only the Owner and Finance withdraw or change
   // payout settings.
   ADMIN = 2;
-  // Internal transfers, withdrawals and payout settings.
+  // Reads, and the payout settings and withdrawals of the broker's vaults:
+  // changes a vault's payout address allowlist (RequestVaultAllowlistChange),
+  // sets its payout rule (chain.withdraw.v1.AutoWithdrawService) and
+  // withdraws from it
+  // (chain.withdraw.v1.WithdrawService.CreateWalletTradingWithdraw), naming
+  // the vault as the subaccount_id. Manages no vaults, keys or members.
   FINANCE = 3;
   // Creates affiliate vaults and views balances.
   AFFILIATE_MANAGER = 4;
@@ -50,8 +55,8 @@ message Broker {
   bool enabled = 3;
   // Public account ID of the broker's root account.
   fixed64 root_account_id = 4;
-  // Public sub-account ID of the default vault, credited with broker fees
-  // that name no affiliate.
+  // Public sub-account ID of the default vault, credited with every broker
+  // fee (FeeKind BROKER); affiliate fees go to affiliate vaults.
   fixed64 default_vault_account_id = 5;
   // Affiliate vaults the broker may create, active and disabled together.
   // At the limit, CreateAffiliateVault fails with RESOURCE_EXHAUSTED /
@@ -484,12 +489,30 @@ message QuickSwapSummary {
   // Broker and affiliate fees as requested, fixed at creation; unset when
   // the request set none.
   RequestedFees fees = 7;
-  // Broker and affiliate fees charged so far, as settled, as on QuickSwap.
+  // Broker, affiliate and referral fees charged so far, as settled, as on
+  // QuickSwap.
   repeated ChargedFee charged_fees = 8;
   // When the QuickSwap was created.
   google.protobuf.Timestamp created_at = 9;
   // When the QuickSwap last changed.
   google.protobuf.Timestamp updated_at = 10;
+  // USD value of the credited deposit taken into execution
+  // (execution.input_amount), at the source asset's USD price when it was
+  // taken in, in base units of 18 decimals, rounded down. Set once, within
+  // minutes of that moment, and never repriced. Unset until then, and for
+  // good when no current price valued it in time or the QuickSwap predates
+  // USD values; never zero for unknown.
+  // As on QuickSwap.
+  TokenAmount deposited_value_usd = 11;
+  // USD value of what the destination is paid (the DESTINATION withdrawal's
+  // amount: after service, broker and affiliate fees, before its network
+  // fee), at the destination asset's USD price when that payout was
+  // requested, in base units of 18 decimals, rounded down. Set only once
+  // that withdrawal is FINALIZED; unset for good when no current price
+  // valued the payout within minutes of its request or the QuickSwap
+  // predates USD values; never zero for unknown.
+  // As on QuickSwap.
+  TokenAmount delivered_value_usd = 12;
 }
 
 // QuickSwapBrokerServiceGetQuickSwapRequest reads one QuickSwap belonging to this broker.
@@ -610,6 +633,17 @@ message FeeTotal {
   TokenAmount amount = 4;
   // QuickSwaps that were charged a fee in this group and asset.
   uint64 swap_count = 5;
+  // USD value of the fees in amount that have one, each valued at the
+  // asset's USD price when it was charged, in base units of 18 decimals,
+  // rounded down. Each fee is valued once, within minutes of being charged,
+  // and never repriced, so a past group keeps its value. Unset when none
+  // has one; never zero for unknown.
+  TokenAmount value_usd = 6;
+  // Fees summed in amount without a USD value, and so left out of value_usd:
+  // charged in the last few minutes, not valued by a current price in time,
+  // or charged before USD values existed. Zero when value_usd covers all of
+  // amount.
+  uint64 unvalued_count = 7;
 }
 
 // GetFeeTotalsResponse lists every group and asset with a fee in the window,
@@ -668,6 +702,18 @@ message AssetVolume {
   uint32 asset_id = 1;
   // Total, in base units of 18 decimals.
   TokenAmount amount = 2;
+  // USD value of the amounts summed in amount that have one, each valued at
+  // the asset's USD price when it happened, as the field holding this entry
+  // says, in base units of 18 decimals, rounded down. Each amount is valued
+  // once, within minutes of happening, and never repriced, so a past period
+  // keeps its value. Unset when none has one; never zero for unknown.
+  TokenAmount value_usd = 3;
+  // Amounts summed in amount without a USD value (one per QuickSwap for a
+  // volume, one per fee for a fee total), and so left out of value_usd:
+  // from the last few minutes, not valued by a current price in time, or
+  // from before USD values existed. Zero when value_usd covers all of
+  // amount.
+  uint64 unvalued_count = 4;
 }
 
 // FeeSplit is the fees charged in one asset, by who they credit. Every
@@ -687,6 +733,23 @@ message FeeSplit {
   // Referral commissions, credited to referral partners rather than to a
   // vault of the broker, in base units of 18 decimals.
   TokenAmount referral_fee = 5;
+  // USD value of service_fee: each fee valued at the asset's USD price when
+  // it was charged, once, within minutes, and never repriced, in base units
+  // of 18 decimals, rounded down. Zero when service_fee is zero; otherwise
+  // the value of its fees that have one, unset when none has; never zero
+  // for unknown. unvalued_count counts the fees left out.
+  TokenAmount service_fee_usd = 6;
+  // USD value of broker_fee, as service_fee_usd.
+  TokenAmount broker_fee_usd = 7;
+  // USD value of affiliate_fee, as service_fee_usd.
+  TokenAmount affiliate_fee_usd = 8;
+  // USD value of referral_fee, as service_fee_usd.
+  TokenAmount referral_fee_usd = 9;
+  // Fees of the split without a USD value, and so left out of the USD
+  // fields: charged in the last few minutes, not valued by a current price
+  // in time, or charged before USD values existed. Zero when the USD fields
+  // cover every fee.
+  uint64 unvalued_count = 10;
 }
 
 // BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or
@@ -705,11 +768,15 @@ message BrokerStatsPeriod {
   repeated StatusCount statuses = 3;
   // Deposits credited to those QuickSwaps and taken in for execution, per
   // asset, in asset_id order: including a deposit later found ineligible
-  // and returned, excluding a deposit held for review before credit.
+  // and returned, excluding a deposit held for review before credit. Each
+  // deposit's USD value is fixed when it was taken in, as
+  // QuickSwap.deposited_value_usd.
   repeated AssetVolume deposited = 4;
   // Paid to the destination of those QuickSwaps whose DESTINATION
   // withdrawal is FINALIZED, per asset, in asset_id order: after service,
-  // broker and affiliate fees, before the destination network fee.
+  // broker and affiliate fees, before the destination network fee. Each
+  // payout's USD value is fixed when it was requested, as
+  // QuickSwap.delivered_value_usd.
   repeated AssetVolume delivered = 5;
   // Fees charged to the broker's QuickSwaps in the period, per asset, in
   // asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals
@@ -792,9 +859,10 @@ enum PayoutStatus {
   // (an amount was below the least a withdrawal on its network pays),
   // price_unavailable (the rule has a USD minimum and no current price
   // valued an asset), destination_cooling_down (the destination was added
-  // to the vault's external withdraw whitelist less than 24 hours ago) or
+  // to the vault's external withdraw whitelist less than 24 hours ago),
   // route_suspended (withdrawals to the destination's network were
-  // suspended). Each
+  // suspended) or supply_unavailable (the destination route's zToken supply
+  // was not known or not current). Each
   // step carries the balance evaluated, its value and the minimum it was
   // held to.
   PAYOUT_ROLLED_OVER = 4;
@@ -872,6 +940,8 @@ message PayoutStep {
   // external withdraw whitelist less than 24 hours ago; the balance stays
   // for a later run), route_suspended (withdrawals to the destination's
   // network were suspended; the balance stays for a later run),
+  // supply_unavailable (the destination route's zToken supply was not known
+  // or not current; the balance stays for a later run),
   // destination_invalid, authority_revoked,
   // withdrawal_refused,
   // gateway_capacity_insufficient, withdrawal_released (the withdrawal was
@@ -1602,7 +1672,7 @@ message RequestVaultAllowlistChangeResponse {
 //
 // | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |
 // | --- | --- | --- | --- | --- | --- | --- |
-// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |
+// | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultLedger, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |
 // | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |
 // | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |
 // | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |
@@ -1630,7 +1700,9 @@ message RequestVaultAllowlistChangeResponse {
 // leave its outcome unknown: read the state again before retrying it.
 //
 // REST errors are application/problem+json (see ErrorDetail) with the HTTP
-// statuses of QuickSwapService.
+// statuses of QuickSwapService, except that CreateKey and RotateKey answer
+// DEADLINE_EXCEEDED with 504: the outcome is unknown and a retry may create
+// another key, so list the broker's keys before retrying.
 service QuickSwapBrokerService {
   option (polyester.api.docs_group) = "quickswap";
 
@@ -1642,6 +1714,8 @@ service QuickSwapBrokerService {
   rpc GetBroker(GetBrokerRequest) returns (GetBrokerResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker"
       description: "Get the broker, its limits and current usage, and the caller's role."
@@ -1662,6 +1736,9 @@ service QuickSwapBrokerService {
   rpc ListVaultBalances(ListVaultBalancesRequest) returns (ListVaultBalancesResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault balances"
       description: "Read current balances of a broker's default and affiliate vaults."
@@ -1677,6 +1754,8 @@ service QuickSwapBrokerService {
   // - PERMISSION_DENIED: ACTION_DENIED for a broker API key.
   rpc ListMyBrokers(ListMyBrokersRequest) returns (ListMyBrokersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
     option (gnostic.openapi.v3.operation) = {
       summary: "List my brokers"
       description: "List the caller's broker memberships and pending invites."
@@ -1696,6 +1775,10 @@ service QuickSwapBrokerService {
   // - FAILED_PRECONDITION: INVITE_VOID.
   rpc RespondToInvite(RespondToInviteRequest) returns (RespondToInviteResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ALREADY_MEMBER";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "INVITE_NOT_FOUND";
+    option (polyester.api.error_codes) = "INVITE_VOID";
     option (gnostic.openapi.v3.operation) = {
       summary: "Respond to invite"
       description: "Accept or decline a pending broker invite addressed to the caller."
@@ -1711,6 +1794,9 @@ service QuickSwapBrokerService {
   // - PERMISSION_DENIED: ACTION_DENIED.
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List members"
       description: "List the broker's members and pending invites."
@@ -1730,6 +1816,12 @@ service QuickSwapBrokerService {
   // - ALREADY_EXISTS: ALREADY_MEMBER.
   rpc InviteMember(InviteMemberRequest) returns (InviteMemberResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "ALREADY_MEMBER";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "MEMBER_NOT_FOUND";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Invite member"
       description: "Invite a person to the broker with a role other than Owner."
@@ -1748,6 +1840,12 @@ service QuickSwapBrokerService {
   // - FAILED_PRECONDITION: OWNER_IMMUTABLE.
   rpc SetMemberRole(SetMemberRoleRequest) returns (SetMemberRoleResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "MEMBER_NOT_FOUND";
+    option (polyester.api.error_codes) = "OWNER_IMMUTABLE";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Set member role"
       description: "Change a member's role."
@@ -1766,6 +1864,12 @@ service QuickSwapBrokerService {
   // - FAILED_PRECONDITION: OWNER_IMMUTABLE.
   rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "MEMBER_NOT_FOUND";
+    option (polyester.api.error_codes) = "OWNER_IMMUTABLE";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Remove member"
       description: "Remove a member or cancel a pending invite."
@@ -1784,6 +1888,11 @@ service QuickSwapBrokerService {
   // - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.
   rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "MEMBER_NOT_FOUND";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Transfer ownership"
       description: "Make another member the Owner of the broker."
@@ -1799,6 +1908,8 @@ service QuickSwapBrokerService {
   rpc ListKeys(ListKeysRequest) returns (ListKeysResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List API keys"
       description: "List the broker's API keys without secrets."
@@ -1815,6 +1926,11 @@ service QuickSwapBrokerService {
   // - FAILED_PRECONDITION: KEY_LIMIT.
   rpc CreateKey(CreateKeyRequest) returns (CreateKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "KEY_LIMIT";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Create API key"
       description: "Create a broker API key; its token is shown once."
@@ -1835,6 +1951,12 @@ service QuickSwapBrokerService {
   rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "KEY_LIMIT";
+    option (polyester.api.error_codes) = "KEY_NOT_FOUND";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Rotate API key"
       description: "Replace a broker API key, keeping the old one working for an overlap."
@@ -1852,6 +1974,12 @@ service QuickSwapBrokerService {
   // - FAILED_PRECONDITION: LAST_KEY.
   rpc RevokeKey(RevokeKeyRequest) returns (RevokeKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "KEY_NOT_FOUND";
+    option (polyester.api.error_codes) = "LAST_KEY";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
     option (gnostic.openapi.v3.operation) = {
       summary: "Revoke API key"
       description: "Revoke a broker API key immediately."
@@ -1872,6 +2000,9 @@ service QuickSwapBrokerService {
   rpc CreateAffiliateVault(CreateAffiliateVaultRequest) returns (CreateAffiliateVaultResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Create affiliate vault"
       description: "Create or return the broker's affiliate vault for a label."
@@ -1887,6 +2018,8 @@ service QuickSwapBrokerService {
   rpc ListVaults(ListVaultsRequest) returns (ListVaultsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List affiliate vaults"
       description: "List the broker's affiliate vaults."
@@ -1901,6 +2034,9 @@ service QuickSwapBrokerService {
   rpc GetVault(GetVaultRequest) returns (GetVaultResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get affiliate vault"
       description: "Get one of the broker's affiliate vaults."
@@ -1917,6 +2053,10 @@ service QuickSwapBrokerService {
   rpc SetVaultStatus(SetVaultStatusRequest) returns (SetVaultStatusResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Set affiliate vault status"
       description: "Enable or disable an affiliate vault for new QuickSwaps."
@@ -1935,6 +2075,8 @@ service QuickSwapBrokerService {
   rpc ListQuickSwaps(ListQuickSwapsRequest) returns (ListQuickSwapsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List QuickSwaps"
       description: "List the broker's QuickSwaps, newest first, by vault, status and creation time."
@@ -1953,6 +2095,9 @@ service QuickSwapBrokerService {
   rpc GetQuickSwap(QuickSwapBrokerServiceGetQuickSwapRequest) returns (QuickSwapBrokerServiceGetQuickSwapResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "SWAP_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker QuickSwap"
       description: "Read the full detail of a QuickSwap belonging to this broker."
@@ -1971,6 +2116,8 @@ service QuickSwapBrokerService {
   rpc GetFeeTotals(GetFeeTotalsRequest) returns (GetFeeTotalsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get fee totals"
       description: "Total the broker and affiliate fees charged in a window, per asset, by vault, day or month."
@@ -1991,6 +2138,9 @@ service QuickSwapBrokerService {
   rpc GetBrokerStats(GetBrokerStatsRequest) returns (GetBrokerStatsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "STATS_INCOMPLETE";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker stats"
       description: "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per day or month."
@@ -2012,6 +2162,9 @@ service QuickSwapBrokerService {
   rpc ListPayouts(ListPayoutsRequest) returns (ListPayoutsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List payouts"
       description: "List the payout runs of the broker's vaults, newest first, by vault, status and scheduled slot."
@@ -2031,6 +2184,9 @@ service QuickSwapBrokerService {
   rpc GetPayout(GetPayoutRequest) returns (GetPayoutResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "PAYOUT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get payout"
       description: "Read one payout run of the broker's vaults."
@@ -2053,6 +2209,9 @@ service QuickSwapBrokerService {
   rpc ListUpcomingPayouts(ListUpcomingPayoutsRequest) returns (ListUpcomingPayoutsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List upcoming payouts"
       description: "Preview the next payout run of each of the broker's vaults from its balances now."
@@ -2075,6 +2234,9 @@ service QuickSwapBrokerService {
   rpc ListVaultPayoutRules(ListVaultPayoutRulesRequest) returns (ListVaultPayoutRulesResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault payout rules"
       description: "Read the payout rule of each of the broker's vaults and the assets it pays no destination for."
@@ -2099,6 +2261,9 @@ service QuickSwapBrokerService {
   rpc ListVaultLedger(ListVaultLedgerRequest) returns (ListVaultLedgerResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault ledger"
       description: "List the fee credits, payouts and payout refunds of the broker's vaults, newest first."
@@ -2120,6 +2285,9 @@ service QuickSwapBrokerService {
   rpc ListVaultAllowlist(ListVaultAllowlistRequest) returns (ListVaultAllowlistResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault payout addresses"
       description: "Read a vault's payout address allowlist and when each address becomes payable."
@@ -2138,6 +2306,9 @@ service QuickSwapBrokerService {
   rpc ListVaultAllowlistChanges(ListVaultAllowlistChangesRequest) returns (ListVaultAllowlistChangesResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "List vault payout address changes"
       description: "List a vault's payout address allowlist changes, newest first."
@@ -2167,6 +2338,18 @@ service QuickSwapBrokerService {
   //   requesting again.
   rpc RequestVaultAllowlistChange(RequestVaultAllowlistChangeRequest) returns (RequestVaultAllowlistChangeResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "ALLOWLIST_CHANGE_PENDING";
+    option (polyester.api.error_codes) = "ALLOWLIST_DESTINATION_EXISTS";
+    option (polyester.api.error_codes) = "ALLOWLIST_DESTINATION_INVALID";
+    option (polyester.api.error_codes) = "ALLOWLIST_DESTINATION_IN_USE";
+    option (polyester.api.error_codes) = "ALLOWLIST_DESTINATION_NOT_LISTED";
+    option (polyester.api.error_codes) = "ALLOWLIST_FULL";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
+    option (polyester.api.error_codes) = "STEP_UP_REQUIRED";
+    option (polyester.api.error_codes) = "VAULT_ALLOWLIST_NOT_READY";
+    option (polyester.api.error_codes) = "VAULT_NOT_FOUND";
     option (gnostic.openapi.v3.operation) = {
       summary: "Request vault payout address change"
       description: "Add a payout address to a vault's allowlist, or remove one. Owner and Finance members only, with a fresh step-up proof."
