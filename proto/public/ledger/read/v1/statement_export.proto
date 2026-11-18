@@ -33,6 +33,9 @@ enum StatementExportStatus {
   STATEMENT_EXPORT_STATUS_FAILED = 4;
   // The file was deleted at expires_at; create a new export for it.
   STATEMENT_EXPORT_STATUS_EXPIRED = 5;
+  // Canceled with CancelStatementExport before it finished. It has no file
+  // and no longer counts toward the root account's exports in progress.
+  STATEMENT_EXPORT_STATUS_CANCELED = 6;
 }
 
 // StatementExportFailureReason is why a statement export failed.
@@ -47,17 +50,70 @@ enum StatementExportFailureReason {
 }
 
 // StatementExport is a whole-period account statement produced in the
-// background as one CSV file. The file is byte for byte the pages of
-// ExportStatement for the same account, asset and period up to
-// complete_through, concatenated: the header row, then every row, oldest
-// first, in the columns ExportStatementResponse.csv documents.
+// background as one CSV file.
 //
-// Download a READY file with an authenticated
-// `GET /v1/statements/exports/{exportId}/file`, as the account that created
-// it or one with the same access: it returns `text/csv` and supports HTTP
-// `Range` requests. With `?redirect=true` it instead answers
-// `307 Temporary Redirect` to a URL valid for 60 seconds. An EXPIRED export's
-// file answers `410 Gone`.
+// The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,
+// then every row of the period up to complete_through, oldest first. A period
+// without movements yields the header row alone. Each row is the effect of
+// one entry on one account bucket in one asset. An entry is one ledger
+// operation, such as a trade with its fees, a deposit, a withdrawal step or an
+// internal transfer.
+//
+// Columns, in order:
+// - `time`: entry time, RFC 3339 in UTC with microseconds, for example
+//   `2026-11-12T19:52:07.734123Z`.
+// - `entry_id`: stable entry identifier, an unsigned 128-bit integer as a
+//   decimal string. It is the `transfer_id` of the entry's first transfer leg
+//   on the account, as LedgerReadService.ListTransfers returns it.
+// - `type`: `trade` for a trade's settlement and its fees; otherwise the
+//   entry's transfer reason, such as `deposit`, `withdraw`,
+//   `internal_transfer`, `funding_to_trading` or `system_adjustment`.
+// - `account`: account bucket, `funding` or `trading`.
+// - `asset`: asset symbol.
+// - `amount`: signed balance change of the entry in whole units of the
+//   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees
+//   the account receives are included here.
+// - `fee`: fees the account paid in the asset for the entry, in whole units
+//   of the asset; `0` when none.
+// - `balance`: account bucket balance in the asset after the entry, in whole
+//   units of the asset. For consecutive rows of the same bucket and asset,
+//   each balance equals the previous balance plus `amount` minus `fee`.
+// - `link_id`: correlation ID shared by related transfer legs, the trade's
+//   match ID for trades; empty when unavailable.
+// - `flow_id`: public lifecycle flow ID when the entry belongs to a chain
+//   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,
+//   as LedgerReadService.ListTransfers returns it; empty otherwise.
+//
+// Amounts are exact decimal strings with up to 18 fractional digits and no
+// trailing zeros.
+//
+// A READY file downloads in one of two ways:
+// - StatementExportService.GetStatementExportDownloadUrl returns a URL valid
+//   for 60 seconds from signing that needs no credentials, so a browser can
+//   save the file straight to disk.
+// - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the
+//   file as `text/csv` and supports HTTP `Range` requests.
+//
+// Both save the file as `statement-<exportId>.csv`. Before the file is READY
+// both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST
+// `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;
+// an EXPIRED export, or a file already deleted, answers
+// STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL
+// request for a file with less than 5 seconds left; a CANCELED export
+// answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are
+// `application/problem+json` whose `code` is the ErrorCode name, such as
+// `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403
+// PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`
+// for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with
+// `Retry-After`, when the request can be retried.
+//
+// An export belongs to the root account whose session or API key created it.
+// Any session or API key of that root that may read the export's account can
+// read and download it, whichever of them created it. A member of a
+// subaccount shared from another root sees only the exports its own root
+// created, and the subaccount's owner does not see those: an export of
+// another root, or of an account the caller can no longer read, answers
+// NOT_FOUND, as one that does not exist.
 message StatementExport {
   // Public ID of the export.
   fixed64 export_id = 1;
@@ -94,7 +150,8 @@ message StatementExport {
 }
 
 // CreateStatementExportRequest asks for a whole-period statement file of one
-// account.
+// account. The period is at most 366 days long; a longer or empty period is
+// INVALID_ARGUMENT.
 message CreateStatementExportRequest {
   // The period must be non-empty and at most 366 days long.
   option (buf.validate.message).cel = {
@@ -148,6 +205,41 @@ message GetStatementExportResponse {
   StatementExport export = 1;
 }
 
+// GetStatementExportDownloadUrlRequest names the export whose file to
+// download.
+message GetStatementExportDownloadUrlRequest {
+  // Public ID of the export.
+  fixed64 export_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetStatementExportDownloadUrlResponse is a short-lived link to a READY
+// export's file.
+message GetStatementExportDownloadUrlResponse {
+  // URL of the file, valid until expires_at. It carries its own
+  // authorization and needs no credentials, so a browser can open it to save
+  // the file. Anyone who holds it can download the file until expires_at:
+  // do not share, store or log it.
+  string url = 1;
+  // When the URL stops working: the exact end of its signature, 60 seconds
+  // after it was signed for this request, or when the file expires if that
+  // is sooner. Request a new URL after it.
+  google.protobuf.Timestamp expires_at = 2;
+  // Name the download saves the file as, `statement-<exportId>.csv`.
+  string filename = 3;
+}
+
+// CancelStatementExportRequest names the export to cancel.
+message CancelStatementExportRequest {
+  // Public ID of the export.
+  fixed64 export_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// CancelStatementExportResponse is the canceled export.
+message CancelStatementExportResponse {
+  // The export, CANCELED.
+  StatementExport export = 1;
+}
+
 // ListStatementExportsRequest selects one account's exports.
 message ListStatementExportsRequest {
   // Optional public subaccount ID, selected as for
@@ -166,14 +258,25 @@ message ListStatementExportsResponse {
   repeated StatementExport exports = 1;
   // Opaque cursor for the next page. Empty when no more results exist.
   string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+  // Exports QUEUED or PROCESSING across the whole root account, its
+  // subaccounts included, whichever account the list selects: the number a
+  // new CreateStatementExport counts against max_in_progress_exports.
+  uint32 in_progress_exports = 3;
+  // Most exports the root account may have QUEUED or PROCESSING at a time.
+  // While in_progress_exports is at it, CreateStatementExport answers
+  // RESOURCE_EXHAUSTED with STATEMENT_EXPORT_LIMIT_REACHED.
+  uint32 max_in_progress_exports = 4;
 }
 
-// StatementExportService produces whole-period account statements in the
-// background as one CSV file each. It covers the same account, asset and
-// period choices as LedgerReadService.ExportStatement, with the same access
-// rules: API keys need the READ_STATEMENTS policy action. A root account has
-// at most 5 exports QUEUED or PROCESSING at a time, one account produces one
-// export at a time, and a READY file can be downloaded for 7 days.
+// StatementExportService is the account statement API. A statement covers
+// one account, optionally one asset, for a period of at most 366 days, and is
+// produced in the background as one CSV file: create an export, poll it with
+// GetStatementExport until it is READY, then download its file (see
+// StatementExport). API keys need the READ_STATEMENTS policy action. A root
+// account has at most 5 exports QUEUED or PROCESSING at a time, one account
+// produces one export at a time, and a READY file can be downloaded for 7
+// days. CancelStatementExport stops a QUEUED or PROCESSING export, which
+// frees its place for the account's next export and under the root's 5.
 service StatementExportService {
   option (polyester.api.docs_group) = "account";
 
@@ -215,6 +318,60 @@ service StatementExportService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Statement Export"
       description: "Get a statement export's status, progress and expiry."
+      tags: "Statement Exports"
+    };
+  }
+
+  // Get a URL valid for 60 seconds from signing that downloads a READY
+  // export's file without credentials, for a browser to save straight to
+  // disk. Each call returns a new URL.
+  //
+  // Errors:
+  // - NOT_FOUND: no such export for the authenticated account.
+  // - PERMISSION_DENIED: the caller may not read statements.
+  // - FAILED_PRECONDITION (STATEMENT_EXPORT_NOT_READY): the file is not ready
+  //   yet; poll GetStatementExport until it is READY.
+  // - FAILED_PRECONDITION (STATEMENT_EXPORT_FAILED): the export failed and has
+  //   no file.
+  // - FAILED_PRECONDITION (STATEMENT_EXPORT_CANCELED): the export was
+  //   canceled and has no file.
+  // - FAILED_PRECONDITION (STATEMENT_EXPORT_EXPIRED): the file expired, or
+  //   has less than 5 seconds left; create a new export.
+  // - UNAVAILABLE: retry the same request.
+  rpc GetStatementExportDownloadUrl(GetStatementExportDownloadUrlRequest) returns (GetStatementExportDownloadUrlResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/statements/exports/{export_id}/download-url"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Statement Export Download URL"
+      description: "Get a 60-second URL that downloads a ready statement file without credentials, for a browser to save it."
+      tags: "Statement Exports"
+    };
+  }
+
+  // Cancel a QUEUED or PROCESSING statement export. It ends CANCELED at
+  // once: it no longer counts toward the root account's 5 exports in
+  // progress, the account's next queued export can start, and any partial
+  // file is deleted. Canceling a CANCELED export returns it as it is.
+  //
+  // Errors:
+  // - NOT_FOUND: no such export for the authenticated account.
+  // - PERMISSION_DENIED: the caller may not read statements.
+  // - FAILED_PRECONDITION (STATEMENT_EXPORT_NOT_CANCELABLE): the export
+  //   already finished, READY, FAILED or EXPIRED.
+  // - UNAVAILABLE: retry the same request.
+  rpc CancelStatementExport(CancelStatementExportRequest) returns (CancelStatementExportResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {
+      post: "/v1/statements/exports/{export_id}/cancel"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Statement Export"
+      description: "Cancel a queued or processing statement export, freeing its place under the root account's limit."
       tags: "Statement Exports"
     };
   }

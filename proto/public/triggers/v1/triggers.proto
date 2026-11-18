@@ -413,6 +413,23 @@ enum LadderDistribution {
   WEIGHTED_FAVORABLE = 3;
 }
 
+// LadderOutcome summarizes how many of an ended ladder's child orders were
+// placed on the book. It does not state what filled: see the executed
+// quantity and executed levels.
+enum LadderOutcome {
+  // The ladder is still running, or was rejected at its creation before any
+  // child order.
+  LADDER_OUTCOME_UNSPECIFIED = 0;
+  // No child order was rejected before it was placed on the book.
+  ALL_ADMITTED = 1;
+  // Some child orders were placed on the book and the others were rejected
+  // before they were placed.
+  MIXED_REJECTIONS = 2;
+  // Every child order that reached the book was rejected before it was
+  // placed: the ladder placed nothing.
+  ALL_CHILDREN_REJECTED = 3;
+}
+
 // =============================================================================
 // Create Trigger Request/Response
 // =============================================================================
@@ -428,7 +445,12 @@ message TriggerMarketIoc {
   // the child's side applies, as for a market order. It can be changed with
   // ModifyTrigger while the trigger is live.
   oneof max_slippage {
-    // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
+    // Positive maximum absolute price delta in quote units scaled by 1e9. The
+    // "ticks" in this name are 1e-9 quote units, not the pair's tick size,
+    // and the value need not be a multiple of the pair's tick size: the
+    // child's protection price, the price that fired it moved by this delta,
+    // is put on the tick grid toward that price, as for a market order
+    // (orders.v1.MarketIoc).
     int64 max_slippage_ticks = 1 [(buf.validate.field).int64.gt = 0];
     // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 10000.
     // A sell child accepts values below 10000; a 100% cap would leave it no
@@ -530,7 +552,12 @@ message TrailingStopTrigger {
   // IOC limit order this far below the fire price for a sell, or above it
   // for a buy, never above a buy's maximum price.
   oneof max_slippage {
-    // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
+    // Positive maximum absolute price delta in quote units scaled by 1e9. The
+    // "ticks" in this name are 1e-9 quote units, not the pair's tick size,
+    // and the value need not be a multiple of the pair's tick size: the
+    // child's protection price, the price that fired it moved by this delta,
+    // is put on the tick grid toward that price, as for a market order
+    // (orders.v1.MarketIoc).
     int64 max_slippage_ticks = 4 [(buf.validate.field).int64.gt = 0];
     // Maximum slippage in basis points (1 bp = 0.01%), from 1 to 9999 on
     // either side. 10000 is rejected with ERROR_CODE_MAX_SLIPPAGE_INVALID,
@@ -575,7 +602,12 @@ message TwapMarketIoc {
   // default market slippage. This does not bound price movement over the whole
   // TWAP duration or guarantee that every slice fills.
   oneof max_slippage {
-    // Positive maximum absolute price delta per slice in Q9 execution-price ticks (1 tick = 1e-9 quote units).
+    // Positive maximum absolute price delta per slice in quote units scaled by
+    // 1e9. The "ticks" in this name are 1e-9 quote units, not the pair's tick
+    // size, and the value need not be a multiple of the pair's tick size: a
+    // slice's protection price, its reference moved by this delta, is put on
+    // the tick grid toward that reference, as for a market order
+    // (orders.v1.MarketIoc).
     int64 max_slippage_ticks = 1 [(buf.validate.field).int64.gt = 0];
     // Maximum adverse price movement per slice in basis points (1 bp = 0.01%),
     // from 1 to 10000. A SELL TWAP accepts values below 10000; a 100% cap
@@ -812,7 +844,8 @@ message OcoIntent {
   // OCO, and a different intent with the same ID returns
   // CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. 1 to 36 ASCII characters using
   // letters, digits, period, underscore, colon, slash, or hyphen, as a
-  // client_order_id; other IDs are rejected with INVALID_ARGUMENT.
+  // client_order_id; other IDs are rejected with INVALID_ARGUMENT and
+  // ERROR_CODE_CLIENT_LIST_ID_INVALID.
   string client_list_id = 5 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 36,
@@ -940,8 +973,9 @@ message ListTriggersRequest {
   optional fixed64 order_list_id = 6;
   // Optional filter by OCO client ID: the take-profit and the stop-loss of
   // the OCO created with this client_list_id, which follows the same rule as
-  // OcoIntent.client_list_id. Use it to find an OCO whose create failed with
-  // TRIGGER_CREATE_OUTCOME_UNKNOWN.
+  // OcoIntent.client_list_id: other IDs are rejected with INVALID_ARGUMENT and
+  // ERROR_CODE_CLIENT_LIST_ID_INVALID. Use it to find an OCO whose create
+  // failed with TRIGGER_CREATE_OUTCOME_UNKNOWN.
   optional string client_list_id = 7 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 36,
@@ -1180,8 +1214,10 @@ message ModifyTriggerRequest {
   // trigger's own pair. When set, it must be the trigger's pair: another
   // listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a
   // pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the
-  // trigger unchanged. An API key limited to specific markets must name the
-  // trigger's pair.
+  // trigger unchanged. An API key limited to specific markets may act only
+  // on a trigger whose pair is one of its markets, whether or not the
+  // request names it: any other trigger, or a named pair outside those
+  // markets, is rejected with ERROR_CODE_API_KEY_MARKET_DENY.
   uint32 symbol_id = 3;
 
   // Patch fields for safe price, trailing-distance, and slippage edits.
@@ -1224,8 +1260,9 @@ message ModifyTriggerRequest {
   // child re-sizes its reserved funds; a change that needs more funds than
   // are available is rejected and leaves the trigger unchanged.
   oneof max_slippage {
-    // Non-negative maximum absolute price delta in Q9 execution-price ticks
-    // (1 tick = 1e-9 quote units). Set to zero to clear the cap.
+    // Non-negative maximum absolute price delta in quote units scaled by 1e9
+    // (1e-9 quote units, not the pair's tick size; the value need not be a
+    // multiple of the pair's tick size). Set to zero to clear the cap.
     int64 max_slippage_ticks = 15 [(buf.validate.field).int64.gte = 0];
     // Updated maximum allowed slippage in basis points (1 bp = 0.01%). Set to
     // zero to clear the cap. A buy stop-loss or take-profit with a market
@@ -1295,8 +1332,10 @@ message ResumeTriggerRequest {
   // trigger's own pair. When set, it must be the trigger's pair: another
   // listed pair is rejected with ERROR_CODE_TRIGGER_SYMBOL_MISMATCH, and a
   // pair that is not listed with ERROR_CODE_UNKNOWN_SYMBOL; either leaves the
-  // trigger unchanged. An API key limited to specific markets must name the
-  // trigger's pair.
+  // trigger unchanged. An API key limited to specific markets may act only
+  // on a trigger whose pair is one of its markets, whether or not the
+  // request names it: any other trigger, or a named pair outside those
+  // markets, is rejected with ERROR_CODE_API_KEY_MARKET_DENY.
   uint32 symbol_id = 3;
 }
 
@@ -1340,8 +1379,9 @@ message TrailingDetails {
   int64 trough_price_ticks = 4;
   // Trailing distance in basis points (1 bp = 0.01%).
   int32 trailing_distance_bps = 5;
-  // Non-negative maximum absolute price delta in Q9 execution-price ticks
-  // (1 tick = 1e-9 quote units). Zero means no absolute cap is configured.
+  // Non-negative maximum absolute price delta in quote units scaled by 1e9
+  // (1e-9 quote units, not the pair's tick size), as set. Zero means no
+  // absolute cap is configured.
   int64 max_slippage_ticks = 6;
   // Optional maximum allowed slippage in basis points (1 bp = 0.01%).
   int32 max_slippage_bps = 7;
@@ -1391,6 +1431,24 @@ message LadderDetails {
   // filled level counts once, including across replacement child orders.
   // This is not the number of fully filled levels.
   int32 executed_levels = 6;
+  // Number of child orders the ladder requested, one per level.
+  int32 requested_levels = 7;
+  // Number of child orders placed on the book, including those still open.
+  int32 placed_levels = 8;
+  // Number of child orders rejected before they were placed on the book.
+  // Each child order's own status states why.
+  int32 rejected_levels = 9;
+  // Number of placed child orders that were canceled or expired, whether
+  // partly filled or not. When the ladder itself ends, its open child orders
+  // are canceled with it and are counted here. A placed child order rejected
+  // after a partial fill counts as neither rejected nor canceled.
+  int32 canceled_levels = 10;
+  // How the ended ladder's child orders were placed; unspecified while it
+  // runs, and for a ladder rejected at its creation, before any child order
+  // (its failure reason states why). A completed ladder with MIXED_REJECTIONS
+  // completed with some levels rejected: placed_levels of requested_levels
+  // were placed.
+  LadderOutcome outcome = 11;
 }
 
 // Trigger represents current trigger configuration, lifecycle state, and

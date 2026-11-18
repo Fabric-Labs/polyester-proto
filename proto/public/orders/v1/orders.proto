@@ -106,10 +106,29 @@ enum SelfTradePreventionMode {
 
 // MarketIoc configures a market order. Market orders always execute as
 // immediate-or-cancel and therefore cannot rest or be post-only.
+//
+// The order fills only up to its protection price, a BUY at or below it and
+// a SELL at or above it. The protection price is the reference price
+// (client_ref_price_ticks, or the server's reference when it is omitted)
+// moved by the maximum slippage, up for a BUY and down for a SELL, then put
+// on the pair's tick grid toward the reference: a BUY's is rounded down and
+// a SELL's up, so it never allows more than the slippage and can be up to
+// one tick tighter. Neither client_ref_price_ticks nor max_slippage_ticks
+// has to be a multiple of the pair's tick size; only the protection price
+// is. For example, on a pair whose tick size is 0.01, a reference of
+// 73840.125 and a slippage of 50.12 give a BUY protection price of 73890.24
+// (73890.245 rounded down) and a SELL protection price of 73790.01
+// (73790.005 rounded up). The order's price_ticks shows the protection
+// price; market_client_ref_price_ticks and market_max_slippage_ticks show
+// the values exactly as given.
 message MarketIoc {
   // Optional max slippage override. If omitted, the pair default is used.
   oneof max_slippage {
-    // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
+    // Positive maximum absolute price delta in quote units scaled by 1e9. The
+    // "ticks" in this name are 1e-9 quote units, not the pair's tick size,
+    // and the value need not be a multiple of the pair's tick size: the
+    // protection price derived from it is put on the tick grid toward the
+    // reference, as MarketIoc describes.
     int64 max_slippage_ticks = 1 [(buf.validate.field).int64.gt = 0];
     // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 10000.
     // A SELL order accepts at most 9999: a 100% cap would leave it no
@@ -120,8 +139,12 @@ message MarketIoc {
       lte: 10000
     }];
   }
-  // Optional positive client reference price in quote units scaled by 1e9.
-  // When omitted, admission uses server-side reference pricing.
+  // Optional positive client reference price in quote units scaled by 1e9
+  // (1e-9 quote units, not the pair's tick size). It need not be on the
+  // pair's tick grid; only the protection price derived from it is, as
+  // MarketIoc describes. When omitted, admission uses server-side reference
+  // pricing. A reference too far from the server's is refused with
+  // ERROR_CODE_STALE_QUOTE.
   int64 client_ref_price_ticks = 3 [
     (buf.validate.field).int64.gt = 0,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
@@ -434,7 +457,7 @@ message CancelOrderRequest {
   };
 
   oneof key {
-    // Order ID as fixed64. Exactly one of order_id or client_order_id.
+    // Public order ID. Exactly one of order_id or client_order_id.
     fixed64 order_id = 1 [(buf.validate.field).fixed64.gt = 0];
     // Client order ID: 1 to 36 ASCII characters using letters, digits,
     // period, underscore, colon, slash, or hyphen. Exactly one of order_id or
@@ -469,7 +492,7 @@ message CancelOrderResponse {
 
   // Cancellation submission outcome.
   Status status = 1 [(buf.validate.field).enum.defined_only = true];
-  // Order ID as fixed64.
+  // Public order ID.
   fixed64 order_id = 2;
   // Server timestamp.
   google.protobuf.Timestamp ts = 3;
@@ -520,7 +543,10 @@ enum ErrorCode {
   ERROR_CODE_FEE_ASSET_NOT_ALLOWED = 15;
   // Pair is disabled and does not accept orders.
   ERROR_CODE_PAIR_DISABLED = 16;
-  // Referenced order could not be resolved.
+  // Referenced order could not be resolved: no order of the account has that
+  // order ID or client order ID, or an ended order can no longer be
+  // confirmed under it (see OrdersService.CancelOrder). Read the order to
+  // tell an ended order from one that was never placed.
   ERROR_CODE_ORDER_UNKNOWN = 17;
   // Order processing failed because of an unexpected error.
   ERROR_CODE_INTERNAL_ERROR = 18;
@@ -1095,6 +1121,11 @@ enum ErrorCode {
   // remain valid. To wait for a new activation price, cancel the trigger and
   // create a new one.
   ERROR_CODE_TRIGGER_ACTIVATION_PRICE_NOT_MODIFIABLE = 315;
+  // The OCO's client list ID is empty, longer than 36 characters, or has a
+  // character other than a letter, digit, period, underscore, colon, slash or
+  // hyphen. Answered by CreateOco and by the ListTriggers client_list_id
+  // filter. Nothing changed.
+  ERROR_CODE_CLIENT_LIST_ID_INVALID = 318;
 }
 
 // FieldViolation describes one actionable request validation failure.
@@ -1131,6 +1162,13 @@ message ErrorDetail {
   // i of the violation's trigger.strategy.ladder.levels[i], so 0 is the first
   // order. Omitted for every other error.
   optional uint32 level_index = 9;
+  // The price band limit the order's limit price is past, when a preview is
+  // not admissible with PRICE_BAND_VIOLATION: the highest admitted buy price
+  // for a buy, the lowest admitted sell price for a sell, as the market last
+  // published its band. REST returns priceBandLimit as a decimal string in
+  // quote asset units per base asset unit, for example "1837.5". Protobuf
+  // uses quote units scaled by 1e9. Omitted for every other error.
+  optional int64 price_band_limit_ticks = 10;
 }
 
 // =============================================================================
@@ -1201,10 +1239,10 @@ message TakeProfitPolicy {
   RiskExecution child = 2 [(buf.validate.field).required = true];
   // Price the take-profit watches. Unspecified or LAST_PRICE watches the last
   // traded price. INDEX_PRICE watches the market's index price; on a market
-  // without an index price the order is rejected with terminal reason
-  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
-  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
-  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // without an index price the order is rejected before any fill with
+  // reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify
+  // that adds such a leg is refused with the same code, leaving the order and
+  // its legs unchanged. MARK_PRICE is not supported. A modify naming
   // another source replaces the leg.
   TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
@@ -1219,10 +1257,10 @@ message StopLossPolicy {
   RiskExecution child = 2 [(buf.validate.field).required = true];
   // Price the stop-loss watches. Unspecified or LAST_PRICE watches the last
   // traded price. INDEX_PRICE watches the market's index price; on a market
-  // without an index price the order is rejected with terminal reason
-  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
-  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
-  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // without an index price the order is rejected before any fill with
+  // reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify
+  // that adds such a leg is refused with the same code, leaving the order and
+  // its legs unchanged. MARK_PRICE is not supported. A modify naming
   // another source replaces the leg.
   TriggerPriceSource trigger_price_source = 3 [(buf.validate.field).enum.defined_only = true];
 }
@@ -1248,7 +1286,11 @@ message TrailingStopPolicy {
   // positive default is configured. A buy child remains bounded by
   // limit_price_ticks. Set at most one of these fields.
   oneof max_slippage {
-    // Positive maximum absolute price delta in Q9 execution-price ticks (1 tick = 1e-9 quote units).
+    // Positive maximum absolute price delta in quote units scaled by 1e9. The
+    // "ticks" in this name are 1e-9 quote units, not the pair's tick size,
+    // and the value need not be a multiple of the pair's tick size: the
+    // child's protection price, the price that fired it moved by this delta,
+    // is put on the tick grid toward that price, as MarketIoc describes.
     int64 max_slippage_ticks = 6 [(buf.validate.field).int64.gt = 0];
     // Maximum allowed slippage in basis points (1 bp = 0.01%), from 1 to 9999
     // whichever side the exit trades. An order whose trailing stop sets 10000
@@ -1266,10 +1308,10 @@ message TrailingStopPolicy {
   // Price the trailing stop watches and trails: its peak or trough, activation
   // and fire all follow this price. Unspecified or LAST_PRICE watches the last
   // traded price. INDEX_PRICE watches the market's index price; on a market
-  // without an index price the order is rejected with terminal reason
-  // INDEX_PRICE_UNAVAILABLE before any fill, and a modify that adds such a leg
-  // is refused with ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, leaving the
-  // order and its legs unchanged. MARK_PRICE is not supported. A modify naming
+  // without an index price the order is rejected before any fill with
+  // reject_reason ERROR_CODE_TRIGGER_PRICE_SOURCE_UNSUPPORTED, and a modify
+  // that adds such a leg is refused with the same code, leaving the order and
+  // its legs unchanged. MARK_PRICE is not supported. A modify naming
   // another source replaces the leg.
   TriggerPriceSource trigger_price_source = 8 [(buf.validate.field).enum.defined_only = true];
   // Positive maximum price of a trailing stop that buys back, in quote units
@@ -1720,7 +1762,7 @@ message ModifyOrderRequest {
   // Target key: exactly one of order_id or client_order_id is required.
   oneof key {
     option (buf.validate.oneof).required = true;
-    // Order ID as fixed64.
+    // Public order ID.
     fixed64 order_id = 2 [(buf.validate.field).fixed64.gt = 0];
     // Client order ID to resolve within the caller account: 1 to 36 ASCII
     // characters using letters, digits, period, underscore, colon, slash, or
@@ -1814,7 +1856,7 @@ message BatchReplaceOrderItem {
 
   oneof key {
     option (buf.validate.oneof).required = true;
-    // Order ID as fixed64. Exactly one of order_id or client_order_id.
+    // Public order ID. Exactly one of order_id or client_order_id.
     fixed64 order_id = 1 [(buf.validate.field).fixed64.gt = 0];
     // Client order ID: 1 to 36 ASCII characters using letters, digits,
     // period, underscore, colon, slash, or hyphen. Exactly one of order_id or
@@ -1944,7 +1986,7 @@ message BatchCancelItem {
     expression: "(this.order_id > 0u) != (this.client_order_id != \"\")"
   };
 
-  // Order ID as fixed64. Exactly one of order_id or client_order_id.
+  // Public order ID. Exactly one of order_id or client_order_id.
   fixed64 order_id = 1 [(buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE];
   // Client order ID: 1 to 36 ASCII characters using letters, digits, period,
   // underscore, colon, slash, or hyphen. Exactly one of order_id or
@@ -2058,10 +2100,24 @@ service OrdersService {
   // ERROR_CODE_ORDER_ALREADY_TERMINAL, including a cancel retried after a
   // timeout once the order has ended: treat it as already done. A repeat
   // while an earlier cancel of the order is still in progress is accepted
-  // again and changes nothing. A client order ID keeps naming its order for
-  // at least a minute after the order ends; a cancel by client order ID sent
-  // later may return ERROR_CODE_ORDER_UNKNOWN instead. Retry by order ID, or
-  // read the order, to tell an ended order from an unknown one.
+  // again and changes nothing.
+  // By client order ID, an ended order returns
+  // ERROR_CODE_ORDER_ALREADY_TERMINAL for at least a minute after it ends;
+  // later the client order ID may name no order, and the cancel returns
+  // ERROR_CODE_ORDER_UNKNOWN.
+  // By order ID, an ended order returns ERROR_CODE_ORDER_ALREADY_TERMINAL
+  // while the exchange can still confirm that it placed an order under that
+  // ID. After some exchange maintenance, such as a market listing or a
+  // recovery, an order that ended before it can no longer be confirmed and
+  // returns ERROR_CODE_ORDER_UNKNOWN, as an order ID that was never placed
+  // does.
+  // ERROR_CODE_ORDER_UNKNOWN therefore does not prove that an order never
+  // existed. A client that knows the order ended, for example when retrying a
+  // cancel that timed out, can treat it as done: an open order is never
+  // reported unknown under its own order ID and symbol. Otherwise retry by
+  // client order ID within its window, or read the order with
+  // OrdersReadService.GetOrder to tell an ended order from one that was never
+  // placed.
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -2169,6 +2225,14 @@ service OrdersService {
   }
 
   // Modifies an existing order using explicit behavior policy.
+  // A modify of an order that has already ended is refused with
+  // ERROR_CODE_ORDER_ALREADY_TERMINAL; one naming no order is refused with
+  // ERROR_CODE_ORDER_UNKNOWN. An ended order is told apart as for
+  // CancelOrder: by client order ID it returns
+  // ERROR_CODE_ORDER_ALREADY_TERMINAL for at least a minute after it ends; by
+  // order ID it returns ERROR_CODE_ORDER_UNKNOWN once the exchange can no
+  // longer confirm that it placed an order under that ID. Read the order with
+  // OrdersReadService.GetOrder to tell the two apart.
   rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -2182,7 +2246,9 @@ service OrdersService {
   }
 
   // Amends or replaces same-symbol orders and returns after authoritative
-  // admission.
+  // admission. An item naming an ended order is refused with
+  // ERROR_CODE_ORDER_ALREADY_TERMINAL or ERROR_CODE_ORDER_UNKNOWN as for
+  // ModifyOrder.
   rpc BatchReplaceOrders(BatchReplaceOrdersRequest) returns (BatchReplaceOrdersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -2199,7 +2265,9 @@ service OrdersService {
   }
 
   // Cancels multiple orders by explicit ID in a single request.
-  // Per-item results are returned; partial success is the default.
+  // Per-item results are returned; partial success is the default. An item
+  // naming an ended order is rejected with ERROR_CODE_ORDER_ALREADY_TERMINAL
+  // or ERROR_CODE_ORDER_UNKNOWN as for CancelOrder.
   // Final state is confirmed via the order update stream or read path.
   rpc BatchCancelOrders(BatchCancelOrdersRequest) returns (BatchCancelOrdersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;

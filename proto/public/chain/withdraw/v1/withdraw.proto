@@ -114,7 +114,9 @@ enum ErrorCode {
   ERROR_CODE_CHAIN_METADATA_UNAVAILABLE = 34;
   // Required network fee data is unavailable.
   ERROR_CODE_FEE_UNAVAILABLE = 35;
-  // Required zipped-asset supply data is unavailable.
+  // The zToken supply of the destination route is not known, or not
+  // current: AssetChainVariant.supply_status is MISSING or STALE. Nothing was
+  // reserved; retry once the status is AVAILABLE again.
   ERROR_CODE_SUPPLY_UNAVAILABLE = 36;
   // Fresh step-up verification is temporarily unavailable.
   ERROR_CODE_STEP_UP_UNAVAILABLE = 37;
@@ -200,7 +202,11 @@ message TradingWithdrawIntentPayload {
   // denominated in this asset at canonical 18-decimal scale.
   uint32 asset_id = 2 [(buf.validate.field).uint32.gt = 0];
 
-  // External network id for TO_EXTERNAL_CHAIN. Omit for TO_FUNDING.
+  // Polyester chain id of the destination network for TO_EXTERNAL_CHAIN:
+  // ChainConfig.chain_id from GetDepositWithdrawConfig, not the network's
+  // native chain id (ChainConfig.native_chain_id, such as 11155111 for
+  // Ethereum Sepolia). An unknown id is refused with
+  // ERROR_CODE_INVALID_DESTINATION_CHAIN. Omit for TO_FUNDING.
   uint64 destination_chain_id = 3;
 
   // Withdraw amount in canonical 18-decimal unified asset units.
@@ -289,7 +295,10 @@ enum WithdrawDestinationValidationCode {
 // ValidateWithdrawDestinationRequest checks one external-chain
 // destination for an authenticated caller without creating a withdraw.
 message ValidateWithdrawDestinationRequest {
-  // External destination chain identifier.
+  // Polyester chain id of the destination network: ChainConfig.chain_id
+  // from GetDepositWithdrawConfig, not the network's native chain id
+  // (ChainConfig.native_chain_id, such as 11155111 for Ethereum Sepolia).
+  // An unknown id answers valid false with UNSUPPORTED_CHAIN.
   uint64 destination_chain_id = 1 [(buf.validate.field).uint64.gt = 0];
 
   // Destination address to validate for destination_chain_id.
@@ -347,8 +356,50 @@ message GetWalletBalancesResponse {
   string smart_account_address = 1;
 
   // Every zToken the wallet holds a nonzero balance of, ordered by
-  // zipped_asset_id. Empty when it holds none.
+  // zipped_asset_id. Empty when it holds none. An asset whose balance could
+  // not be read is in unavailable_assets instead.
   repeated WalletBalance balances = 2;
+
+  // Zipped assets whose zToken balance could not be read, ordered by
+  // zipped_asset_id. The wallet's balance of each is unknown, not zero: read
+  // again later. Empty when every balance was read. When no balance can be
+  // read at all, the request fails as unavailable instead.
+  repeated UnavailableWalletAsset unavailable_assets = 3;
+}
+
+// UnavailableWalletAsset is a zipped asset whose zToken balance could not be
+// read from Polyester Chain.
+message UnavailableWalletAsset {
+  // Zipped asset of the zToken, as WalletBalance.zipped_asset_id names it.
+  uint32 zipped_asset_id = 1;
+
+  // Unified asset the zToken stands for, as WalletBalance.unified_asset_id
+  // names it.
+  uint32 unified_asset_id = 2;
+
+  // External network of the zipped asset, as WalletBalance.chain_id names it.
+  uint32 chain_id = 3;
+
+  // zToken contract address on Polyester Chain listed for the zipped asset.
+  string ztoken_address = 4;
+
+  // Why the balance could not be read.
+  WalletAssetUnavailableReason reason = 5;
+}
+
+// WalletAssetUnavailableReason says why a zToken balance could not be read.
+enum WalletAssetUnavailableReason {
+  // No reason was given.
+  UNAVAILABLE_UNSPECIFIED = 0;
+
+  // No zToken contract exists at the listed address on Polyester Chain.
+  NO_CONTRACT = 1;
+
+  // Polyester Chain answered the balance read with an error.
+  READ_FAILED = 2;
+
+  // The balance read returned a value that is not a valid balance.
+  INVALID_BALANCE = 3;
 }
 
 // WithdrawService manages authenticated chain-facing withdraw request intake.

@@ -10,9 +10,22 @@
         "format": "date-time",
         "type": "string"
       },
+      "ledger.read.v1.CancelStatementExportResponse": {
+        "additionalProperties": false,
+        "description": "CancelStatementExportResponse is the canceled export.",
+        "properties": {
+          "export": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExport",
+            "description": "The export, CANCELED.",
+            "title": "export"
+          }
+        },
+        "title": "CancelStatementExportResponse",
+        "type": "object"
+      },
       "ledger.read.v1.CreateStatementExportRequest": {
         "additionalProperties": false,
-        "description": "CreateStatementExportRequest asks for a whole-period statement file of one\n account.\nend_time must be after start_time and at most 366 days after it",
+        "description": "CreateStatementExportRequest asks for a whole-period statement file of one\n account. The period is at most 366 days long; a longer or empty period is\n INVALID_ARGUMENT.\nend_time must be after start_time and at most 366 days after it",
         "properties": {
           "assetId": {
             "description": "Optional public unified asset ID. When unset/0, the statement covers\n every asset; an ID that names no asset is refused.",
@@ -66,6 +79,29 @@
         "title": "CreateStatementExportResponse",
         "type": "object"
       },
+      "ledger.read.v1.GetStatementExportDownloadUrlResponse": {
+        "additionalProperties": false,
+        "description": "GetStatementExportDownloadUrlResponse is a short-lived link to a READY\n export's file.",
+        "properties": {
+          "expiresAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the URL stops working: the exact end of its signature, 60 seconds\n after it was signed for this request, or when the file expires if that\n is sooner. Request a new URL after it.",
+            "title": "expires_at"
+          },
+          "filename": {
+            "description": "Name the download saves the file as, `statement-\u003cexportId\u003e.csv`.",
+            "title": "filename",
+            "type": "string"
+          },
+          "url": {
+            "description": "URL of the file, valid until expires_at. It carries its own\n authorization and needs no credentials, so a browser can open it to save\n the file. Anyone who holds it can download the file until expires_at:\n do not share, store or log it.",
+            "title": "url",
+            "type": "string"
+          }
+        },
+        "title": "GetStatementExportDownloadUrlResponse",
+        "type": "object"
+      },
       "ledger.read.v1.GetStatementExportResponse": {
         "additionalProperties": false,
         "description": "GetStatementExportResponse is one export.",
@@ -91,6 +127,16 @@
             "title": "exports",
             "type": "array"
           },
+          "inProgressExports": {
+            "description": "Exports QUEUED or PROCESSING across the whole root account, its\n subaccounts included, whichever account the list selects: the number a\n new CreateStatementExport counts against max_in_progress_exports.",
+            "title": "in_progress_exports",
+            "type": "integer"
+          },
+          "maxInProgressExports": {
+            "description": "Most exports the root account may have QUEUED or PROCESSING at a time.\n While in_progress_exports is at it, CreateStatementExport answers\n RESOURCE_EXHAUSTED with STATEMENT_EXPORT_LIMIT_REACHED.",
+            "title": "max_in_progress_exports",
+            "type": "integer"
+          },
           "nextPageToken": {
             "description": "Opaque cursor for the next page. Empty when no more results exist.",
             "maxLength": 512,
@@ -103,7 +149,7 @@
       },
       "ledger.read.v1.StatementExport": {
         "additionalProperties": false,
-        "description": "StatementExport is a whole-period account statement produced in the\n background as one CSV file. The file is byte for byte the pages of\n ExportStatement for the same account, asset and period up to\n complete_through, concatenated: the header row, then every row, oldest\n first, in the columns ExportStatementResponse.csv documents.\n\n Download a READY file with an authenticated\n `GET /v1/statements/exports/{exportId}/file`, as the account that created\n it or one with the same access: it returns `text/csv` and supports HTTP\n `Range` requests. With `?redirect=true` it instead answers\n `307 Temporary Redirect` to a URL valid for 60 seconds. An EXPIRED export's\n file answers `410 Gone`.",
+        "description": "StatementExport is a whole-period account statement produced in the\n background as one CSV file.\n\n The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,\n then every row of the period up to complete_through, oldest first. A period\n without movements yields the header row alone. Each row is the effect of\n one entry on one account bucket in one asset. An entry is one ledger\n operation, such as a trade with its fees, a deposit, a withdrawal step or an\n internal transfer.\n\n Columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: stable entry identifier, an unsigned 128-bit integer as a\n   decimal string. It is the `transfer_id` of the entry's first transfer leg\n   on the account, as LedgerReadService.ListTransfers returns it.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   as LedgerReadService.ListTransfers returns it; empty otherwise.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.\n\n A READY file downloads in one of two ways:\n - StatementExportService.GetStatementExportDownloadUrl returns a URL valid\n   for 60 seconds from signing that needs no credentials, so a browser can\n   save the file straight to disk.\n - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the\n   file as `text/csv` and supports HTTP `Range` requests.\n\n Both save the file as `statement-\u003cexportId\u003e.csv`. Before the file is READY\n both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST\n `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;\n an EXPIRED export, or a file already deleted, answers\n STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL\n request for a file with less than 5 seconds left; a CANCELED export\n answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are\n `application/problem+json` whose `code` is the ErrorCode name, such as\n `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403\n PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`\n for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with\n `Retry-After`, when the request can be retried.\n\n An export belongs to the root account whose session or API key created it.\n Any session or API key of that root that may read the export's account can\n read and download it, whichever of them created it. A member of a\n subaccount shared from another root sees only the exports its own root\n created, and the subaccount's owner does not see those: an export of\n another root, or of an account the caller can no longer read, answers\n NOT_FOUND, as one that does not exist.",
         "properties": {
           "assetId": {
             "description": "Public unified asset ID the statement is limited to; 0 for every asset.",
@@ -208,7 +254,8 @@
           "PROCESSING",
           "READY",
           "FAILED",
-          "EXPIRED"
+          "EXPIRED",
+          "CANCELED"
         ],
         "title": "StatementExportStatus",
         "type": "string"
@@ -304,7 +351,7 @@
                       "bytes": "1",
                       "completeThrough": "2025-01-01T00:00:00Z",
                       "createdAt": "2025-01-01T00:00:00Z",
-                      "endTime": "2025-01-01T00:00:00Z",
+                      "endTime": "2025-01-02T00:00:00Z",
                       "expiresAt": "2025-01-01T00:00:00Z",
                       "exportId": "SrnDK1JimAN",
                       "failureReason": "TOO_LARGE",
@@ -316,6 +363,8 @@
                       "subaccountId": "35XKbW6Upmh"
                     }
                   ],
+                  "inProgressExports": 1,
+                  "maxInProgressExports": 1,
                   "nextPageToken": "eyJvZmZzZXQiOjIwMH0"
                 },
                 "schema": {
@@ -385,7 +434,7 @@
                     "bytes": "1",
                     "completeThrough": "2025-01-01T00:00:00Z",
                     "createdAt": "2025-01-01T00:00:00Z",
-                    "endTime": "2025-01-01T00:00:00Z",
+                    "endTime": "2025-01-02T00:00:00Z",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "exportId": "StBY1y2vZHR",
                     "failureReason": "TOO_LARGE",
@@ -459,7 +508,7 @@
                     "bytes": "1",
                     "completeThrough": "2025-01-01T00:00:00Z",
                     "createdAt": "2025-01-01T00:00:00Z",
-                    "endTime": "2025-01-01T00:00:00Z",
+                    "endTime": "2025-01-02T00:00:00Z",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "exportId": "StBY1y2vZHR",
                     "failureReason": "TOO_LARGE",
@@ -502,6 +551,141 @@
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "ledger.read.v1.GetStatementExportRequest",
         "x-poly-response-type": "ledger.read.v1.GetStatementExportResponse"
+      }
+    },
+    "/v1/statements/exports/{export_id}/cancel": {
+      "post": {
+        "description": "Cancel a queued or processing statement export, freeing its place under the root account's limit.",
+        "operationId": "StatementExportService_CancelStatementExport",
+        "parameters": [
+          {
+            "description": "Public ID of the export.\n\nPublic ID, as a base58 string.",
+            "example": "BPrVjjGsXqG",
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "description": "Public ID of the export.",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "title": "export_id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "export": {
+                    "assetId": 100,
+                    "bytes": "1",
+                    "completeThrough": "2025-01-01T00:00:00Z",
+                    "createdAt": "2025-01-01T00:00:00Z",
+                    "endTime": "2025-01-02T00:00:00Z",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "exportId": "StBY1y2vZHR",
+                    "failureReason": "TOO_LARGE",
+                    "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
+                    "movements": "1",
+                    "readyAt": "2025-01-01T00:00:00Z",
+                    "startTime": "2025-01-01T00:00:00Z",
+                    "status": "QUEUED",
+                    "subaccountId": "36VMbrHtUyp"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.CancelStatementExportResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
+        "summary": "Cancel Statement Export",
+        "tags": [
+          "Statement Exports"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "ledger-api-read:ledgererrors",
+        "x-poly-error-proto-pkg": "ledger.read.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "ledger.read.v1.CancelStatementExportRequest",
+        "x-poly-response-type": "ledger.read.v1.CancelStatementExportResponse"
+      }
+    },
+    "/v1/statements/exports/{export_id}/download-url": {
+      "get": {
+        "description": "Get a 60-second URL that downloads a ready statement file without credentials, for a browser to save it.",
+        "operationId": "StatementExportService_GetStatementExportDownloadUrl",
+        "parameters": [
+          {
+            "description": "Public ID of the export.\n\nPublic ID, as a base58 string.",
+            "example": "BPrVjjGsXqG",
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "description": "Public ID of the export.",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "title": "export_id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "expiresAt": "2025-01-01T00:00:00Z",
+                  "filename": "value",
+                  "url": "value"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ledger.read.v1.GetStatementExportDownloadUrlResponse"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
+        "summary": "Get Statement Export Download URL",
+        "tags": [
+          "Statement Exports"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "ledger-api-read:ledgererrors",
+        "x-poly-error-proto-pkg": "ledger.read.v1",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "ledger.read.v1.GetStatementExportDownloadUrlRequest",
+        "x-poly-response-type": "ledger.read.v1.GetStatementExportDownloadUrlResponse"
       }
     }
   },

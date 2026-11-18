@@ -2,14 +2,14 @@
   "services": [
     {
       "name": "swap.quickswap.v1.QuickSwapBrokerService",
-      "doc": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n | Manage the payout address allowlist (RequestVaultAllowlistChange) | yes | no | yes | no | no | no |\n\n A member managing keys, members or the payout address allowlist must also\n send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n An API key's calls count against the broker's read_rps for the key. A\n member's session calls count against the member's account, across every\n broker the member belongs to: changes (vaults, keys, members, invites,\n ownership and the payout address allowlist) against the account's change\n quota, and reads against the account's own read rate. These limits are\n checked before the call runs, so a call they refuse changes nothing: over a\n limit it fails with RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After\n header in seconds, and while a member's change quota cannot be checked, the\n change fails with UNAVAILABLE carrying a RateLimitDetail (REST: the message\n \"rate limit authority unavailable\"). Any other UNAVAILABLE on a change can\n leave its outcome unknown: read the state again before retrying it.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService.",
+      "doc": "QuickSwapBrokerService administers a broker org, over ConnectRPC and REST.\n Every request names its broker. The caller is either the broker's API key,\n sent as a bearer token (see QuickSwapService), or a member's interactive\n session token; a person who is not a member of the broker gets NOT_FOUND /\n BROKER_NOT_FOUND. Each RPC maps to one broker action:\n\n | Action | Owner | Admin | Finance | Affiliate manager | Viewer | API key |\n | --- | --- | --- | --- | --- | --- | --- |\n | Read (GetBroker, ListKeys, ListVaults, GetVault, ListMembers, ListQuickSwaps, GetQuickSwap, GetFeeTotals, GetBrokerStats, ListVaultBalances, ListPayouts, GetPayout, ListUpcomingPayouts, ListVaultPayoutRules, ListVaultLedger, ListVaultAllowlist, ListVaultAllowlistChanges) | yes | yes | yes | yes | yes | yes, except ListMembers |\n | Create vaults (CreateAffiliateVault, SetVaultStatus) | yes | yes | no | yes | no | yes |\n | Manage keys (CreateKey, RotateKey, RevokeKey) | yes | yes | no | no | no | RotateKey of itself only |\n | Manage members (InviteMember, SetMemberRole, RemoveMember) | yes | yes, never the Owner | no | no | no | no |\n | Transfer ownership | yes | no | no | no | no | no |\n | Manage the payout address allowlist (RequestVaultAllowlistChange) | yes | no | yes | no | no | no |\n\n A member managing keys, members or the payout address allowlist must also\n send a fresh step-up proof in\n the X-Auth-Step-Up header, obtained by completing an MFA challenge for\n fresh step-up; each proof authorizes one change. Reads, vaults and a key\n rotating itself need none. A denied action fails with PERMISSION_DENIED /\n ACTION_DENIED, a missing or used proof with PERMISSION_DENIED /\n STEP_UP_REQUIRED.\n\n An API key's calls count against the broker's read_rps for the key. A\n member's session calls count against the member's account, across every\n broker the member belongs to: changes (vaults, keys, members, invites,\n ownership and the payout address allowlist) against the account's change\n quota, and reads against the account's own read rate. These limits are\n checked before the call runs, so a call they refuse changes nothing: over a\n limit it fails with RESOURCE_EXHAUSTED / BROKER_LIMIT and a Retry-After\n header in seconds, and while a member's change quota cannot be checked, the\n change fails with UNAVAILABLE carrying a RateLimitDetail (REST: the message\n \"rate limit authority unavailable\"). Any other UNAVAILABLE on a change can\n leave its outcome unknown: read the state again before retrying it.\n\n REST errors are application/problem+json (see ErrorDetail) with the HTTP\n statuses of QuickSwapService, except that CreateKey and RotateKey answer\n DEADLINE_EXCEEDED with 504: the outcome is unknown and a retry may create\n another key, so list the broker's keys before retrying.",
       "methods": [
         {
           "name": "CreateAffiliateVault",
           "path": "swap.quickswap.v1.QuickSwapBrokerService/CreateAffiliateVault",
           "requestType": "swap.quickswap.v1.CreateAffiliateVaultRequest",
           "responseType": "swap.quickswap.v1.CreateAffiliateVaultResponse",
-          "summary": "CreateAffiliateVault creates, or returns, the affiliate vault with label.",
+          "summary": "Create affiliate vault",
           "doc": "CreateAffiliateVault creates, or returns, the affiliate vault with label.\n Create a vault before the first QuickSwap that credits it: a QuickSwap\n naming a vault that does not exist yet is refused. Concurrent and\n repeated requests with the same label return the same vault. No step-up\n proof is needed.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the broker's vault limit.",
           "tags": [
             "quickswap"
@@ -22,7 +22,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/CreateAffiliateVault",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -45,7 +50,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/CreateKey",
           "requestType": "swap.quickswap.v1.CreateKeyRequest",
           "responseType": "swap.quickswap.v1.CreateKeyResponse",
-          "summary": "CreateKey creates an API key. A broker has at most two working keys.",
+          "summary": "Create API key",
           "doc": "CreateKey creates an API key. A broker has at most two working keys.\n Session token and step-up proof only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - FAILED_PRECONDITION: KEY_LIMIT.",
           "tags": [
             "quickswap"
@@ -57,7 +62,14 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/CreateKey",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "KEY_LIMIT",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -83,7 +95,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetBroker",
           "requestType": "swap.quickswap.v1.GetBrokerRequest",
           "responseType": "swap.quickswap.v1.GetBrokerResponse",
-          "summary": "GetBroker returns the broker, its limits and current usage of them, and",
+          "summary": "Get broker",
           "doc": "GetBroker returns the broker, its limits and current usage of them, and\n the caller's role.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.",
           "tags": [
             "quickswap"
@@ -96,7 +108,11 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetBroker",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value"
@@ -129,7 +145,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetBrokerStats",
           "requestType": "swap.quickswap.v1.GetBrokerStatsRequest",
           "responseType": "swap.quickswap.v1.GetBrokerStatsResponse",
-          "summary": "GetBrokerStats reads the broker's QuickSwap activity in a window.",
+          "summary": "Get broker stats",
           "doc": "GetBrokerStats reads the broker's QuickSwap activity in a window.\n\n Per UTC day or month: QuickSwaps created by status, deposits credited\n and payouts delivered per asset, and the service, broker, affiliate and\n referral fees charged per asset.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INTERNAL: STATS_INCOMPLETE, with the swap_id of a QuickSwap whose\n   records the stats cannot read.",
           "tags": [
             "quickswap"
@@ -142,11 +158,16 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetBrokerStats",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "STATS_INCOMPLETE"
+          ],
           "examples": {
             "request": {
               "broker": "value",
-              "endTime": "2025-01-01T00:00:00Z",
+              "endTime": "2025-01-02T00:00:00Z",
               "groupBy": "DAY",
               "startTime": "2025-01-01T00:00:00Z"
             },
@@ -157,47 +178,74 @@
                   "delivered": [
                     {
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
-                      "assetId": 100
+                      "assetId": 100,
+                      "unvaluedCount": "1",
+                      "valueUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      }
                     }
                   ],
                   "deposited": [
                     {
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
-                      "assetId": 100
+                      "assetId": 100,
+                      "unvaluedCount": "1",
+                      "valueUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      }
                     }
                   ],
                   "fees": [
                     {
                       "affiliateFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      },
+                      "affiliateFeeUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "assetId": 100,
                       "brokerFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      },
+                      "brokerFeeUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "referralFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      },
+                      "referralFeeUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "serviceFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
-                      }
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      },
+                      "serviceFeeUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      },
+                      "unvaluedCount": "1"
                     }
                   ],
                   "periodStart": "2025-01-01T00:00:00Z",
                   "statuses": [
                     {
                       "count": "1",
-                      "status": "ALLOCATING"
+                      "status": "REJECTED"
                     }
                   ]
                 }
@@ -210,7 +258,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetFeeTotals",
           "requestType": "swap.quickswap.v1.GetFeeTotalsRequest",
           "responseType": "swap.quickswap.v1.GetFeeTotalsResponse",
-          "summary": "GetFeeTotals totals the broker and affiliate fees charged in a window.",
+          "summary": "Get fee totals",
           "doc": "GetFeeTotals totals the broker and affiliate fees charged in a window.\n\n Fees charged to the broker's QuickSwaps, per asset, grouped by vault, day\n or month.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INVALID_ARGUMENT: vault_account_id is not a public sub-account ID.",
           "tags": [
             "quickswap"
@@ -223,11 +271,15 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetFeeTotals",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
-              "endTime": "2025-01-01T00:00:00Z",
+              "endTime": "2025-01-02T00:00:00Z",
               "groupBy": "BY_VAULT",
               "startTime": "2025-01-01T00:00:00Z",
               "vaultAccountId": "7563897446546"
@@ -236,12 +288,17 @@
               "totals": [
                 {
                   "amount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "assetId": 100,
                   "periodStart": "2025-01-01T00:00:00Z",
                   "swapCount": "1",
+                  "unvaluedCount": "1",
+                  "valueUsd": {
+                    "baseUnits": "1000000",
+                    "decimals": 6
+                  },
                   "vaultAccountId": "7563897446546"
                 }
               ]
@@ -253,7 +310,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetPayout",
           "requestType": "swap.quickswap.v1.GetPayoutRequest",
           "responseType": "swap.quickswap.v1.GetPayoutResponse",
-          "summary": "GetPayout reads one payout run of the broker's vaults.",
+          "summary": "Get payout",
           "doc": "GetPayout reads one payout run of the broker's vaults.\n\n For a detail view or a link from a ledger entry. Every broker role and\n the broker's API keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or PAYOUT_NOT_FOUND, including a run of\n   another broker's vault.\n - UNAVAILABLE: the payout cannot be read; retry the same request.",
           "tags": [
             "quickswap"
@@ -266,7 +323,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetPayout",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "PAYOUT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -276,8 +338,8 @@
               "payout": {
                 "finishedAt": "2025-01-01T00:00:00Z",
                 "minUsdValue": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "reason": "value",
                 "ruleVersion": 1,
@@ -289,35 +351,35 @@
                 "steps": [
                   {
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "assetId": 100,
                     "available": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "chargedNetworkFee": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "close": "CLOSE_PAID",
                     "destinationAddress": "0x3333333333333333333333333333333333333333",
                     "destinationChainId": "1",
                     "minimum": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "reason": "value",
                     "refundedAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "state": "PAYOUT_STEP_PENDING",
                     "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                     "valueUsd": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     }
                   }
                 ],
@@ -331,7 +393,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetQuickSwap",
           "requestType": "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapRequest",
           "responseType": "swap.quickswap.v1.QuickSwapBrokerServiceGetQuickSwapResponse",
-          "summary": "GetQuickSwap returns the full detail of one of the broker's QuickSwaps.",
+          "summary": "Get broker QuickSwap",
           "doc": "GetQuickSwap returns the full detail of one of the broker's QuickSwaps.\n\n The detail includes its addresses, quote, progress, and requested and\n charged fees. Every broker member role can read it with a session token.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or SWAP_NOT_FOUND, including another\n   broker's QuickSwap.",
           "tags": [
             "quickswap"
@@ -344,7 +406,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetQuickSwap",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "SWAP_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -356,14 +423,22 @@
                   {
                     "accountId": "7563897446546",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "assetId": 100,
-                    "kind": "SERVICE"
+                    "kind": "SERVICE",
+                    "valueUsd": {
+                      "baseUnits": "1000000",
+                      "decimals": 6
+                    }
                   }
                 ],
                 "createdAt": "2025-01-01T00:00:00Z",
+                "deliveredValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "depositInstructions": {
                   "address": "0x3333333333333333333333333333333333333333",
                   "addressRetiresAt": "2025-01-01T00:00:00Z",
@@ -374,11 +449,15 @@
                   "minNativeGasLimit": "1",
                   "zippedAssetId": 100
                 },
+                "depositedValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "deposits": [
                   {
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "confirmations": 1,
                     "creditedAt": "2025-01-01T00:00:00Z",
@@ -400,21 +479,21 @@
                   "completedSlices": 1,
                   "deadline": "2025-01-01T00:00:00Z",
                   "executedInput": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "finishedAt": "2025-01-01T00:00:00Z",
                   "inputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "intermediateRemainder": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "outputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "slices": [
                     {
@@ -425,16 +504,16 @@
                       "finishedAt": "2025-01-01T00:00:00Z",
                       "index": 1,
                       "inputTraded": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "intermediateCarried": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "outputReceived": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "plannedAt": "2025-01-01T00:00:00Z",
                       "reason": "SLOT_MISSED",
@@ -465,20 +544,20 @@
                 "isTerminal": false,
                 "quote": {
                   "depositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expectedAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "fees": [
                     {
                       "accountId": "7563897446546",
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "bps": 1,
                       "kind": "SERVICE",
@@ -487,16 +566,16 @@
                   ],
                   "intermediateAssetId": 100,
                   "maxDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minRate": "value",
                   "quotedAt": "2025-01-01T00:00:00Z",
@@ -515,16 +594,16 @@
                 "screening": {
                   "sourceWallet": "value"
                 },
-                "status": "ALLOCATING",
+                "status": "REJECTED",
                 "swapId": "1",
                 "terminalAt": "2025-01-01T00:00:00Z",
                 "terms": {
                   "amount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "basis": "SOURCE_AMOUNT",
-                  "destinationZippedAssetId": 100,
+                  "destinationZippedAssetId": 101,
                   "execution": {
                     "market": {}
                   },
@@ -539,8 +618,8 @@
                   {
                     "address": "0x3333333333333333333333333333333333333333",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "depositIndex": 1,
                     "finalizedAt": "2025-01-01T00:00:00Z",
@@ -548,16 +627,16 @@
                     "index": 1,
                     "memo": "value",
                     "networkFee": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "role": "DESTINATION",
                     "state": "QUEUED",
                     "submittedAt": "2025-01-01T00:00:00Z",
                     "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                     "unsentAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "zippedAssetId": 100
                   }
@@ -572,7 +651,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/GetVault",
           "requestType": "swap.quickswap.v1.GetVaultRequest",
           "responseType": "swap.quickswap.v1.GetVaultResponse",
-          "summary": "GetVault returns one affiliate vault.",
+          "summary": "Get affiliate vault",
           "doc": "GetVault returns one affiliate vault.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.",
           "tags": [
             "quickswap"
@@ -585,7 +664,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/GetVault",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",
@@ -607,7 +691,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/InviteMember",
           "requestType": "swap.quickswap.v1.InviteMemberRequest",
           "responseType": "swap.quickswap.v1.InviteMemberResponse",
-          "summary": "InviteMember invites a person with any role but OWNER; the person",
+          "summary": "Invite member",
           "doc": "InviteMember invites a person with any role but OWNER; the person\n accepts with their own login. Inviting again replaces the pending invite.\n The invite stays pending only while the caller may still grant its role.\n Session token and step-up proof only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or MEMBER_NOT_FOUND when the account does\n   not exist.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - ALREADY_EXISTS: ALREADY_MEMBER.",
           "tags": [
             "quickswap"
@@ -619,12 +703,20 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/InviteMember",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "ALREADY_MEMBER",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "MEMBER_NOT_FOUND",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",
               "broker": "value",
-              "role": "OWNER"
+              "role": "ADMIN"
             },
             "response": {
               "invite": {
@@ -644,7 +736,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListKeys",
           "requestType": "swap.quickswap.v1.ListKeysRequest",
           "responseType": "swap.quickswap.v1.ListKeysResponse",
-          "summary": "ListKeys lists the broker's API keys, without secrets, a page at a time.",
+          "summary": "List API keys",
           "doc": "ListKeys lists the broker's API keys, without secrets, a page at a time.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or malformed.",
           "tags": [
             "quickswap"
@@ -657,7 +749,11 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListKeys",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -686,7 +782,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListMembers",
           "requestType": "swap.quickswap.v1.ListMembersRequest",
           "responseType": "swap.quickswap.v1.ListMembersResponse",
-          "summary": "ListMembers lists the broker's members and pending invites. Session",
+          "summary": "List members",
           "doc": "ListMembers lists the broker's members and pending invites. Session\n token only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED.",
           "tags": [
             "quickswap"
@@ -698,7 +794,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListMembers",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value"
@@ -730,7 +831,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListMyBrokers",
           "requestType": "swap.quickswap.v1.ListMyBrokersRequest",
           "responseType": "swap.quickswap.v1.ListMyBrokersResponse",
-          "summary": "ListMyBrokers lists the caller's broker memberships and pending invites.",
+          "summary": "List my brokers",
           "doc": "ListMyBrokers lists the caller's broker memberships and pending invites.\n\n Session token only.\n\n Errors:\n - PERMISSION_DENIED: ACTION_DENIED for a broker API key.",
           "tags": [
             "quickswap"
@@ -742,7 +843,11 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListMyBrokers",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT"
+          ],
           "examples": {
             "response": {
               "invites": [
@@ -771,7 +876,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListPayouts",
           "requestType": "swap.quickswap.v1.ListPayoutsRequest",
           "responseType": "swap.quickswap.v1.ListPayoutsResponse",
-          "summary": "ListPayouts lists the payout runs of the broker's vaults.",
+          "summary": "List payouts",
           "doc": "ListPayouts lists the payout runs of the broker's vaults.\n\n Newest first, filtered by vault, status and scheduled slot. Every broker\n role and the broker's API keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is\n   not the broker's.\n - INVALID_ARGUMENT: a page_token from another broker, other filters or\n   malformed.\n - UNAVAILABLE: the payouts cannot be read; retry the same request.",
           "tags": [
             "quickswap"
@@ -784,11 +889,16 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListPayouts",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
-              "endTime": "2025-01-01T00:00:00Z",
+              "endTime": "2025-01-02T00:00:00Z",
               "limit": 100,
               "pageToken": "eyJvZmZzZXQiOjEwMH0",
               "startTime": "2025-01-01T00:00:00Z",
@@ -803,8 +913,8 @@
                 {
                   "finishedAt": "2025-01-01T00:00:00Z",
                   "minUsdValue": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "reason": "value",
                   "ruleVersion": 1,
@@ -816,35 +926,35 @@
                   "steps": [
                     {
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "assetId": 100,
                       "available": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "chargedNetworkFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "close": "CLOSE_PAID",
                       "destinationAddress": "0x3333333333333333333333333333333333333333",
                       "destinationChainId": "1",
                       "minimum": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "reason": "value",
                       "refundedAmount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "state": "PAYOUT_STEP_PENDING",
                       "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                       "valueUsd": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       }
                     }
                   ],
@@ -859,7 +969,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListQuickSwaps",
           "requestType": "swap.quickswap.v1.ListQuickSwapsRequest",
           "responseType": "swap.quickswap.v1.ListQuickSwapsResponse",
-          "summary": "ListQuickSwaps lists the broker's QuickSwaps.",
+          "summary": "List QuickSwaps",
           "doc": "ListQuickSwaps lists the broker's QuickSwaps.\n\n Newest first, filtered by vault, status and creation time.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INVALID_ARGUMENT: vault_account_id is not a public sub-account ID, or\n   a page_token from another broker, other filters or malformed.",
           "tags": [
             "quickswap"
@@ -872,16 +982,20 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListQuickSwaps",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
-              "endTime": "2025-01-01T00:00:00Z",
+              "endTime": "2025-01-02T00:00:00Z",
               "limit": 100,
               "pageToken": "eyJvZmZzZXQiOjEwMH0",
               "startTime": "2025-01-01T00:00:00Z",
               "statuses": [
-                "ALLOCATING"
+                "REJECTED"
               ],
               "vaultAccountId": "7563897446546"
             },
@@ -893,14 +1007,26 @@
                     {
                       "accountId": "7563897446546",
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "assetId": 100,
-                      "kind": "SERVICE"
+                      "kind": "SERVICE",
+                      "valueUsd": {
+                        "baseUnits": "1000000",
+                        "decimals": 6
+                      }
                     }
                   ],
                   "createdAt": "2025-01-01T00:00:00Z",
+                  "deliveredValueUsd": {
+                    "baseUnits": "1000000",
+                    "decimals": 6
+                  },
+                  "depositedValueUsd": {
+                    "baseUnits": "1000000",
+                    "decimals": 6
+                  },
                   "fees": {
                     "affiliates": [
                       {
@@ -913,15 +1039,15 @@
                   "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                   "isTerminal": false,
                   "reason": "SOURCE_SCREENING_FAILED",
-                  "status": "ALLOCATING",
+                  "status": "REJECTED",
                   "swapId": "1",
                   "terms": {
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "basis": "SOURCE_AMOUNT",
-                    "destinationZippedAssetId": 100,
+                    "destinationZippedAssetId": 101,
                     "execution": {
                       "market": {}
                     },
@@ -941,7 +1067,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListUpcomingPayouts",
           "requestType": "swap.quickswap.v1.ListUpcomingPayoutsRequest",
           "responseType": "swap.quickswap.v1.ListUpcomingPayoutsResponse",
-          "summary": "ListUpcomingPayouts previews the next payout run of each vault.",
+          "summary": "List upcoming payouts",
           "doc": "ListUpcomingPayouts previews the next payout run of each vault.\n\n The preview uses the vault's balances now: when the run starts, whether\n it would pay, and per asset what it would pay, what would stay and why,\n and the expected network fee. Every broker role and the broker's API keys\n can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault filter, or\n   malformed.\n - UNAVAILABLE: a preview cannot be read; no partial page is returned.",
           "tags": [
             "quickswap"
@@ -954,7 +1080,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListUpcomingPayouts",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -970,41 +1101,41 @@
                     {
                       "assetId": 100,
                       "available": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "destinationAddress": "0x3333333333333333333333333333333333333333",
                       "destinationChainId": "1",
                       "estimatedNetworkFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "estimatedNetworkFeeSampledAt": "2025-01-01T00:00:00Z",
                       "heldBack": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "holdReason": "value",
                       "minimum": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "payable": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "payableFrom": "2025-01-01T00:00:00Z",
                       "pricedAt": "2025-01-01T00:00:00Z",
                       "valueUsd": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       }
                     }
                   ],
                   "computedAt": "2025-01-01T00:00:00Z",
                   "minUsdValue": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "nextRunAt": "2025-01-01T00:00:00Z",
                   "pause": {
@@ -1025,7 +1156,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultAllowlist",
           "requestType": "swap.quickswap.v1.ListVaultAllowlistRequest",
           "responseType": "swap.quickswap.v1.ListVaultAllowlistResponse",
-          "summary": "ListVaultAllowlist reads one vault's payout address allowlist.",
+          "summary": "List vault payout addresses",
           "doc": "ListVaultAllowlist reads one vault's payout address allowlist.\n\n The allowlist holds the destinations the vault's payouts and withdrawals\n may pay, each with when it becomes payable. A destination is payable 24\n hours after it is listed. Every broker role and the broker's API keys can\n read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - UNAVAILABLE: the allowlist or the vault's payout rule cannot be read;\n   no partial list is returned.",
           "tags": [
             "quickswap"
@@ -1038,7 +1169,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaultAllowlist",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1066,7 +1202,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultAllowlistChanges",
           "requestType": "swap.quickswap.v1.ListVaultAllowlistChangesRequest",
           "responseType": "swap.quickswap.v1.ListVaultAllowlistChangesResponse",
-          "summary": "ListVaultAllowlistChanges lists one vault's payout address allowlist",
+          "summary": "List vault payout address changes",
           "doc": "ListVaultAllowlistChanges lists one vault's payout address allowlist\n changes, newest first, pending ones included. Every broker role and the\n broker's API keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault, or\n   malformed.",
           "tags": [
             "quickswap"
@@ -1079,7 +1215,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaultAllowlistChanges",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1113,7 +1254,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultBalances",
           "requestType": "swap.quickswap.v1.ListVaultBalancesRequest",
           "responseType": "swap.quickswap.v1.ListVaultBalancesResponse",
-          "summary": "ListVaultBalances reads the current balances of the broker's vaults.",
+          "summary": "List vault balances",
           "doc": "ListVaultBalances reads the current balances of the broker's vaults.\n\n Covers the default vault and every affiliate vault. Every broker role\n and the broker's API keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault filter, or\n   malformed.\n - UNAVAILABLE: a balance cannot be read; no partial page is returned.",
           "tags": [
             "quickswap"
@@ -1126,7 +1267,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaultBalances",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1142,13 +1288,13 @@
                   "assets": [
                     {
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "assetId": 100,
                       "pendingOutgoing": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       }
                     }
                   ],
@@ -1163,7 +1309,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultLedger",
           "requestType": "swap.quickswap.v1.ListVaultLedgerRequest",
           "responseType": "swap.quickswap.v1.ListVaultLedgerResponse",
-          "summary": "ListVaultLedger lists the movements of the broker's vaults' funds.",
+          "summary": "List vault ledger",
           "doc": "ListVaultLedger lists the movements of the broker's vaults' funds.\n\n Newest first: each fee a QuickSwap credited, each payout that left a\n vault with how it ended, and each refund of a rejected payout to the\n vault's smart account. It carries no running balance; read the current\n balance with ListVaultBalances. Every broker role and the broker's API\n keys can read, without step-up.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is\n   not the broker's.\n - INVALID_ARGUMENT: a page_token from another broker, other filters or\n   malformed.\n - UNAVAILABLE: the ledger cannot be read; retry the same request.",
           "tags": [
             "quickswap"
@@ -1176,11 +1322,16 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaultLedger",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
-              "endTime": "2025-01-01T00:00:00Z",
+              "endTime": "2025-01-02T00:00:00Z",
               "limit": 100,
               "pageToken": "eyJvZmZzZXQiOjEwMH0",
               "startTime": "2025-01-01T00:00:00Z",
@@ -1190,30 +1341,30 @@
               "entries": [
                 {
                   "amount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "assetId": 100,
                   "feeCredit": {
                     "creditId": "1",
                     "destinationAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "destinationZippedAssetId": 100,
                     "feeBps": 1,
                     "feeKind": "SERVICE",
                     "quotedDestinationAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "quotedSourceAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "sourceAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "sourceZippedAssetId": 100,
                     "swapId": "1"
@@ -1232,7 +1383,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaultPayoutRules",
           "requestType": "swap.quickswap.v1.ListVaultPayoutRulesRequest",
           "responseType": "swap.quickswap.v1.ListVaultPayoutRulesResponse",
-          "summary": "ListVaultPayoutRules reads the payout rule of each of the broker's vaults.",
+          "summary": "List vault payout rules",
           "doc": "ListVaultPayoutRules reads the payout rule of each of the broker's vaults.\n\n Each vault also lists the assets it holds or was credited in that its\n rule pays no destination for. Every broker role and the broker's API keys\n can read, without step-up; only Owner and Finance members change rules.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or vault filter, or\n   malformed.\n - UNAVAILABLE: a rule or balance cannot be read; no partial page is\n   returned.",
           "tags": [
             "quickswap"
@@ -1245,7 +1396,12 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaultPayoutRules",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1261,8 +1417,8 @@
                     {
                       "assetId": 100,
                       "balance": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       }
                     }
                   ],
@@ -1272,28 +1428,28 @@
                       "destinationAddress": "0x3333333333333333333333333333333333333333",
                       "destinationChainId": "1",
                       "estimatedNetworkFee": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "estimatedNetworkFeeSampledAt": "2025-01-01T00:00:00Z",
                       "maxAmount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "minAmount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "minFloor": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       }
                     }
                   ],
                   "enabled": false,
                   "minUsdValue": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "pause": {
                     "assetId": 100,
@@ -1321,7 +1477,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/ListVaults",
           "requestType": "swap.quickswap.v1.ListVaultsRequest",
           "responseType": "swap.quickswap.v1.ListVaultsResponse",
-          "summary": "ListVaults lists the broker's affiliate vaults.",
+          "summary": "List affiliate vaults",
           "doc": "ListVaults lists the broker's affiliate vaults.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND.\n - INVALID_ARGUMENT: a page_token from another broker or malformed.",
           "tags": [
             "quickswap"
@@ -1334,7 +1490,11 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/ListVaults",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1360,7 +1520,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/RemoveMember",
           "requestType": "swap.quickswap.v1.RemoveMemberRequest",
           "responseType": "swap.quickswap.v1.RemoveMemberResponse",
-          "summary": "RemoveMember removes a member, ending their access immediately, or",
+          "summary": "Remove member",
           "doc": "RemoveMember removes a member, ending their access immediately, or\n cancels the person's pending invite. The Owner cannot be removed. A\n removed member's pending invites are cancelled in the same change.\n Session token and step-up proof only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - FAILED_PRECONDITION: OWNER_IMMUTABLE.",
           "tags": [
             "quickswap"
@@ -1372,7 +1532,15 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/RemoveMember",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "MEMBER_NOT_FOUND",
+            "OWNER_IMMUTABLE",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",
@@ -1386,7 +1554,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/RequestVaultAllowlistChange",
           "requestType": "swap.quickswap.v1.RequestVaultAllowlistChangeRequest",
           "responseType": "swap.quickswap.v1.RequestVaultAllowlistChangeResponse",
-          "summary": "RequestVaultAllowlistChange adds a payout address to a vault's allowlist,",
+          "summary": "Request vault payout address change",
           "doc": "RequestVaultAllowlistChange adds a payout address to a vault's allowlist,\n or removes one.\n\n Only Owner and Finance members can, each change with its own fresh\n step-up proof. The change is returned PENDING; ListVaultAllowlistChanges\n shows how it ends. A vault has at most one pending change. An added\n destination becomes payable 24 hours after it is listed\n (VaultAllowlistEntry.payable_from).\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND;\n   ALLOWLIST_DESTINATION_NOT_LISTED for a removal.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - INVALID_ARGUMENT: ALLOWLIST_DESTINATION_INVALID, or a label on a\n   removal or with leading or trailing whitespace.\n - ALREADY_EXISTS: ALLOWLIST_DESTINATION_EXISTS.\n - FAILED_PRECONDITION: ALLOWLIST_FULL, ALLOWLIST_DESTINATION_IN_USE,\n   ALLOWLIST_CHANGE_PENDING or VAULT_ALLOWLIST_NOT_READY.\n - UNAVAILABLE: outcome unknown; read ListVaultAllowlistChanges before\n   requesting again.",
           "tags": [
             "quickswap"
@@ -1398,7 +1566,21 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/RequestVaultAllowlistChange",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "ALLOWLIST_CHANGE_PENDING",
+            "ALLOWLIST_DESTINATION_EXISTS",
+            "ALLOWLIST_DESTINATION_INVALID",
+            "ALLOWLIST_DESTINATION_IN_USE",
+            "ALLOWLIST_DESTINATION_NOT_LISTED",
+            "ALLOWLIST_FULL",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "STEP_UP_REQUIRED",
+            "VAULT_ALLOWLIST_NOT_READY",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "action": "ADD_DESTINATION",
@@ -1431,7 +1613,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/RespondToInvite",
           "requestType": "swap.quickswap.v1.RespondToInviteRequest",
           "responseType": "swap.quickswap.v1.RespondToInviteResponse",
-          "summary": "RespondToInvite accepts or declines a pending invite addressed to the",
+          "summary": "Respond to invite",
           "doc": "RespondToInvite accepts or declines a pending invite addressed to the\n caller. Session token only; no step-up proof is needed. An invite is\n accepted only while the member who sent it may still grant its role.\n SetMemberRole, RemoveMember and TransferOwnership cancel the invites\n they take that from; accepting any other such invite cancels it.\n\n Errors:\n - NOT_FOUND: INVITE_NOT_FOUND.\n - ALREADY_EXISTS: ALREADY_MEMBER.\n - FAILED_PRECONDITION: INVITE_VOID.",
           "tags": [
             "quickswap"
@@ -1443,7 +1625,13 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/RespondToInvite",
+          "errorCodes": [
+            "ALREADY_MEMBER",
+            "BROKER_LIMIT",
+            "INVITE_NOT_FOUND",
+            "INVITE_VOID"
+          ],
           "examples": {
             "request": {
               "accept": false,
@@ -1463,7 +1651,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/RevokeKey",
           "requestType": "swap.quickswap.v1.RevokeKeyRequest",
           "responseType": "swap.quickswap.v1.RevokeKeyResponse",
-          "summary": "RevokeKey revokes a key immediately. The broker's last key that works",
+          "summary": "Revoke API key",
           "doc": "RevokeKey revokes a key immediately. The broker's last key that works\n without an expiry cannot be revoked. Session token and step-up proof\n only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or KEY_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - FAILED_PRECONDITION: LAST_KEY.",
           "tags": [
             "quickswap"
@@ -1475,7 +1663,15 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/RevokeKey",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "KEY_NOT_FOUND",
+            "LAST_KEY",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1500,7 +1696,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/RotateKey",
           "requestType": "swap.quickswap.v1.RotateKeyRequest",
           "responseType": "swap.quickswap.v1.RotateKeyResponse",
-          "summary": "RotateKey replaces a working key by a new one. The old key keeps working",
+          "summary": "Rotate API key",
           "doc": "RotateKey replaces a working key by a new one. The old key keeps working\n until the overlap ends, then only the new key does. A broker API key may\n rotate itself without a step-up proof; a member needs a session token and\n step-up proof.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or KEY_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - FAILED_PRECONDITION: KEY_LIMIT, when the broker would have more than\n   two working keys during the overlap.",
           "tags": [
             "quickswap"
@@ -1513,7 +1709,15 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/RotateKey",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "KEY_LIMIT",
+            "KEY_NOT_FOUND",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "broker": "value",
@@ -1550,7 +1754,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/SetMemberRole",
           "requestType": "swap.quickswap.v1.SetMemberRoleRequest",
           "responseType": "swap.quickswap.v1.SetMemberRoleResponse",
-          "summary": "SetMemberRole changes a member's role to any role but OWNER. The Owner's",
+          "summary": "Set member role",
           "doc": "SetMemberRole changes a member's role to any role but OWNER. The Owner's\n role cannot be changed; transfer ownership instead. The member's pending\n invites that the new role may not grant are cancelled in the same\n change. Session token and step-up proof only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.\n - FAILED_PRECONDITION: OWNER_IMMUTABLE.",
           "tags": [
             "quickswap"
@@ -1562,12 +1766,20 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/SetMemberRole",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "MEMBER_NOT_FOUND",
+            "OWNER_IMMUTABLE",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",
               "broker": "value",
-              "role": "OWNER"
+              "role": "ADMIN"
             },
             "response": {}
           }
@@ -1577,7 +1789,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/SetVaultStatus",
           "requestType": "swap.quickswap.v1.SetVaultStatusRequest",
           "responseType": "swap.quickswap.v1.SetVaultStatusResponse",
-          "summary": "SetVaultStatus enables or disables an affiliate vault for new",
+          "summary": "Set affiliate vault status",
           "doc": "SetVaultStatus enables or disables an affiliate vault for new\n QuickSwaps. No step-up proof is needed.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED.",
           "tags": [
             "quickswap"
@@ -1590,7 +1802,13 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/SetVaultStatus",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "VAULT_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",
@@ -1613,7 +1831,7 @@
           "path": "swap.quickswap.v1.QuickSwapBrokerService/TransferOwnership",
           "requestType": "swap.quickswap.v1.TransferOwnershipRequest",
           "responseType": "swap.quickswap.v1.TransferOwnershipResponse",
-          "summary": "TransferOwnership makes another member the Owner of the broker.",
+          "summary": "Transfer ownership",
           "doc": "TransferOwnership makes another member the Owner of the broker.\n\n The caller, the current Owner, becomes an Admin in the same change, and\n the caller's pending invites that an Admin may not grant (Finance) are\n cancelled. Session token and step-up proof only.\n\n Errors:\n - NOT_FOUND: BROKER_NOT_FOUND or MEMBER_NOT_FOUND.\n - PERMISSION_DENIED: ACTION_DENIED or STEP_UP_REQUIRED.",
           "tags": [
             "quickswap"
@@ -1625,7 +1843,14 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapBrokerService/TransferOwnership",
+          "errorCodes": [
+            "ACTION_DENIED",
+            "BROKER_LIMIT",
+            "BROKER_NOT_FOUND",
+            "MEMBER_NOT_FOUND",
+            "STEP_UP_REQUIRED"
+          ],
           "examples": {
             "request": {
               "accountId": "7563897446546",

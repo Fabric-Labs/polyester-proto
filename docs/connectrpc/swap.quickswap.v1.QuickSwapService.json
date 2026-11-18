@@ -2,15 +2,15 @@
   "services": [
     {
       "name": "swap.quickswap.v1.QuickSwapService",
-      "doc": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. The broker's members create,\n rotate and revoke keys with QuickSwapBrokerService, and a key may rotate\n itself.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for\n IDEMPOTENCY_CONFLICT, 413 when a request body is too large, 429 for\n RESOURCE_EXHAUSTED (with a Retry-After header when the request rate was\n exceeded), 500 for an internal error, 503 for UNAVAILABLE and 504 for\n DEADLINE_EXCEEDED.",
+      "doc": "QuickSwapService is the broker-only QuickSwap API, served over ConnectRPC\n and REST. Every RPC requires the broker's API key, sent as a bearer token\n in the Authorization header; the broker is derived from it, never from the\n request. End users need no account. Brokers see only their\n own QuickSwaps.\n\n The broker API key is a server credential. Call this API from the broker's\n backend, never from a browser or mobile app. The broker's members create,\n rotate and revoke keys with QuickSwapBrokerService, and a key may rotate\n itself.\n\n A QuickSwap's status advances as the deposit and execution progress; poll\n GetQuickSwap to follow it, at most once every 5 seconds per QuickSwap while\n it is not terminal. Polling can stop once is_terminal is true.\n\n REST errors are application/problem+json (see ErrorDetail) with these HTTP\n statuses: 400 for INVALID_ARGUMENT and FAILED_PRECONDITION, 401 for\n UNAUTHENTICATED, 403 for PERMISSION_DENIED, 404 for NOT_FOUND, 409 for\n ALREADY_EXISTS (IDEMPOTENCY_CONFLICT) and ABORTED (ADDRESS_CONFLICT), 413\n when a request body is too large, 429 for RESOURCE_EXHAUSTED (with a\n Retry-After header when the request rate was exceeded), 500 for an\n internal error, and 503 for UNAVAILABLE and DEADLINE_EXCEEDED.",
       "methods": [
         {
           "name": "CreateQuickSwap",
           "path": "swap.quickswap.v1.QuickSwapService/CreateQuickSwap",
           "requestType": "swap.quickswap.v1.CreateQuickSwapRequest",
           "responseType": "swap.quickswap.v1.CreateQuickSwapResponse",
-          "summary": "CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and",
-          "doc": "CreateQuickSwap creates the QuickSwap for idempotency_key, prices it and\n allocates its deposit address. It is idempotent per broker and key: a\n repeated or concurrent request with the same body returns the same\n QuickSwap, quote and address, so every unknown outcome is resolved by\n repeating the request unchanged.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,\n   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID or FEES_INVALID.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE,\n   REFUND_ADDRESS_REQUIRED or AFFILIATE_VAULT_UNKNOWN; nothing is bound to\n   the key.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.\n - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its\n   address automatically; follow it with GetQuickSwap or the same request.\n - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address and is\n   EXPIRED (DEPOSIT_ADDRESS_CONFLICT); every repeat returns this error;\n   create a new one with a new idempotency key.\n - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;\n   retry the same request.\n - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT; nothing is bound to the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
+          "summary": "Create QuickSwap",
+          "doc": "CreateQuickSwap creates or returns the QuickSwap for an idempotency key.\n\n A new QuickSwap is priced and gets its deposit address. The call is\n idempotent per broker and key: a repeated or concurrent request with the\n same body returns the same QuickSwap, quote and address, so every\n unknown outcome is resolved by repeating the request unchanged. A\n declared source_wallet is risk screened before the deposit address is\n issued.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH, DESTINATION_ADDRESS_INVALID, RETURN_ADDRESS_INVALID,\n   REFUND_ADDRESS_INVALID, SOURCE_WALLET_INVALID, FEES_INVALID,\n   REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, ROUTE_SUSPENDED,\n   PROTECTION_UNACHIEVABLE, REFUND_ADDRESS_REQUIRED,\n   AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN or\n   REFERRAL_PARTNER_INACTIVE; nothing is bound to the key.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original QuickSwap stands.\n - UNAVAILABLE: ADDRESS_UNAVAILABLE; the QuickSwap is kept and gets its\n   address automatically; follow it with GetQuickSwap or the same request.\n - ABORTED: ADDRESS_CONFLICT; the QuickSwap never gets an address and is\n   EXPIRED (DEPOSIT_ADDRESS_CONFLICT); every repeat returns this error;\n   create a new one with a new idempotency key.\n - UNAVAILABLE, DEADLINE_EXCEEDED: unknown outcome or QUOTE_UNAVAILABLE;\n   retry the same request.\n - PERMISSION_DENIED: BROKER_DISABLED; nothing is bound to the key.\n - PERMISSION_DENIED: SOURCE_WALLET_REJECTED when the source_wallet failed\n   risk screening; the QuickSwap (swap_id in the error) is REJECTED\n   without a deposit address, and every repeat returns this error.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT; nothing is bound to the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "tags": [
             "quickswap"
           ],
@@ -21,15 +21,34 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapService/CreateQuickSwap",
+          "errorCodes": [
+            "ADDRESS_CONFLICT",
+            "ADDRESS_UNAVAILABLE",
+            "AFFILIATE_VAULT_UNKNOWN",
+            "AMOUNT_OUT_OF_RANGE",
+            "BROKER_DISABLED",
+            "BROKER_LIMIT",
+            "DECIMALS_MISMATCH",
+            "DESTINATION_ADDRESS_INVALID",
+            "FEES_INVALID",
+            "IDEMPOTENCY_CONFLICT",
+            "PROTECTION_UNACHIEVABLE",
+            "QUOTE_UNAVAILABLE",
+            "REFERRAL_CODE_INVALID",
+            "REFERRAL_CODE_UNKNOWN",
+            "REFERRAL_NOT_SUPPORTED",
+            "REFERRAL_PARTNER_INACTIVE",
+            "REFUND_ADDRESS_INVALID",
+            "REFUND_ADDRESS_REQUIRED",
+            "RETURN_ADDRESS_INVALID",
+            "ROUTE_SUSPENDED",
+            "ROUTE_UNSUPPORTED",
+            "SOURCE_WALLET_INVALID",
+            "SOURCE_WALLET_REJECTED"
+          ],
           "examples": {
             "request": {
-              "affiliates": [
-                {
-                  "accountId": "7563897446546",
-                  "bps": 1
-                }
-              ],
               "brokerBps": 300,
               "destinationAddress": "0x3333333333333333333333333333333333333333",
               "destinationMemo": "value",
@@ -43,11 +62,11 @@
               "sourceWallet": "value",
               "terms": {
                 "amount": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "basis": "SOURCE_AMOUNT",
-                "destinationZippedAssetId": 100,
+                "destinationZippedAssetId": 101,
                 "execution": {
                   "market": {}
                 },
@@ -63,14 +82,22 @@
                   {
                     "accountId": "7563897446546",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "assetId": 100,
-                    "kind": "SERVICE"
+                    "kind": "SERVICE",
+                    "valueUsd": {
+                      "baseUnits": "1000000",
+                      "decimals": 6
+                    }
                   }
                 ],
                 "createdAt": "2025-01-01T00:00:00Z",
+                "deliveredValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "depositInstructions": {
                   "address": "0x3333333333333333333333333333333333333333",
                   "addressRetiresAt": "2025-01-01T00:00:00Z",
@@ -81,11 +108,15 @@
                   "minNativeGasLimit": "1",
                   "zippedAssetId": 100
                 },
+                "depositedValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "deposits": [
                   {
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "confirmations": 1,
                     "creditedAt": "2025-01-01T00:00:00Z",
@@ -107,21 +138,21 @@
                   "completedSlices": 1,
                   "deadline": "2025-01-01T00:00:00Z",
                   "executedInput": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "finishedAt": "2025-01-01T00:00:00Z",
                   "inputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "intermediateRemainder": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "outputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "slices": [
                     {
@@ -132,16 +163,16 @@
                       "finishedAt": "2025-01-01T00:00:00Z",
                       "index": 1,
                       "inputTraded": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "intermediateCarried": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "outputReceived": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "plannedAt": "2025-01-01T00:00:00Z",
                       "reason": "SLOT_MISSED",
@@ -172,20 +203,20 @@
                 "isTerminal": false,
                 "quote": {
                   "depositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expectedAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "fees": [
                     {
                       "accountId": "7563897446546",
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "bps": 1,
                       "kind": "SERVICE",
@@ -194,16 +225,16 @@
                   ],
                   "intermediateAssetId": 100,
                   "maxDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minRate": "value",
                   "quotedAt": "2025-01-01T00:00:00Z",
@@ -222,16 +253,16 @@
                 "screening": {
                   "sourceWallet": "value"
                 },
-                "status": "ALLOCATING",
+                "status": "REJECTED",
                 "swapId": "1",
                 "terminalAt": "2025-01-01T00:00:00Z",
                 "terms": {
                   "amount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "basis": "SOURCE_AMOUNT",
-                  "destinationZippedAssetId": 100,
+                  "destinationZippedAssetId": 101,
                   "execution": {
                     "market": {}
                   },
@@ -246,8 +277,8 @@
                   {
                     "address": "0x3333333333333333333333333333333333333333",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "depositIndex": 1,
                     "finalizedAt": "2025-01-01T00:00:00Z",
@@ -255,16 +286,16 @@
                     "index": 1,
                     "memo": "value",
                     "networkFee": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "role": "DESTINATION",
                     "state": "QUEUED",
                     "submittedAt": "2025-01-01T00:00:00Z",
                     "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                     "unsentAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "zippedAssetId": 100
                   }
@@ -279,7 +310,7 @@
           "path": "swap.quickswap.v1.QuickSwapService/GetQuickSwap",
           "requestType": "swap.quickswap.v1.GetQuickSwapRequest",
           "responseType": "swap.quickswap.v1.GetQuickSwapResponse",
-          "summary": "GetQuickSwap returns the current state of one QuickSwap by swap_id or by",
+          "summary": "Get QuickSwap",
           "doc": "GetQuickSwap returns the current state of one QuickSwap by swap_id or by\n idempotency key.\n\n Errors:\n - INVALID_ARGUMENT: malformed selector.\n - NOT_FOUND: SWAP_NOT_FOUND.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the read request rate of the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "tags": [
             "quickswap"
@@ -291,7 +322,11 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapService/GetQuickSwap",
+          "errorCodes": [
+            "BROKER_LIMIT",
+            "SWAP_NOT_FOUND"
+          ],
           "examples": {
             "request": {
               "swapId": "1"
@@ -302,14 +337,22 @@
                   {
                     "accountId": "7563897446546",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "assetId": 100,
-                    "kind": "SERVICE"
+                    "kind": "SERVICE",
+                    "valueUsd": {
+                      "baseUnits": "1000000",
+                      "decimals": 6
+                    }
                   }
                 ],
                 "createdAt": "2025-01-01T00:00:00Z",
+                "deliveredValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "depositInstructions": {
                   "address": "0x3333333333333333333333333333333333333333",
                   "addressRetiresAt": "2025-01-01T00:00:00Z",
@@ -320,11 +363,15 @@
                   "minNativeGasLimit": "1",
                   "zippedAssetId": 100
                 },
+                "depositedValueUsd": {
+                  "baseUnits": "1000000",
+                  "decimals": 6
+                },
                 "deposits": [
                   {
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "confirmations": 1,
                     "creditedAt": "2025-01-01T00:00:00Z",
@@ -346,21 +393,21 @@
                   "completedSlices": 1,
                   "deadline": "2025-01-01T00:00:00Z",
                   "executedInput": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "finishedAt": "2025-01-01T00:00:00Z",
                   "inputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "intermediateRemainder": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "outputAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "slices": [
                     {
@@ -371,16 +418,16 @@
                       "finishedAt": "2025-01-01T00:00:00Z",
                       "index": 1,
                       "inputTraded": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "intermediateCarried": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "outputReceived": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "plannedAt": "2025-01-01T00:00:00Z",
                       "reason": "SLOT_MISSED",
@@ -411,20 +458,20 @@
                 "isTerminal": false,
                 "quote": {
                   "depositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expectedAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "expiresAt": "2025-01-01T00:00:00Z",
                   "fees": [
                     {
                       "accountId": "7563897446546",
                       "amount": {
-                        "baseUnits": "value",
-                        "decimals": 36
+                        "baseUnits": "1000000",
+                        "decimals": 6
                       },
                       "bps": 1,
                       "kind": "SERVICE",
@@ -433,16 +480,16 @@
                   ],
                   "intermediateAssetId": 100,
                   "maxDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minAmountOut": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minDepositAmount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "minRate": "value",
                   "quotedAt": "2025-01-01T00:00:00Z",
@@ -461,16 +508,16 @@
                 "screening": {
                   "sourceWallet": "value"
                 },
-                "status": "ALLOCATING",
+                "status": "REJECTED",
                 "swapId": "1",
                 "terminalAt": "2025-01-01T00:00:00Z",
                 "terms": {
                   "amount": {
-                    "baseUnits": "value",
-                    "decimals": 36
+                    "baseUnits": "1000000",
+                    "decimals": 6
                   },
                   "basis": "SOURCE_AMOUNT",
-                  "destinationZippedAssetId": 100,
+                  "destinationZippedAssetId": 101,
                   "execution": {
                     "market": {}
                   },
@@ -485,8 +532,8 @@
                   {
                     "address": "0x3333333333333333333333333333333333333333",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "depositIndex": 1,
                     "finalizedAt": "2025-01-01T00:00:00Z",
@@ -494,16 +541,16 @@
                     "index": 1,
                     "memo": "value",
                     "networkFee": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "role": "DESTINATION",
                     "state": "QUEUED",
                     "submittedAt": "2025-01-01T00:00:00Z",
                     "txHash": "0xabc123def4567890abc123def4567890abc123def4567890abc123def4567890",
                     "unsentAmount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "zippedAssetId": 100
                   }
@@ -518,8 +565,8 @@
           "path": "swap.quickswap.v1.QuickSwapService/QuoteQuickSwap",
           "requestType": "swap.quickswap.v1.QuoteQuickSwapRequest",
           "responseType": "swap.quickswap.v1.QuoteQuickSwapResponse",
-          "summary": "QuoteQuickSwap prices terms without creating a QuickSwap or reserving a",
-          "doc": "QuoteQuickSwap prices terms without creating a QuickSwap or reserving a\n deposit address. The quote's output and fees are estimates: the fees\n charged are their rates applied to the actual execution once the\n deposit is credited. The quote states whether the route needs a refund\n address.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH or FEES_INVALID.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, PROTECTION_UNACHIEVABLE or\n   AFFILIATE_VAULT_UNKNOWN.\n - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.\n - PERMISSION_DENIED: BROKER_DISABLED.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the quote request rate of the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
+          "summary": "Quote QuickSwap",
+          "doc": "QuoteQuickSwap prices terms without reserving a deposit address.\n\n Nothing is created. The quote's output and fees are estimates: the fees\n charged are their rates applied to the actual execution once the\n deposit is credited. The quote states whether the route needs a refund\n address. A declared source_wallet is risk screened before the quote is\n returned.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, AMOUNT_OUT_OF_RANGE,\n   DECIMALS_MISMATCH, SOURCE_WALLET_INVALID, FEES_INVALID,\n   REFERRAL_CODE_INVALID or REFERRAL_NOT_SUPPORTED.\n - FAILED_PRECONDITION: ROUTE_UNSUPPORTED, ROUTE_SUSPENDED,\n   PROTECTION_UNACHIEVABLE, AFFILIATE_VAULT_UNKNOWN, REFERRAL_CODE_UNKNOWN\n   or REFERRAL_PARTNER_INACTIVE.\n - UNAVAILABLE: QUOTE_UNAVAILABLE; retry later.\n - PERMISSION_DENIED: BROKER_DISABLED, or SOURCE_WALLET_REJECTED when the\n   source_wallet failed risk screening; nothing is bound.\n - RESOURCE_EXHAUSTED: BROKER_LIMIT, the quote request rate of the key.\n - UNAUTHENTICATED: missing or invalid broker API key.",
           "tags": [
             "quickswap"
           ],
@@ -530,24 +577,37 @@
           "mfaRequirement": "none",
           "stability": "stable",
           "errorProtoPkg": "swap.quickswap.v1",
-          "errorCatalog": "core:generic",
+          "errorCatalog": "swap-api:quickswaperrors:swap.quickswap.v1.QuickSwapService/QuoteQuickSwap",
+          "errorCodes": [
+            "AFFILIATE_VAULT_UNKNOWN",
+            "AMOUNT_OUT_OF_RANGE",
+            "BROKER_DISABLED",
+            "BROKER_LIMIT",
+            "DECIMALS_MISMATCH",
+            "FEES_INVALID",
+            "PROTECTION_UNACHIEVABLE",
+            "QUOTE_UNAVAILABLE",
+            "REFERRAL_CODE_INVALID",
+            "REFERRAL_CODE_UNKNOWN",
+            "REFERRAL_NOT_SUPPORTED",
+            "REFERRAL_PARTNER_INACTIVE",
+            "ROUTE_SUSPENDED",
+            "ROUTE_UNSUPPORTED",
+            "SOURCE_WALLET_INVALID",
+            "SOURCE_WALLET_REJECTED"
+          ],
           "examples": {
             "request": {
-              "affiliates": [
-                {
-                  "accountId": "7563897446546",
-                  "bps": 1
-                }
-              ],
               "brokerBps": 300,
               "referralCode": "value",
+              "sourceWallet": "value",
               "terms": {
                 "amount": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "basis": "SOURCE_AMOUNT",
-                "destinationZippedAssetId": 100,
+                "destinationZippedAssetId": 101,
                 "execution": {
                   "market": {}
                 },
@@ -560,20 +620,20 @@
             "response": {
               "quote": {
                 "depositAmount": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "expectedAmountOut": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "expiresAt": "2025-01-01T00:00:00Z",
                 "fees": [
                   {
                     "accountId": "7563897446546",
                     "amount": {
-                      "baseUnits": "value",
-                      "decimals": 36
+                      "baseUnits": "1000000",
+                      "decimals": 6
                     },
                     "bps": 1,
                     "kind": "SERVICE",
@@ -582,16 +642,16 @@
                 ],
                 "intermediateAssetId": 100,
                 "maxDepositAmount": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "minAmountOut": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "minDepositAmount": {
-                  "baseUnits": "value",
-                  "decimals": 36
+                  "baseUnits": "1000000",
+                  "decimals": 6
                 },
                 "minRate": "value",
                 "quotedAt": "2025-01-01T00:00:00Z",

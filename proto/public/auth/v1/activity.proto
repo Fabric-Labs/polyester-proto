@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/subaccounts.proto";
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// Request to list the activity of the caller's main account and its
+// sub-accounts. Every filter narrows the result; an omitted filter matches
+// every event the caller may read.
+message ListAccountActivityRequest {
+  // Maximum number of events to return. Defaults to 50 when omitted; maximum is
+  // 200.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 200];
+
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to the authenticated main account, the API key when the caller is
+  // one, and every filter of the request: reuse it only with the same filters.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+
+  // Sub-accounts (opaque IDs) whose events to return. Together with
+  // include_main_account it selects the accounts the list covers. When neither
+  // selects an account, the list covers the main account and every
+  // sub-account the caller may read. At most 100 distinct IDs. A sub-account
+  // the caller may not read fails the request with NotFound.
+  repeated fixed64 subaccount_ids = 3 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      fixed64: {gt: 0}
+    }
+  }];
+
+  // Include the main account's own events, those that belong to no
+  // sub-account. Set it alone to list only the main account's events, or with
+  // subaccount_ids to add the main account to those sub-accounts. An API key
+  // scoped to a sub-account may not set it.
+  bool include_main_account = 4;
+
+  // Entity categories to return. Empty matches every category. At most 16
+  // distinct values.
+  repeated ActivityEntityKind entity_kinds = 5 [(buf.validate.field).repeated = {
+    max_items: 16
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+
+  // Actions to return. Empty matches every action. At most 32 distinct values.
+  repeated ActivityEventAction event_actions = 6 [(buf.validate.field).repeated = {
+    max_items: 32
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+
+  // Client channels to return. Empty matches every channel. At most 8 distinct
+  // values.
+  repeated ActivityEventSource sources = 7 [(buf.validate.field).repeated = {
+    max_items: 8
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+
+  // API key (opaque ID) whose actions to return: only events performed with
+  // that key. Omit it to match every actor.
+  fixed64 api_key_id = 8;
+
+  // Earliest event time to return, inclusive. Omit it for no lower bound.
+  google.protobuf.Timestamp start_time = 9;
+
+  // Event time to return events before, exclusive. Omit it for no upper bound.
+  // When both bounds are set, end_time must be after start_time.
+  google.protobuf.Timestamp end_time = 10;
+
+  option (buf.validate.message).cel = {
+    id: "list_account_activity.time_range"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+}
+
+// Response containing the activity of the main account and its sub-accounts.
+message ListAccountActivityResponse {
+  // Activity events ordered newest first. Each event names the sub-account it
+  // belongs to, or none for the main account.
+  repeated ActivityEvent events = 1;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// Read service for the activity of a whole account.
+service AccountActivityService {
+  option (polyester.api.docs_group) = "account";
+
+  // List the security and activity events of the caller's main account and
+  // all its sub-accounts in one feed, newest first: sign-ins, API key, MFA,
+  // policy, member, invite and saved-destination changes. Only the main
+  // account's own session, or an API key with READ_ACCOUNT_ACTIVITY, may call
+  // it. A key scoped to a sub-account reads only that sub-account's events.
+  rpc ListAccountActivity(ListAccountActivityRequest) returns (ListAccountActivityResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/auth/activity"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Account Activity"
+      description: "List the security and activity events of the caller's main account and all its sub-accounts in one feed, newest first. Only the main account's own session, or an API key with READ_ACCOUNT_ACTIVITY, may call it. A key scoped to a sub-account reads only that sub-account's events."
+      tags: "Auth Service"
+    };
+  }
+}

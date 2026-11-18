@@ -4,6 +4,7 @@ package chain.zipper.v1;
 
 import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/chain/zipper/v1;chainzipperv1";
@@ -40,6 +41,23 @@ enum RouteStatus {
   // The route does not accept new requests. Do not send funds on it until it
   // returns to NORMAL.
   SUSPENDED = 2;
+}
+
+// SupplyStatus says whether a route's zToken supply is known and current.
+// Read it before using a supply value: only AVAILABLE and STALE routes carry
+// one, and a missing supply is never reported as zero.
+enum SupplyStatus {
+  // Never sent. Treat the supply as MISSING.
+  SUPPLY_UNSPECIFIED = 0;
+  // The supply was read from Polyester chain recently and is current.
+  AVAILABLE = 1;
+  // The supply value is the last one read, but it has not been refreshed for
+  // longer than expected and may no longer be accurate. Do not size a
+  // withdrawal against it as if it were current.
+  STALE = 2;
+  // No supply is known for the route yet. No supply value or observation
+  // time is sent; do not treat the route's supply as zero.
+  MISSING = 3;
 }
 
 // ChainConfig describes one supported external chain for deposit and withdraw.
@@ -105,6 +123,8 @@ message AssetChainVariant {
   string withdraw_min_amount = 11;
   // Latest zToken supply for this chain asset variant, scaled by the parent
   // unified asset's quantity_scale. Decode: supply_q / 10^quantity_scale.
+  // Set only when supply_status is AVAILABLE or STALE; a value of zero then
+  // is a real supply of zero.
   uint64 supply_q = 12;
   // Whether this route currently accepts new deposits. While it is
   // SUSPENDED, do not send funds to a deposit address on this route; wait
@@ -116,6 +136,11 @@ message AssetChainVariant {
   // to NORMAL. One already being sent when the suspension takes effect may
   // fail instead; its funds then return to the account.
   RouteStatus withdrawal_status = 14;
+  // Whether supply_q is known and current for this route.
+  SupplyStatus supply_status = 15;
+  // When supply_q was read from Polyester chain. Set only when supply_status
+  // is AVAILABLE or STALE.
+  google.protobuf.Timestamp supply_observed_at = 16;
 }
 
 // ZippedAssetSupplyUpdate carries the latest route liquidity for one zipped
@@ -124,8 +149,17 @@ message ZippedAssetSupplyUpdate {
   // Canonical zipped asset route ID.
   uint32 zipped_asset_id = 1;
   // Latest zToken supply for this route, scaled by the parent asset's
-  // quantity_scale. Decode: supply_q / 10^quantity_scale.
+  // quantity_scale. Decode: supply_q / 10^quantity_scale. Set only when
+  // status is AVAILABLE or STALE; a value of zero then is a real supply of
+  // zero.
   uint64 supply_q = 2;
+  // Whether supply_q is current: AVAILABLE or STALE. A route whose supply
+  // stops being refreshed gets one STALE update repeating its last value and
+  // observation time; it returns to AVAILABLE with the next reading.
+  SupplyStatus status = 3;
+  // When supply_q was read from Polyester chain. Set only when status is
+  // AVAILABLE or STALE.
+  google.protobuf.Timestamp observed_at = 4;
 }
 
 // ZippedAssetSupplyBatch batches public zipped-asset supply updates.

@@ -58,7 +58,7 @@
             "name": "destination_chain_id",
             "jsonName": "destinationChainId",
             "number": 2,
-            "doc": "External destination chain identifier.",
+            "doc": "Polyester chain id of the destination network: ChainConfig.chain_id\n from GetDepositWithdrawConfig, not the network's native chain id\n (ChainConfig.native_chain_id).",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64",
@@ -640,7 +640,7 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 7,
-            "doc": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, destination_cooling_down\n (a broker vault's destination added to its external withdraw whitelist\n less than 24 hours ago; the funds stay for a later run), route_suspended\n (withdrawals of the asset to the destination network are suspended, as\n its withdrawal_status SUSPENDED in the deposit and withdraw config shows;\n the funds stay for a later run), authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
+            "doc": "Machine-readable reason for a skipped or failed step, such as\n below_minimum, price_unavailable (the rule has a USD minimum and no\n current price valued the asset; the funds stay for a later run),\n rule_superseded, destination_not_whitelisted, destination_cooling_down\n (a broker vault's destination added to its external withdraw whitelist\n less than 24 hours ago; the funds stay for a later run), route_suspended\n (withdrawals of the asset to the destination network are suspended, as\n its withdrawal_status SUSPENDED in the deposit and withdraw config shows;\n the funds stay for a later run), supply_unavailable (the destination\n route's supply_status in the deposit and withdraw config is MISSING or\n STALE; the funds stay for a later run), authority_revoked,\n gateway_capacity_insufficient (the funds stay for a later run),\n withdrawal_released or withdrawal_failed; empty otherwise.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -1066,7 +1066,7 @@
           {
             "name": "ERROR_CODE_SUPPLY_UNAVAILABLE",
             "number": 36,
-            "doc": "Required zipped-asset supply data is unavailable."
+            "doc": "The zToken supply of the destination route is not known, or not\n current: AssetChainVariant.supply_status is MISSING or STALE. Nothing was\n reserved; retry once the status is AVAILABLE again."
           },
           {
             "name": "ERROR_CODE_STEP_UP_UNAVAILABLE",
@@ -1251,9 +1251,17 @@
             "name": "balances",
             "jsonName": "balances",
             "number": 2,
-            "doc": "Every zToken the wallet holds a nonzero balance of, ordered by\n zipped_asset_id. Empty when it holds none.",
+            "doc": "Every zToken the wallet holds a nonzero balance of, ordered by\n zipped_asset_id. Empty when it holds none. An asset whose balance could\n not be read is in unavailable_assets instead.",
             "repeated": true,
             "protoRef": "chain.withdraw.v1.WalletBalance"
+          },
+          {
+            "name": "unavailable_assets",
+            "jsonName": "unavailableAssets",
+            "number": 3,
+            "doc": "Zipped assets whose zToken balance could not be read, ordered by\n zipped_asset_id. The wallet's balance of each is unknown, not zero: read\n again later. Empty when every balance was read. When no balance can be\n read at all, the request fails as unavailable instead.",
+            "repeated": true,
+            "protoRef": "chain.withdraw.v1.UnavailableWalletAsset"
           }
         ]
       }
@@ -1597,7 +1605,7 @@
             "name": "destination_chain_id",
             "jsonName": "destinationChainId",
             "number": 3,
-            "doc": "External network id for TO_EXTERNAL_CHAIN. Omit for TO_FUNDING.",
+            "doc": "Polyester chain id of the destination network for TO_EXTERNAL_CHAIN:\n ChainConfig.chain_id from GetDepositWithdrawConfig, not the network's\n native chain id (ChainConfig.native_chain_id, such as 11155111 for\n Ethereum Sepolia). An unknown id is refused with\n ERROR_CODE_INVALID_DESTINATION_CHAIN. Omit for TO_FUNDING.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
@@ -1661,6 +1669,57 @@
       }
     },
     {
+      "name": "chain.withdraw.v1.UnavailableWalletAsset",
+      "kind": "message",
+      "doc": "UnavailableWalletAsset is a zipped asset whose zToken balance could not be\n read from Polyester Chain.",
+      "message": {
+        "fields": [
+          {
+            "name": "zipped_asset_id",
+            "jsonName": "zippedAssetId",
+            "number": 1,
+            "doc": "Zipped asset of the zToken, as WalletBalance.zipped_asset_id names it.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "unified_asset_id",
+            "jsonName": "unifiedAssetId",
+            "number": 2,
+            "doc": "Unified asset the zToken stands for, as WalletBalance.unified_asset_id\n names it.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "chain_id",
+            "jsonName": "chainId",
+            "number": 3,
+            "doc": "External network of the zipped asset, as WalletBalance.chain_id names it.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "ztoken_address",
+            "jsonName": "ztokenAddress",
+            "number": 4,
+            "doc": "zToken contract address on Polyester Chain listed for the zipped asset.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 5,
+            "doc": "Why the balance could not be read.",
+            "protoRef": "chain.withdraw.v1.WalletAssetUnavailableReason"
+          }
+        ]
+      }
+    },
+    {
       "name": "chain.withdraw.v1.ValidateWithdrawDestinationRequest",
       "kind": "message",
       "doc": "ValidateWithdrawDestinationRequest checks one external-chain\n destination for an authenticated caller without creating a withdraw.",
@@ -1670,7 +1729,7 @@
             "name": "destination_chain_id",
             "jsonName": "destinationChainId",
             "number": 1,
-            "doc": "External destination chain identifier.",
+            "doc": "Polyester chain id of the destination network: ChainConfig.chain_id\n from GetDepositWithdrawConfig, not the network's native chain id\n (ChainConfig.native_chain_id, such as 11155111 for Ethereum Sepolia).\n An unknown id answers valid false with UNSUPPORTED_CHAIN.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64",
@@ -1732,6 +1791,30 @@
             "doc": "Canonical destination address when valid. Empty when valid is false.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain.withdraw.v1.WalletAssetUnavailableReason",
+      "kind": "enum",
+      "doc": "WalletAssetUnavailableReason says why a zToken balance could not be read.",
+      "enum": {
+        "values": [
+          {
+            "name": "NO_CONTRACT",
+            "number": 1,
+            "doc": "No zToken contract exists at the listed address on Polyester Chain."
+          },
+          {
+            "name": "READ_FAILED",
+            "number": 2,
+            "doc": "Polyester Chain answered the balance read with an error."
+          },
+          {
+            "name": "INVALID_BALANCE",
+            "number": 3,
+            "doc": "The balance read returned a value that is not a valid balance."
           }
         ]
       }
