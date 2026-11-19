@@ -249,7 +249,10 @@ enum PegReference {
 // that bound is rejected. The order never follows later book changes.
 message StaticPeg {
   // Required public book side. An empty selected side rejects the order.
-  PegReference reference = 1 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
+  PegReference reference = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
   // Signed number of configured price increments added to the reference.
   // One increment is the pair’s configured price increment in quote units; this count
   // is not Q9 and does not select occupied price levels. Defaults to zero.
@@ -282,10 +285,8 @@ message OrderIntent {
   ];
   // Order side. Required.
   Side side = 2 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true,
     (google.api.field_behavior) = REQUIRED
   ];
   // Required order sizing intent. Exactly one sizing method must be supplied.
@@ -1488,6 +1489,15 @@ message CancelAllOrdersRequest {
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
+  // If true, also stops the account's triggers in the same scope: every
+  // stop-loss, take-profit, trailing stop, TWAP, ladder and attached
+  // take-profit, stop-loss or trailing leg on the matched symbols whose orders
+  // trade on the side filter, created before the request was accepted. Each
+  // ends canceled with reason `TRIGGER_CANCEL_REASON_CANCEL_ALL` and releases
+  // its reserved funds, its open orders are canceled with the others, and none
+  // places an order after the response. Defaults to false: only orders are
+  // canceled and triggers keep running. Part of the criteria a retry must keep.
+  bool include_triggers = 7;
 }
 
 // CancelledOrder identifies one order whose cancellation a cancel-all
@@ -1567,6 +1577,10 @@ message CancelAllOrdersResponse {
   // Availability of the historical listing. An empty retry listing does not
   // change the original counts or mean that no cancellations were requested.
   ListingStatus listing_status = 10 [(buf.validate.field).enum.defined_only = true];
+  // With `include_triggers`, the number of the account's triggers that matched
+  // the filters when the request was accepted, each stopped unless `dry_run`
+  // is set. Zero without `include_triggers`.
+  uint32 matched_triggers = 11;
 }
 
 // =============================================================================
@@ -1607,6 +1621,14 @@ message CancelAllAfterRequest {
     (buf.validate.field).string.max_len = 64,
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
   ];
+  // If true, the switch's expiry also stops the account's triggers in its
+  // scope, as CancelAllOrders with `include_triggers` does: those created
+  // before the expiry time, even when the expiry is processed later, and
+  // none of them places an order once it is processed. A trigger created at
+  // or after the expiry time is not stopped. Defaults to false: only orders
+  // are canceled on expiry. Each arm or refresh sets it again; a disable
+  // ignores it.
+  bool include_triggers = 6;
 }
 
 // DeadManSwitchScope describes the recorded scope of an armed dead-man switch.
@@ -2131,13 +2153,30 @@ service OrdersService {
   }
 
   // Cancels all matching open orders for an account (kill switch).
-  // Evaluates matching orders from a consistent snapshot at request start and
-  // requests cancellation of every one, however many match. The response
-  // lists up to 200 of them, oldest first, with the total count.
-  // Final state is confirmed via the order update stream or read path.
+  // Unless dry_run is set, what it cancels is fixed when its request_id is
+  // first admitted: every matching order of the account admitted before
+  // that, from any interface, and none admitted after it. An order whose create, batch
+  // create, modify or batch replace response arrived before this request was
+  // sent was admitted before it and is covered, including an order not yet
+  // reported open and an order that replaced an earlier one. Requests still
+  // in flight when this request is sent, and requests whose outcome is
+  // unknown, have no defined order with it: an order they create may be
+  // admitted after it and stay open. Wait for their responses before sending
+  // the cancel-all, or send another once they are answered.
   //
-  // It cancels orders, not triggers. Open orders that triggers placed match
-  // like any other order and are canceled: a TWAP's working slice, a
+  // It requests cancellation of every covered order, however many match. The
+  // response confirms admission, not completion, and lists up to 200 of them,
+  // oldest first, with the total count. Each covered order eventually ends;
+  // any still open when the cancellation applies is canceled. Final state is
+  // confirmed via the order update stream or read path. A retry with the same
+  // request_id returns the original outcome and covers no order admitted
+  // after the original request. A rejected request, or one whose outcome is
+  // unknown, is no barrier: orders sent before it may stay open, so retry it
+  // or read open orders before relying on it.
+  //
+  // By default it cancels orders, not triggers; with `include_triggers` it
+  // also stops the account's matching triggers (see the field). Open orders
+  // that triggers placed match like any other order and are canceled: a TWAP's working slice, a
   // ladder's levels, the order a fired stop placed, and the working exit of
   // an attached take-profit, stop-loss or trailing stop. The triggers
   // themselves are not canceled, and their reserved funds stay reserved:
@@ -2153,12 +2192,10 @@ service OrdersService {
   //   canceled before any fill.
   // - A paused trigger stays paused and can be resumed.
   //
-  // To stop all automated trading, cancel each live trigger with
-  // TriggersService.CancelTrigger, then cancel the orders: a trigger that
-  // fires before its cancel places an order that the cancel-all then
-  // cancels. TriggersService.ListTriggers with the statuses STATUS_CREATED,
-  // STATUS_ARMED, STATUS_RUNNING and STATUS_PAUSED lists the live triggers,
-  // attached legs included.
+  // To stop all automated trading in one request, set `include_triggers`:
+  // every matching trigger ends canceled with reason
+  // TRIGGER_CANCEL_REASON_CANCEL_ALL, none places an order after the
+  // response, and `matched_triggers` counts them.
   rpc CancelAllOrders(CancelAllOrdersRequest) returns (CancelAllOrdersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -2168,15 +2205,25 @@ service OrdersService {
         "Cancel all matching open orders for an account. "
         "Supports an optional list of symbols and a side filter plus dry-run preview. "
         "Returns up to 200 canceled order IDs, oldest first, with the total count. "
+        "Unless it is a dry run, it covers every matching order admitted before its "
+        "requestId was first admitted, from any interface, including orders not yet "
+        "open and replacement orders: an order whose create or replace response "
+        "arrived before the first request with this requestId was sent is covered, "
+        "while requests still in flight or with an unknown outcome have no defined "
+        "order with it. A retry with the same requestId keeps the original scope and "
+        "covers no order admitted since; use a fresh requestId for a new cancellation. "
+        "Each covered order eventually ends; any still open when the cancellation "
+        "applies is canceled. "
         "It cancels open orders, including those that triggers placed (TWAP slices, "
-        "ladder levels and exit orders), but not triggers. Standalone stop-loss, "
-        "take-profit and trailing triggers and TWAPs keep running and can place new "
-        "orders; a ladder stops once its levels are canceled. An attached stop-loss, "
-        "take-profit or trailing leg whose exit order is canceled ends, and so do the "
-        "parent's other legs when oco is set, so the position loses that protection. "
-        "Other attached legs keep protecting the parent's filled quantity; those of a "
-        "parent canceled before any fill end with it. Cancel triggers separately: list "
-        "them with List Triggers, then cancel each with Cancel Trigger."
+        "ladder levels and exit orders). By default it does not cancel triggers: "
+        "standalone stop-loss, take-profit and trailing triggers and TWAPs keep running "
+        "and can place new orders; a ladder stops once its levels are canceled. An "
+        "attached stop-loss, take-profit or trailing leg whose exit order is canceled "
+        "ends, and so do the parent's other legs when oco is set, so the position loses "
+        "that protection. Other attached legs keep protecting the parent's filled "
+        "quantity; those of a parent canceled before any fill end with it. Set "
+        "include_triggers to also stop every matching trigger, attached legs included, "
+        "in the same request; matched_triggers counts them."
       tags: "Orders Service"
     };
   }
@@ -2185,11 +2232,11 @@ service OrdersService {
   // Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.
   // When the switch fires, it cancels what CancelAllOrders with the same
   // symbol and side scope cancels: open orders, including those that
-  // triggers placed, and no trigger. Standalone stop-loss, take-profit and
-  // trailing stops and running TWAPs stay active and can place new orders
-  // after it fires, and attached legs end or keep protecting the position
-  // exactly as after CancelAllOrders. The switch does not stop them: only
-  // TriggersService.CancelTrigger cancels a trigger.
+  // triggers placed, and, only with `include_triggers`, the matching
+  // triggers. Without it, standalone stop-loss, take-profit and trailing
+  // stops and running TWAPs stay active and can place new orders after it
+  // fires, and attached legs end or keep protecting the position exactly
+  // as after CancelAllOrders.
   rpc CancelAllAfter(CancelAllAfterRequest) returns (CancelAllAfterResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -2199,14 +2246,15 @@ service OrdersService {
         "Set or disable a dead-man switch timeout for automatic cancel-all. "
         "Supports optional symbol and side scope with idempotent heartbeat refresh. "
         "On expiry it cancels open orders in scope, including those that triggers placed "
-        "(TWAP slices, ladder levels and exit orders), but not triggers. Standalone "
-        "stop-loss, take-profit and trailing triggers and TWAPs keep running and can place "
-        "new orders; a ladder stops once its levels are canceled. An attached stop-loss, "
-        "take-profit or trailing leg whose exit order is canceled ends, and so do the "
-        "parent's other legs when oco is set, so the position loses that protection. "
-        "Other attached legs keep protecting the parent's filled quantity; those of a "
-        "parent canceled before any fill end with it. Cancel triggers separately: list "
-        "them with List Triggers, then cancel each with Cancel Trigger."
+        "(TWAP slices, ladder levels and exit orders). By default it does not cancel "
+        "triggers: standalone stop-loss, take-profit and trailing triggers and TWAPs keep "
+        "running and can place new orders; a ladder stops once its levels are canceled. "
+        "An attached stop-loss, take-profit or trailing leg whose exit order is canceled "
+        "ends, and so do the parent's other legs when oco is set, so the position loses "
+        "that protection. Other attached legs keep protecting the parent's filled "
+        "quantity; those of a parent canceled before any fill end with it. Set "
+        "include_triggers to also stop every matching trigger, attached legs included, "
+        "when the switch fires."
       tags: "Orders Service"
     };
   }

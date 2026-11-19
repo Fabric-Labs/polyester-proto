@@ -46,28 +46,6 @@ enum MFAChallengePurpose {
   MFA_CHALLENGE_PURPOSE_FRESH_STEP_UP = 2;
 }
 
-// An action that one step-up covers for a short time in the same signed-in
-// session: the recent-MFA window. The window opens when the session completes
-// an MFA challenge for fresh step-up, and lasts 5 minutes. It closes earlier
-// when the session ends (EndRecentMFA or session expiry). Every other action
-// that needs MFA, including withdrawals, transfers, auto-withdraw rules, API
-// key and policy changes outside the assistant, address book changes and MFA
-// settings, still needs a fresh, single-use step-up proof each time.
-enum RecentMFAAction {
-  // No action was specified.
-  RECENT_MFA_ACTION_UNSPECIFIED = 0;
-  // Confirming a Telegram link (SocialVerificationService.ConfirmSocialVerification
-  // for TELEGRAM).
-  RECENT_MFA_ACTION_TELEGRAM_LINK = 1;
-  // Changing the Polyester AI assistant's account access
-  // (ApiKeyService.SetAssistantKeys, with policies or presets).
-  RECENT_MFA_ACTION_ASSISTANT_ACCESS = 2;
-  // Raising or removing a Telegram approval limit
-  // (ai.v1.AssistantService.SetTelegramApprovalLimits). Setting or lowering a
-  // limit never needs MFA.
-  RECENT_MFA_ACTION_TELEGRAM_APPROVAL_LIMITS = 3;
-}
-
 // Current assurance details for an interactive session.
 message SessionInfo {
   // Stable session identifier shared by the primary and MFA-elevated tokens.
@@ -98,10 +76,10 @@ message MFAFactor {
     pattern: "^mfa_[a-f0-9]{32}$"
   }];
   // Type of enrolled factor.
-  MFAFactorType factor_type = 2 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
+  MFAFactorType factor_type = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
   // Human-friendly label for the factor. Empty when no label is set.
   string label = 3 [(buf.validate.field).string.max_len = 128];
   // Time when the factor was enrolled.
@@ -228,10 +206,8 @@ message FinishPasskeyEnrollmentResponse {
 message BeginMFAChallengeRequest {
   // Desired challenge outcome: session elevation or fresh step-up.
   MFAChallengePurpose purpose = 1 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true,
     (google.api.field_behavior) = REQUIRED
   ];
 }
@@ -479,35 +455,6 @@ message ReleaseFreshStepUpRequest {
 // Empty response returned after a fresh step-up proof is released.
 message ReleaseFreshStepUpResponse {}
 
-// Request to read whether the session's recent-MFA window covers an action.
-message GetRecentMFARequest {
-  // The action the client is about to perform.
-  RecentMFAAction action = 1 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
-    (google.api.field_behavior) = REQUIRED
-  ];
-}
-
-// Whether the session's recent-MFA window is open for the action.
-message GetRecentMFAResponse {
-  // True when the action needs no new step-up now: send it without a step-up
-  // proof. False when the client must complete an MFA challenge for fresh
-  // step-up first.
-  bool open = 1;
-  // Time when the window closes. Empty when open is false. A request that
-  // arrives after this time needs a new step-up.
-  google.protobuf.Timestamp expires_at = 2;
-}
-
-// Request to end the session's recent-MFA window, for example at sign-out.
-message EndRecentMFARequest {}
-
-// Empty response returned after the recent-MFA window is ended.
-message EndRecentMFAResponse {}
-
 // Request to update an MFA factor label.
 message UpdateMFAFactorRequest {
   // MFA factor identifier to update.
@@ -738,24 +685,6 @@ service MFAService {
 
   // Release a claimed fresh step-up proof when the protected request does not complete.
   rpc ReleaseFreshStepUp(ReleaseFreshStepUpRequest) returns (ReleaseFreshStepUpResponse) {
-    option (polyester.api.authentication_methods) = SESSION_TOKEN;
-  }
-
-  // Read whether the session's recent-MFA window is open for an action, and
-  // until when, so the client can skip the MFA prompt while it is.
-  rpc GetRecentMFA(GetRecentMFARequest) returns (GetRecentMFAResponse) {
-    option idempotency_level = NO_SIDE_EFFECTS;
-    option (polyester.api.authentication_methods) = SESSION_TOKEN;
-  }
-
-  // End the session's recent-MFA window at sign-out. It also cancels the
-  // session's pending MFA challenges and revokes its unused step-up proofs,
-  // including one an MFA challenge completing at the same time issues: it
-  // answers once that completion has finished. A step-up completed later,
-  // with a new challenge, opens a new window. Ending a window that is not
-  // open succeeds.
-  rpc EndRecentMFA(EndRecentMFARequest) returns (EndRecentMFAResponse) {
-    option idempotency_level = IDEMPOTENT;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
   }
 }

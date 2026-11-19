@@ -5626,12 +5626,13 @@
             "pattern": "^[0-9]+$",
             "type": "string"
           },
-          "maxDepth": {
-            "description": "Largest depth per side the service accepts, the upper bound of the depth query parameter. Set in every response, available or not.",
-            "format": "int64",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
+          "depth": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.polyester.type.v1.DepthTier"
+              }
+            ],
+            "description": "Depth tier this snapshot was served at: the depth query parameter, or 50 when it was omitted. Set in every response, available or not."
           },
           "symbol": {
             "description": "Trading pair symbol, e.g. BTC-USDT.",
@@ -5649,7 +5650,7 @@
           "bids",
           "bookEpoch",
           "bookSeq",
-          "maxDepth",
+          "depth",
           "symbol",
           "ts"
         ],
@@ -9284,6 +9285,10 @@
       "polyester.rest.OrdersService_CancelAllAfter.Request": {
         "additionalProperties": false,
         "properties": {
+          "includeTriggers": {
+            "description": "If true, the switch's expiry also stops the account's triggers in its scope, as CancelAllOrders with `include_triggers` does: those created before the expiry time, even when the expiry is processed later, and none of them places an order once it is processed. A trigger created at or after the expiry time is not stopped. Defaults to false: only orders are canceled on expiry. Each arm or refresh sets it again; a disable ignores it.",
+            "type": "boolean"
+          },
           "requestId": {
             "description": "Idempotency/trace key from caller (required). 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "type": "string"
@@ -9397,6 +9402,10 @@
             "description": "If true, return matched counts without actually canceling.",
             "type": "boolean"
           },
+          "includeTriggers": {
+            "description": "If true, also stops the account's triggers in the same scope: every stop-loss, take-profit, trailing stop, TWAP, ladder and attached take-profit, stop-loss or trailing leg on the matched symbols whose orders trade on the side filter, created before the request was accepted. Each ends canceled with reason `CANCEL_ALL` and releases its reserved funds, its open orders are canceled with the others, and none places an order after the response. Defaults to false: only orders are canceled and triggers keep running. Part of the criteria a retry must keep.",
+            "type": "boolean"
+          },
           "requestId": {
             "description": "Idempotency key (required). Reuse the same key and criteria for retries. Completed results are retained for at least two minutes. Use a fresh key for a new cancellation; do not reuse a key after its replay window. 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "type": "string"
@@ -9473,6 +9482,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "matchedTriggers": {
+            "description": "With `include_triggers`, the number of the account's triggers that matched the filters when the request was accepted, each stopped unless `dry_run` is set. Zero without `include_triggers`.",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "status": {
             "allOf": [
               {
@@ -9515,6 +9531,7 @@
           "failedCancels",
           "listingStatus",
           "matchedOrders",
+          "matchedTriggers",
           "status",
           "submittedCancels",
           "totalCancelled",
@@ -10809,6 +10826,1298 @@
         },
         "required": [
           "evaluatedAt"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_CreateApiPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "assignToKeyId": {
+            "description": "Optional API key identifier to bind this newly-created policy to atomically. When set, the caller must be allowed to manage the key and the create+assign operation consumes a single fresh step-up proof. A template cannot be assigned: setting it with policy.is_template is refused with InvalidArgument. An assistant API key cannot be assigned a policy that allows a money-out action: FailedPrecondition with ASSISTANT_KEY_ACTION_NOT_ALLOWED. Nor can an admin API key: FailedPrecondition with ADMIN_KEY_ACTION_NOT_ALLOWED.",
+            "type": "string"
+          },
+          "policy": {
+            "additionalProperties": false,
+            "description": "Complete mutable policy configuration.",
+            "properties": {
+              "actions": {
+                "description": "High-level actions enabled for the API key policy. An empty list grants no access. Up to 64 unique explicit actions are allowed.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits. Maximum 256 characters.",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "Whether the policy is a template, which SetApiKeyPolicy applies as a copy. Only the main account owner creates templates, and never together with assign_to_key_id. Chosen at creation: an update_mask that selects it is refused with InvalidArgument.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "Human-readable policy name. Create requires a non-empty value; update validates it after merging fields selected by update_mask.",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When unspecified, defaults to ALL."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this API key policy.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Stable numeric pair ID from GetSpotConfig.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_CreateApiPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Created API key policy.",
+            "properties": {
+              "actions": {
+                "description": "High-level actions enabled for this API key. Up to 64 unique explicit actions may be returned.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to an API key itself. Applying it with SetApiKeyPolicy attaches a copy, so editing the template later changes no API key. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this API key policy.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_CreateSubaccountPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Complete mutable policy configuration.",
+            "properties": {
+              "actions": {
+                "description": "High-level actions enabled for the sub-account policy. Mandatory read-only actions are included when omitted. Up to 64 unique explicit actions are allowed. Account permissions such as READ_API_KEYS apply to API-key policies only and are refused here.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits. Maximum 256 characters.",
+                "type": "string"
+              },
+              "expiresAt": {
+                "description": "Optional expiry time in UTC. This does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "Whether the policy is a template, which SetSubaccountPolicy applies as a copy. Only the main account owner creates templates, and never together with subaccount_id. Chosen at creation: an update_mask that selects it is refused with InvalidArgument.",
+                "type": "boolean"
+              },
+              "locked": {
+                "description": "When true, the policy is write-protected and requires an elevated mutation path.",
+                "type": "boolean"
+              },
+              "maxOpenOrders": {
+                "description": "Maximum number of resting orders allowed on this sub-account at any time. A value of 0 means no explicit cap.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxOrderNotional": {
+                "description": "Maximum notional of any single order on this sub-account, as a positive decimal string in quote asset units (USDT) with at most 6 decimal places, for example '2500.5'. Omit it for no explicit cap; an empty string and '0' are refused.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable policy name. Create requires a non-empty value; update validates it after merging fields selected by update_mask.",
+                "type": "string"
+              },
+              "reviewAt": {
+                "description": "Optional review time in UTC. This does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When unspecified, defaults to ALL."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this policy.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Stable numeric pair ID from GetSpotConfig.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "tradingHalted": {
+                "description": "When true, new orders and exposure-increasing order or trigger changes are rejected regardless of other settings. Existing orders and triggers may still be canceled or paused by an otherwise authorized caller.",
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "subaccountId": {
+            "description": "Optional target sub-account to attach atomically after creation. A template cannot be attached: setting it with policy.is_template is refused with InvalidArgument.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_CreateSubaccountPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Created sub-account policy.",
+            "properties": {
+              "actions": {
+                "description": "Effective high-level actions enabled for the sub-account. Mandatory read-only actions are always included.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "expiresAt": {
+                "description": "Optional expiry time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to a sub-account itself. Applying it with SetSubaccountPolicy attaches a copy, so editing the template later changes no sub-account. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "locked": {
+                "description": "When true, this policy is write-protected and requires an elevated approval flow to modify it.",
+                "type": "boolean"
+              },
+              "maxOpenOrders": {
+                "description": "Maximum number of resting orders allowed on this sub-account at any time. A value of 0 means \"no explicit cap\".",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxOrderNotional": {
+                "description": "Maximum notional of any single order on this sub-account, as a decimal string in quote asset units (USDT), for example '2500.5'. '0' means no explicit cap.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "reviewAt": {
+                "description": "Optional review time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this sub-account.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "tradingHalted": {
+                "description": "When true, new orders and exposure-increasing order or trigger changes are rejected regardless of other settings. Existing orders and triggers may still be canceled or paused by an otherwise authorized caller.",
+                "type": "boolean"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "locked",
+              "maxOpenOrders",
+              "maxOrderNotional",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets",
+              "tradingHalted"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_DeleteApiPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy identifier (opaque ID).",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policyId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_DeleteSubaccountPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy identifier (opaque ID).",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policyId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_GetApiPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "keyId": {
+            "description": "Optional API key context for delegated administration. When omitted, the policy must be owned by the caller's root account.",
+            "type": "string"
+          },
+          "policyId": {
+            "description": "Policy identifier (opaque ID).",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policyId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_GetApiPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Matching API key policy.",
+            "properties": {
+              "actions": {
+                "description": "High-level actions enabled for this API key. Up to 64 unique explicit actions may be returned.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to an API key itself. Applying it with SetApiKeyPolicy attaches a copy, so editing the template later changes no API key. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this API key policy.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_GetSubaccountPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy identifier (opaque ID).",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional sub-account context. When provided, a current member may read the policy attached to that sub-account; the owner may also read another policy owned by their root account. When omitted, the policy must be owned by the caller's root account.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policyId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_GetSubaccountPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Matching sub-account policy.",
+            "properties": {
+              "actions": {
+                "description": "Effective high-level actions enabled for the sub-account. Mandatory read-only actions are always included.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "expiresAt": {
+                "description": "Optional expiry time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to a sub-account itself. Applying it with SetSubaccountPolicy attaches a copy, so editing the template later changes no sub-account. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "locked": {
+                "description": "When true, this policy is write-protected and requires an elevated approval flow to modify it.",
+                "type": "boolean"
+              },
+              "maxOpenOrders": {
+                "description": "Maximum number of resting orders allowed on this sub-account at any time. A value of 0 means \"no explicit cap\".",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxOrderNotional": {
+                "description": "Maximum notional of any single order on this sub-account, as a decimal string in quote asset units (USDT), for example '2500.5'. '0' means no explicit cap.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "reviewAt": {
+                "description": "Optional review time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this sub-account.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "tradingHalted": {
+                "description": "When true, new orders and exposure-increasing order or trigger changes are rejected regardless of other settings. Existing orders and triggers may still be canceled or paused by an otherwise authorized caller.",
+                "type": "boolean"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "locked",
+              "maxOpenOrders",
+              "maxOrderNotional",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets",
+              "tradingHalted"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_ListApiPolicies_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "keyId": {
+            "description": "Optional API key context for delegated administration. When omitted, only policies owned by the caller's root account are returned.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_ListApiPolicies_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policies": {
+            "description": "API key policy templates visible to the caller.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actions": {
+                  "description": "High-level actions enabled for this API key. Up to 64 unique explicit actions may be returned.",
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "createdAt": {
+                  "description": "Creation time in UTC.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "description": {
+                  "description": "Optional policy description for dashboards and audits.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Policy identifier (opaque ID).",
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                  "type": "string"
+                },
+                "isTemplate": {
+                  "description": "True if this policy is a template: a reusable policy of the main account that is never attached to an API key itself. Applying it with SetApiKeyPolicy attaches a copy, so editing the template later changes no API key. Set when the policy is created and never changes.",
+                  "type": "boolean"
+                },
+                "name": {
+                  "description": "Human-readable policy name.",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Monotonic resource revision used for conditional updates.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "sourceTemplateId": {
+                  "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                  "type": "string"
+                },
+                "sourceTemplateRevision": {
+                  "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "spotMarketScope": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                    }
+                  ],
+                  "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+                },
+                "spotMarkets": {
+                  "description": "Allowed spot markets for this API key policy.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "symbol": {
+                        "description": "Trading pair symbol, e.g. BTC-USDT.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "symbol"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "updatedAt": {
+                  "description": "Last update time in UTC.",
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actions",
+                "description",
+                "id",
+                "isTemplate",
+                "name",
+                "revision",
+                "spotMarketScope",
+                "spotMarkets"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "policies"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_ListSubaccountPolicies_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "subaccountId": {
+            "description": "Optional sub-account context. When provided, a current member may read the policy attached to that sub-account; the owner retains visibility of all policies owned by their root account. When omitted, only policies owned by the caller's root account are returned.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_ListSubaccountPolicies_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policies": {
+            "description": "Sub-account policy templates visible to the caller.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actions": {
+                  "description": "Effective high-level actions enabled for the sub-account. Mandatory read-only actions are always included.",
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "createdAt": {
+                  "description": "Creation time in UTC.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "description": {
+                  "description": "Optional policy description for dashboards and audits.",
+                  "type": "string"
+                },
+                "expiresAt": {
+                  "description": "Optional expiry time in UTC. This is governance metadata and does not automatically disable the policy.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Policy identifier (opaque ID).",
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                  "type": "string"
+                },
+                "isTemplate": {
+                  "description": "True if this policy is a template: a reusable policy of the main account that is never attached to a sub-account itself. Applying it with SetSubaccountPolicy attaches a copy, so editing the template later changes no sub-account. Set when the policy is created and never changes.",
+                  "type": "boolean"
+                },
+                "locked": {
+                  "description": "When true, this policy is write-protected and requires an elevated approval flow to modify it.",
+                  "type": "boolean"
+                },
+                "maxOpenOrders": {
+                  "description": "Maximum number of resting orders allowed on this sub-account at any time. A value of 0 means \"no explicit cap\".",
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxOrderNotional": {
+                  "description": "Maximum notional of any single order on this sub-account, as a decimal string in quote asset units (USDT), for example '2500.5'. '0' means no explicit cap.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Human-readable policy name.",
+                  "type": "string"
+                },
+                "reviewAt": {
+                  "description": "Optional review time in UTC. This is governance metadata and does not automatically disable the policy.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Monotonic resource revision used for conditional updates.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "sourceTemplateId": {
+                  "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                  "type": "string"
+                },
+                "sourceTemplateRevision": {
+                  "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "spotMarketScope": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                    }
+                  ],
+                  "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+                },
+                "spotMarkets": {
+                  "description": "Allowed spot markets for this sub-account.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "symbol": {
+                        "description": "Trading pair symbol, e.g. BTC-USDT.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "symbol"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "tradingHalted": {
+                  "description": "When true, new orders and exposure-increasing order or trigger changes are rejected regardless of other settings. Existing orders and triggers may still be canceled or paused by an otherwise authorized caller.",
+                  "type": "boolean"
+                },
+                "updatedAt": {
+                  "description": "Last update time in UTC.",
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actions",
+                "description",
+                "id",
+                "isTemplate",
+                "locked",
+                "maxOpenOrders",
+                "maxOrderNotional",
+                "name",
+                "revision",
+                "spotMarketScope",
+                "spotMarkets",
+                "tradingHalted"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "policies"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_SetApiKeyPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "keyId": {
+            "description": "Opaque API key identifier, formatted as \"ak_\" followed by 32 lowercase hex characters.",
+            "type": "string"
+          },
+          "policyId": {
+            "description": "Policy to attach (opaque ID), owned by the key's main account. A template is applied: the key gets a new copy of its current revision, which later edits of the template do not change. A value of 0 clears the binding. An API key without an attached policy has no permissions.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_SetApiKeyPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy now attached to the key (opaque ID): the new copy when policy_id named a template, else policy_id. 0 when the policy was cleared.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_SetSubaccountPolicy_REST.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy to attach (opaque ID), owned by the sub-account's main account. A template is applied: the sub-account gets a new copy of its current revision, which later edits of the template do not change. A value of 0 clears the explicit binding and restores the system Read Only policy.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Sub-account identifier (opaque ID).",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subaccountId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_SetSubaccountPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "description": "Policy now attached to the sub-account (opaque ID): the new copy when policy_id named a template, else policy_id. 0 when the policy was cleared.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_UpdateApiPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Updated API key policy.",
+            "properties": {
+              "actions": {
+                "description": "High-level actions enabled for this API key. Up to 64 unique explicit actions may be returned.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to an API key itself. Applying it with SetApiKeyPolicy attaches a copy, so editing the template later changes no API key. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this API key policy.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.PolicyService_UpdateSubaccountPolicy_REST.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "additionalProperties": false,
+            "description": "Updated sub-account policy.",
+            "properties": {
+              "actions": {
+                "description": "Effective high-level actions enabled for the sub-account. Mandatory read-only actions are always included.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.PolicyAction"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "description": "Creation time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional policy description for dashboards and audits.",
+                "type": "string"
+              },
+              "expiresAt": {
+                "description": "Optional expiry time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "description": "Policy identifier (opaque ID).",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "isTemplate": {
+                "description": "True if this policy is a template: a reusable policy of the main account that is never attached to a sub-account itself. Applying it with SetSubaccountPolicy attaches a copy, so editing the template later changes no sub-account. Set when the policy is created and never changes.",
+                "type": "boolean"
+              },
+              "locked": {
+                "description": "When true, this policy is write-protected and requires an elevated approval flow to modify it.",
+                "type": "boolean"
+              },
+              "maxOpenOrders": {
+                "description": "Maximum number of resting orders allowed on this sub-account at any time. A value of 0 means \"no explicit cap\".",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxOrderNotional": {
+                "description": "Maximum notional of any single order on this sub-account, as a decimal string in quote asset units (USDT), for example '2500.5'. '0' means no explicit cap.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable policy name.",
+                "type": "string"
+              },
+              "reviewAt": {
+                "description": "Optional review time in UTC. This is governance metadata and does not automatically disable the policy.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Monotonic resource revision used for conditional updates.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "sourceTemplateId": {
+                "description": "Template this policy was copied from (opaque ID), or 0 when it is not a copy. Set when the copy is made and never changes, even after the template is edited or deleted; the copy is not linked to the template.",
+                "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+                "type": "string"
+              },
+              "sourceTemplateRevision": {
+                "description": "Revision of the template when this policy was copied from it, or 0 when it is not a copy. Compare it with the template's current revision to see whether the template changed since. Never changes.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "spotMarketScope": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.auth.v1.MarketScope.Value"
+                  }
+                ],
+                "description": "Market-level scope for spot markets. When ALL, spot_markets is returned for display only and is not enforced."
+              },
+              "spotMarkets": {
+                "description": "Allowed spot markets for this sub-account.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "symbol": {
+                      "description": "Trading pair symbol, e.g. BTC-USDT.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "symbol"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "tradingHalted": {
+                "description": "When true, new orders and exposure-increasing order or trigger changes are rejected regardless of other settings. Existing orders and triggers may still be canceled or paused by an otherwise authorized caller.",
+                "type": "boolean"
+              },
+              "updatedAt": {
+                "description": "Last update time in UTC.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "actions",
+              "description",
+              "id",
+              "isTemplate",
+              "locked",
+              "maxOpenOrders",
+              "maxOrderNotional",
+              "name",
+              "revision",
+              "spotMarketScope",
+              "spotMarkets",
+              "tradingHalted"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "policy"
         ],
         "type": "object"
       },
@@ -16419,6 +17728,31 @@
                       "format": "date-time",
                       "type": "string"
                     },
+                    "directReturn": {
+                      "additionalProperties": false,
+                      "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                      "properties": {
+                        "state": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.DepositReturnState"
+                            }
+                          ],
+                          "description": "Return progress. Accept state values added later."
+                        },
+                        "txHash": {
+                          "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "description": "When the return last changed state.",
+                          "format": "date-time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
                     "disposition": {
                       "allOf": [
                         {
@@ -16853,7 +18187,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -17017,7 +18351,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. Send at least this amount. It is never below the source network's minimum deposit (AssetChainVariant.deposit_min_amount in the config, for DepositInstructions.zipped_asset_id). A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source network's minimum deposit; a deposit below that minimum is not detected, recorded or returned, and is lost. For a bridge, min_deposit_amount often equals the source network's minimum deposit; when they are equal, any smaller deposit is lost. It differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -17661,6 +18995,31 @@
                       "format": "date-time",
                       "type": "string"
                     },
+                    "directReturn": {
+                      "additionalProperties": false,
+                      "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                      "properties": {
+                        "state": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.DepositReturnState"
+                            }
+                          ],
+                          "description": "Return progress. Accept state values added later."
+                        },
+                        "txHash": {
+                          "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "description": "When the return last changed state.",
+                          "format": "date-time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
                     "disposition": {
                       "allOf": [
                         {
@@ -18095,7 +19454,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -18259,7 +19618,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. Send at least this amount. It is never below the source network's minimum deposit (AssetChainVariant.deposit_min_amount in the config, for DepositInstructions.zipped_asset_id). A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source network's minimum deposit; a deposit below that minimum is not detected, recorded or returned, and is lost. For a bridge, min_deposit_amount often equals the source network's minimum deposit; when they are equal, any smaller deposit is lost. It differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -18902,6 +20261,31 @@
                       "format": "date-time",
                       "type": "string"
                     },
+                    "directReturn": {
+                      "additionalProperties": false,
+                      "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                      "properties": {
+                        "state": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.DepositReturnState"
+                            }
+                          ],
+                          "description": "Return progress. Accept state values added later."
+                        },
+                        "txHash": {
+                          "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "description": "When the return last changed state.",
+                          "format": "date-time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
                     "disposition": {
                       "allOf": [
                         {
@@ -19336,7 +20720,7 @@
                 "type": "string"
               },
               "isTerminal": {
-                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Returns made directly for such deposits are not yet reported in withdrawals; RETURN_ONLY does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+                "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
                 "type": "boolean"
               },
               "quote": {
@@ -19500,7 +20884,7 @@
                   },
                   "minDepositAmount": {
                     "additionalProperties": false,
-                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
+                    "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. Send at least this amount. It is never below the source network's minimum deposit (AssetChainVariant.deposit_min_amount in the config, for DepositInstructions.zipped_asset_id). A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source network's minimum deposit; a deposit below that minimum is not detected, recorded or returned, and is lost. For a bridge, min_deposit_amount often equals the source network's minimum deposit; when they are equal, any smaller deposit is lost. It differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -20257,7 +21641,7 @@
               },
               "minDepositAmount": {
                 "additionalProperties": false,
-                "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source network's minimum (AssetChainVariant.deposit_min_amount in the config), and differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
+                "description": "Published minimum deposit, in source token units, compared with the deposit before its network fee. Send at least this amount. It is never below the source network's minimum deposit (AssetChainVariant.deposit_min_amount in the config, for DepositInstructions.zipped_asset_id). A smaller deposit is returned to return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source network's minimum deposit; a deposit below that minimum is not detected, recorded or returned, and is lost. For a bridge, min_deposit_amount often equals the source network's minimum deposit; when they are equal, any smaller deposit is lost. It differs from ErrorDetail.min_deposit_amount, the smallest deposit that currently quotes. For a TWAP it is the slice count times the smallest deposit one slice takes, and at least a market execution's minimum.",
                 "properties": {
                   "baseUnits": {
                     "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -20336,7 +21720,7 @@
             "type": "string"
           },
           "rules": {
-            "description": "Complete placement and cancellation catalog. Rules are ordered by policy class, then by tier ascending. The list contains one rule per class for each VIP0 through VIP10 tier and is not paginated.",
+            "description": "Complete placement, cancellation and read catalog. Rules are ordered by policy class (cancellation, placement, read), then by tier ascending. The list contains one rule per class for each VIP0 through VIP10 tier and is not paginated.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -20356,7 +21740,7 @@
                       "$ref": "#/components/schemas/polyester.rest.enum.ratelimit.v1.TradingRateLimitClass"
                     }
                   ],
-                  "description": "Trading operation family governed by this rule. REST responses contain PLACE or CANCEL."
+                  "description": "Trading operation family governed by this rule. REST responses contain PLACE, CANCEL or READ."
                 },
                 "quotaWeight": {
                   "description": "Weighted request capacity available during each policy period. One operation consumes the weight assigned to that operation.",
@@ -20394,7 +21778,7 @@
         "additionalProperties": false,
         "properties": {
           "apiKeyRules": {
-            "description": "Placement and cancellation rules resolved for the calling API key, ordered with placement first and cancellation second. Present only when the caller authenticated with an API key. These rules are informational: trading requests are not limited per API key, and only the account rules in `rules` are enforced.",
+            "description": "Placement, cancellation and read rules resolved for the calling API key, ordered placement, cancellation, read. Present only when the caller authenticated with an API key. These rules are informational: trading requests are not limited per API key, and only the account rules in `rules` are enforced.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -20414,7 +21798,7 @@
                       "$ref": "#/components/schemas/polyester.rest.enum.ratelimit.v1.TradingRateLimitClass"
                     }
                   ],
-                  "description": "Trading operation family governed by this rule. REST responses contain PLACE or CANCEL."
+                  "description": "Trading operation family governed by this rule. REST responses contain PLACE, CANCEL or READ."
                 },
                 "quotaWeight": {
                   "description": "Weighted request capacity available during each policy period. One operation consumes the weight assigned to that operation.",
@@ -20451,7 +21835,7 @@
             "type": "string"
           },
           "rules": {
-            "description": "Placement and cancellation rules enforced for the selected account, ordered with placement first and cancellation second. All of the account's API keys and sessions draw on these limits together.",
+            "description": "Placement, cancellation and read rules enforced for the selected account, ordered placement, cancellation, read. All of the account's API keys and sessions draw on the placement and cancellation limits together; the read rule is the root account's, shared with all of its subaccounts.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -20471,7 +21855,7 @@
                       "$ref": "#/components/schemas/polyester.rest.enum.ratelimit.v1.TradingRateLimitClass"
                     }
                   ],
-                  "description": "Trading operation family governed by this rule. REST responses contain PLACE or CANCEL."
+                  "description": "Trading operation family governed by this rule. REST responses contain PLACE, CANCEL or READ."
                 },
                 "quotaWeight": {
                   "description": "Weighted request capacity available during each policy period. One operation consumes the weight assigned to that operation.",
@@ -24164,6 +25548,95 @@
           "ALLOWLIST": "Allow only the markets listed on this policy."
         }
       },
+      "polyester.rest.enum.auth.v1.PolicyAction": {
+        "enum": [
+          "TRADE_SPOT",
+          "INTERNAL_TRANSFER",
+          "EXTERNAL_WITHDRAW",
+          "READ_BALANCES",
+          "READ_SPOT",
+          "READ_INTERNAL_TRANSFERS",
+          "READ_ADDRESS_BOOK",
+          "MANAGE_ADDRESS_BOOK",
+          "READ_AUTO_WITHDRAW",
+          "MANAGE_AUTO_WITHDRAW",
+          "SWAP",
+          "READ_API_KEYS",
+          "READ_API_POLICIES",
+          "READ_SUBACCOUNT_POLICIES",
+          "READ_SUBACCOUNT_PERMISSIONS",
+          "READ_VIP_STATUS",
+          "READ_SOCIAL_VERIFICATION",
+          "READ_PROFILE",
+          "READ_ACCOUNT_DIRECTORY",
+          "READ_WITHDRAW_VALIDATION",
+          "READ_DAILY_CLAIMS",
+          "CLAIM_DAILY_REWARD",
+          "READ_CHECKPOINTS",
+          "READ_REWARDS",
+          "CREATE_DEPOSIT_ADDRESS",
+          "READ_DEPOSIT_ADDRESSES",
+          "READ_SUBACCOUNTS",
+          "READ_SUBACCOUNT_ACTIVITY",
+          "READ_SUBACCOUNT_MEMBERS",
+          "READ_SUBACCOUNT_INVITES",
+          "READ_GUARD_SIGNER_STATUS",
+          "READ_PRICE_ALERTS",
+          "MANAGE_PRICE_ALERTS",
+          "READ_STATEMENTS",
+          "CONVERT_DUST",
+          "READ_FUNDING_FLOWS",
+          "READ_NOTIFICATIONS",
+          "READ_ACCOUNT_ACTIVITY",
+          "MANAGE_API_KEYS",
+          "MANAGE_API_KEY_POLICIES",
+          "MANAGE_SUBACCOUNT_POLICIES"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "CLAIM_DAILY_REWARD": "Allow claiming the main account's daily reward, paid to the main account or a sub-account it owns. Main-account permission.",
+          "CONVERT_DUST": "Allow quoting and converting dust, small Trading balances, into a target asset, and reading the conversions. Listing dust balances needs READ_BALANCES.",
+          "CREATE_DEPOSIT_ADDRESS": "Allow creating a deposit address within the key's scope. Account permission.",
+          "EXTERNAL_WITHDRAW": "Allow value to leave Trading through external withdrawals. Destination authorization is enforced separately from this policy. Moves value out of the account, so an assistant API key can never be allowed it.",
+          "INTERNAL_TRANSFER": "Allow internal transfers between sub-accounts or linked Polyester accounts, including reading internal transfer history. Moves value out of the account, so an assistant API key can never be allowed it.",
+          "MANAGE_ADDRESS_BOOK": "Allow creating, updating, deleting, and copying saved destination entries, including reading the address book. Address-book writes accept only a session token, so on an API-key policy this grants address-book reads only. It manages where value can leave the account, so an assistant API key can never be allowed it.",
+          "MANAGE_API_KEYS": "Allow creating, updating and revoking the standard API keys of the main account and of the sub-accounts it owns. Admin permission: honored only for an admin API key, which never manages an admin or assistant key, a key whose policy allows a money-out action, or a sub-account shared with the main account. A key it creates or updates needs an IP allowlist within the admin key's own.",
+          "MANAGE_API_KEY_POLICIES": "Allow attaching and clearing the API policies of the standard API keys the admin key may manage. A policy it attaches can never allow a money-out action or an admin permission, and on a sub-account key can never allow more actions or markets than the sub-account's policy. Admin permission: honored only for an admin API key.",
+          "MANAGE_AUTO_WITHDRAW": "Allow creating, changing, and disabling the auto-withdraw rule, including reading it. A rule pays value out, so changing one also requires EXTERNAL_WITHDRAW, API keys can never change one, and an assistant API key can never be allowed it.",
+          "MANAGE_PRICE_ALERTS": "Allow creating, updating, and cancelling the main account's price alerts. It does not allow listing them. Main-account permission.",
+          "MANAGE_SUBACCOUNT_POLICIES": "Allow attaching, clearing and updating the policies of the sub-accounts the main account owns. The resulting policy can never allow a money-out action, and a locked policy is never changed. Admin permission: honored only for an admin API key.",
+          "READ_ACCOUNT_ACTIVITY": "Allow listing the security and activity events of the main account and its sub-accounts within the key's scope: a key scoped to the main account reads all of them, a key scoped to a sub-account only that sub-account's. Account permission.",
+          "READ_ACCOUNT_DIRECTORY": "Allow resolving an account by username, account ID, or smart-account address. Any key of the main account may use it, whatever its scope. Account permission.",
+          "READ_ADDRESS_BOOK": "Allow reading saved, recent, and whitelisted address-book destinations.",
+          "READ_API_KEYS": "Allow listing and reading API keys. A key scoped to the main account sees the main account's keys and those of its sub-accounts; a key scoped to a sub-account sees only that sub-account's keys. Account permission.",
+          "READ_API_POLICIES": "Allow listing and reading API-key policies. A key scoped to the main account sees every API-key policy of the main account; a key scoped to a sub-account sees only the policies attached to that sub-account's keys. Account permission.",
+          "READ_AUTO_WITHDRAW": "Allow reading the auto-withdraw rule and its runs.",
+          "READ_BALANCES": "Allow reading balances and equity for a sub-account or API key.",
+          "READ_CHECKPOINTS": "Allow reading the main account's checkpoints. Main-account permission.",
+          "READ_DAILY_CLAIMS": "Allow reading the main account's daily reward claim status. Main-account permission.",
+          "READ_DEPOSIT_ADDRESSES": "Allow listing the deposit addresses within the key's scope. Account permission.",
+          "READ_FUNDING_FLOWS": "Allow reading the account's deposit, withdrawal, and transfer flows, including the flows no chain transaction started and the transfers it receives from other accounts. It grants no balance or transfer read.",
+          "READ_GUARD_SIGNER_STATUS": "Allow reading the Guard Signer status within the key's scope; a key never reads another main account's Guard Signer. Account permission.",
+          "READ_INTERNAL_TRANSFERS": "Allow reading internal transfer history.",
+          "READ_NOTIFICATIONS": "Allow listing, reading, and counting the main account's notifications. It does not allow marking them read or unread. Main-account permission.",
+          "READ_PRICE_ALERTS": "Allow listing the main account's price alerts. Main-account permission.",
+          "READ_PROFILE": "Allow reading the main account's profile and username history. Main-account permission.",
+          "READ_REWARDS": "Allow reading the main account's published reward awards. Main-account permission.",
+          "READ_SOCIAL_VERIFICATION": "Allow reading the main account's social verification status: provider, handle, status, and verification time. Main-account permission.",
+          "READ_SPOT": "Allow reading spot orders and trades, subscriptions, and cancel-all dry-run. Strictly non-mutating: cancellation and cancel-all-after changes require TRADE_SPOT.",
+          "READ_STATEMENTS": "Allow exporting account statements: the account's balance movements for a period, with fees and the balance after each entry. It grants no other balance or transfer read.",
+          "READ_SUBACCOUNTS": "Allow listing and reading the subaccounts within the key's scope. Account permission.",
+          "READ_SUBACCOUNT_ACTIVITY": "Allow reading the activity of the subaccounts within the key's scope. Account permission.",
+          "READ_SUBACCOUNT_INVITES": "Allow listing the outgoing invites of the subaccounts within the key's scope. Account permission.",
+          "READ_SUBACCOUNT_MEMBERS": "Allow listing the members of the subaccounts within the key's scope. Account permission.",
+          "READ_SUBACCOUNT_PERMISSIONS": "Allow reading what the key itself may do on a sub-account within its scope. Account permission.",
+          "READ_SUBACCOUNT_POLICIES": "Allow listing and reading sub-account policies. A key scoped to the main account sees every sub-account policy of the main account; a key scoped to a sub-account sees only the policy attached to that sub-account. Account permission.",
+          "READ_VIP_STATUS": "Allow reading the main account's VIP status. Main-account permission.",
+          "READ_WITHDRAW_VALIDATION": "Allow validating an external withdraw destination within the key's scope without creating, signing, or reserving a withdraw. It does not allow withdrawing. Account permission.",
+          "SWAP": "Allow quoting, creating, and reading Swaps: market conversions of the account's own Trading balance from one asset into another. Each Swap places spot orders on the account's behalf, which also remain subject to the sub-account's spot trading policy.",
+          "TRADE_SPOT": "Allow all spot order mutations: create, modify, replace, cancel, batch operations, live cancel-all, and arming or disabling cancel-all-after. Includes reading spot orders and trades and placing or modifying triggers. Authorized cancellation remains available when trading activity is disabled; this does not grant mutation access to a read-only API key."
+        }
+      },
       "polyester.rest.enum.auth.v1.PolicyAction.array": {
         "enum": [
           "TRADE_SPOT",
@@ -24203,7 +25676,10 @@
           "CONVERT_DUST",
           "READ_FUNDING_FLOWS",
           "READ_NOTIFICATIONS",
-          "READ_ACCOUNT_ACTIVITY"
+          "READ_ACCOUNT_ACTIVITY",
+          "MANAGE_API_KEYS",
+          "MANAGE_API_KEY_POLICIES",
+          "MANAGE_SUBACCOUNT_POLICIES"
         ],
         "type": "array",
         "x-poly-enum-descriptions": {
@@ -24213,8 +25689,11 @@
           "EXTERNAL_WITHDRAW": "Allow value to leave Trading through external withdrawals. Destination authorization is enforced separately from this policy. Moves value out of the account, so an assistant API key can never be allowed it.",
           "INTERNAL_TRANSFER": "Allow internal transfers between sub-accounts or linked Polyester accounts, including reading internal transfer history. Moves value out of the account, so an assistant API key can never be allowed it.",
           "MANAGE_ADDRESS_BOOK": "Allow creating, updating, deleting, and copying saved destination entries, including reading the address book. Address-book writes accept only a session token, so on an API-key policy this grants address-book reads only. It manages where value can leave the account, so an assistant API key can never be allowed it.",
+          "MANAGE_API_KEYS": "Allow creating, updating and revoking the standard API keys of the main account and of the sub-accounts it owns. Admin permission: honored only for an admin API key, which never manages an admin or assistant key, a key whose policy allows a money-out action, or a sub-account shared with the main account. A key it creates or updates needs an IP allowlist within the admin key's own.",
+          "MANAGE_API_KEY_POLICIES": "Allow attaching and clearing the API policies of the standard API keys the admin key may manage. A policy it attaches can never allow a money-out action or an admin permission, and on a sub-account key can never allow more actions or markets than the sub-account's policy. Admin permission: honored only for an admin API key.",
           "MANAGE_AUTO_WITHDRAW": "Allow creating, changing, and disabling the auto-withdraw rule, including reading it. A rule pays value out, so changing one also requires EXTERNAL_WITHDRAW, API keys can never change one, and an assistant API key can never be allowed it.",
           "MANAGE_PRICE_ALERTS": "Allow creating, updating, and cancelling the main account's price alerts. It does not allow listing them. Main-account permission.",
+          "MANAGE_SUBACCOUNT_POLICIES": "Allow attaching, clearing and updating the policies of the sub-accounts the main account owns. The resulting policy can never allow a money-out action, and a locked policy is never changed. Admin permission: honored only for an admin API key.",
           "READ_ACCOUNT_ACTIVITY": "Allow listing the security and activity events of the main account and its sub-accounts within the key's scope: a key scoped to the main account reads all of them, a key scoped to a sub-account only that sub-account's. Account permission.",
           "READ_ACCOUNT_DIRECTORY": "Allow resolving an account by username, account ID, or smart-account address. Any key of the main account may use it, whatever its scope. Account permission.",
           "READ_ADDRESS_BOOK": "Allow reading saved, recent, and whitelisted address-book destinations.",
@@ -25606,15 +27085,71 @@
           "ROLLING_WINDOW": "Capacity is measured over a rolling time window."
         }
       },
+      "polyester.rest.enum.polyester.type.v1.DepthTier": {
+        "enum": [
+          "1",
+          "5",
+          "10",
+          "20",
+          "50",
+          "100",
+          "200",
+          "500",
+          "1000",
+          "5000"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "1": "1 level per side: the best bid and the best ask.",
+          "10": "10 levels per side.",
+          "100": "100 levels per side.",
+          "1000": "1000 levels per side.",
+          "20": "20 levels per side.",
+          "200": "200 levels per side.",
+          "5": "5 levels per side.",
+          "50": "50 levels per side.",
+          "500": "500 levels per side.",
+          "5000": "5000 levels per side, the deepest snapshot."
+        }
+      },
+      "polyester.rest.enum.polyester.type.v1.DepthTier.integer": {
+        "enum": [
+          1,
+          5,
+          10,
+          20,
+          50,
+          100,
+          200,
+          500,
+          1000,
+          5000
+        ],
+        "type": "integer",
+        "x-poly-enum-descriptions": {
+          "1": "1 level per side: the best bid and the best ask.",
+          "10": "10 levels per side.",
+          "100": "100 levels per side.",
+          "1000": "1000 levels per side.",
+          "20": "20 levels per side.",
+          "200": "200 levels per side.",
+          "5": "5 levels per side.",
+          "50": "50 levels per side.",
+          "500": "500 levels per side.",
+          "5000": "5000 levels per side, the deepest snapshot."
+        }
+      },
       "polyester.rest.enum.ratelimit.v1.TradingRateLimitClass": {
         "enum": [
           "PLACE",
-          "CANCEL"
+          "CANCEL",
+          "READ"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "CANCEL": "Order and trigger cancellation.",
-          "PLACE": "New-order placement and order modification."
+          "PLACE": "New-order placement and order modification.",
+          "READ": "Order, fill, trigger, trading-limit and fee reads, and order previews. Every API key, session and subaccount of a root account shares the root account's read limit."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.AllowlistAction": {
@@ -25702,7 +27237,20 @@
           "EVALUATING": "Detected; eligibility is being evaluated. A deposit can already be credited (credited_at) while it is evaluated.",
           "MANUAL_RECOVERY": "Observed on an address that was already retired (DEPOSIT_ADDRESS_RETIRED). It never executes and is not returned automatically. It is handled only through support-assisted recovery, and it is potentially unrecoverable. The broker contacts Polyester broker support with the swap_id.",
           "ON_HOLD": "Held for review; it neither executes nor returns until released. A deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this disposition after Zipper's compliance team transferred its funds out (QuickSwap CLOSED).",
-          "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit."
+          "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount but at least the source network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit. One never credited is returned directly, and direct_return reports that return."
+        }
+      },
+      "polyester.rest.enum.swap.quickswap.v1.DepositReturnState": {
+        "enum": [
+          "RETURN_PENDING",
+          "RETURN_COMPLETED",
+          "RETURN_HELD"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "RETURN_COMPLETED": "The return was sent to return_address; tx_hash is its transaction.",
+          "RETURN_HELD": "The return is held for review and is not sent until review releases it. The broker contacts Polyester broker support with the swap_id.",
+          "RETURN_PENDING": "The return is queued or being sent."
         }
       },
       "polyester.rest.enum.swap.quickswap.v1.ExecutionProgress.SlicesUnavailableReason": {
@@ -25881,7 +27429,9 @@
           "DEPOSIT_ADDRESS_NOT_ISSUED",
           "INTERMEDIATE_BELOW_MINIMUM",
           "MARKET_CLOSED",
-          "SOURCE_WALLET_SCREENING_FAILED"
+          "SOURCE_WALLET_SCREENING_FAILED",
+          "INSUFFICIENT_LIQUIDITY",
+          "ORDER_REJECTED"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
@@ -25891,12 +27441,14 @@
           "DEPOSIT_ADDRESS_CONFLICT": "The QuickSwap could not be issued a deposit address and never gets one: it is EXPIRED without deposit_instructions, and nothing can be deposited to it. Create a new QuickSwap with a new idempotency key, and report the swap_id to Polyester broker support.",
           "DEPOSIT_ADDRESS_NOT_ISSUED": "The address had not been issued when this deposit was observed; it never executes.",
           "DEPOSIT_ADDRESS_RETIRED": "The address was retired when this deposit was observed. The deposit is MANUAL_RECOVERY: it never executes, is not returned automatically, and is potentially unrecoverable.",
-          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount, or its credit after the deposit network fee is below the smallest order the route's market accepts. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
+          "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount, or its credit after the deposit network fee is below the smallest order the route's market accepts. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. Only a deposit that reaches the source network's minimum deposit (AssetChainVariant.deposit_min_amount) is returned; one below it is not detected and never appears on the QuickSwap. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
           "EXECUTION_DEADLINE_REACHED": "The execution deadline passed before all input executed; untraded funds are refunded or returned. Shown while EXECUTING once the deadline ended trading, and on the payout statuses that follow.",
           "FUNDING_WINDOW_ENDED": "The funding window ended without an eligible deposit.",
+          "INSUFFICIENT_LIQUIDITY": "Available liquidity did not fill an order at its protected price; untraded input or intermediate funds are returned or refunded. Shown on the payout statuses that follow, including COMPLETED when a partly traded swap refunded the rest. A trade failure reason (this one or ORDER_REJECTED) is used only when the execution ended without another reason, such as EXECUTION_DEADLINE_REACHED or PROTECTION_NOT_MET; it is then the first slice in schedule order whose reason or carry_reason is INSUFFICIENT_LIQUIDITY or ORDER_REJECTED, the reason before the carry_reason within a slice.",
           "INTERMEDIATE_BELOW_MINIMUM": "On a two-leg route, intermediate funds were below the smallest order the second leg's market accepts, so they could not be converted to the destination asset; they are refunded to refund_address. Shown on the payout statuses that follow.",
           "LATE_DEPOSIT": "The deposit was first seen after funding_expires_at.",
           "MARKET_CLOSED": "A market on the route was halted, restricted or delisted when the deposit was credited and did not reopen within a bounded wait after the deposit was credited, the same for market and TWAP execution. Nothing was traded: the deposit is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason.",
+          "ORDER_REJECTED": "An order was refused; untraded input or intermediate funds are returned or refunded. Shown on the payout statuses that follow, chosen as for INSUFFICIENT_LIQUIDITY.",
           "OUTCOME_RECONCILING": "A processing step is being confirmed. Processing resumes automatically; no action is needed.",
           "PROTECTION_NOT_MET": "Execution could not meet the protection; untraded funds are refunded or returned. When no protected order could be placed for the deposit, nothing is traded: the deposit is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason.",
           "REFUND_BELOW_MINIMUM": "Refund not possible: an amount left to refund or return was below the withdrawal minimum of its asset and network, so no withdrawal was made for it. Its withdrawal is NOT_SENT with the amount in unsent_amount. Other withdrawals are unaffected.",
@@ -26259,12 +27811,14 @@
           "PAIR_DRAIN_LADDER",
           "PAIR_DRAIN_ATTACHED_LEG",
           "MARKET_HALTED",
+          "CANCEL_ALL",
           "MISSING_REASON_CODE",
           "INTERNAL_ERROR"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "ACCOUNT_REPAIR": "Ended by the exchange while it recovered your account. The account's open orders on the market were canceled at the same time; place new orders and triggers once the account trades again.",
+          "CANCEL_ALL": "The account's cancel-all, or its dead-man switch, with triggers included stopped the trigger: its reserved funds were released and its open orders were canceled with the account's other orders.",
           "INTERNAL_ERROR": "An internal invariant or processing failure canceled the trigger.",
           "MARKET_HALTED": "The market was halted: the exchange ended every open trigger of the market, attached take-profit and stop-loss included, and released its reserved funds. The market's open orders were canceled at the same time. The market refuses new triggers until it trades again.",
           "MISSING_REASON_CODE": "The terminal state did not contain a cancellation reason.",
@@ -26395,6 +27949,7 @@
           "INDEX_PRICE_UNAVAILABLE",
           "TRIGGER_WOULD_TRIGGER_IMMEDIATELY",
           "SELF_TRADE_PREVENTED",
+          "TRIGGER_STOPPING",
           "MISSING_REASON_CODE",
           "INTERNAL_ERROR"
         ],
@@ -26491,6 +28046,7 @@
           "TRIGGER_FIRE_LIMIT_REACHED": "The trigger could not fire again.",
           "TRIGGER_PRICE_INVALID": "The configured trigger price was invalid.",
           "TRIGGER_PRICE_SOURCE_UNSUPPORTED": "The selected trigger price source was not supported.",
+          "TRIGGER_STOPPING": "The account's cancel-all, or its dead-man switch, with triggers included was stopping the trigger, so the fire placed no order; the trigger then ends canceled with reason CANCEL_ALL. Only on FIRE_REFUSED.",
           "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The trigger price, or a trailing stop's activation price, was already reached by the price the trigger watches (at or past it) when the trigger took effect, a few milliseconds after it was submitted, so the trigger would have fired or activated at once. It never armed and sent no order; its reserved funds were released. A price that reaches it after the trigger is armed, or for a trailing stop created, fires or activates the trigger normally.",
           "TWAP_CAPACITY_REACHED": "The market had no room for another TWAP order.",
           "TWAP_INTERVAL_INVALID": "The TWAP interval was not valid.",
@@ -26539,8 +28095,8 @@
     }
   },
   "info": {
-    "title": "AuthPatchService RESTVIEW",
-    "version": "6"
+    "title": "Polyester API",
+    "version": "1.0.0"
   },
   "openapi": "3.0.3",
   "paths": {
@@ -26832,7 +28388,186 @@
         "x-poly-rest": true
       }
     },
+    "/v1/auth/api-keys/{key_id}/policy": {
+      "patch": {
+        "description": "Attach a policy to an API key, apply a template to it as a new copy, or clear its policy.",
+        "operationId": "PolicyService_SetApiKeyPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.PolicyService_SetApiKeyPolicy_REST.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_SetApiKeyPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Set API Key Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      }
+    },
+    "/v1/auth/policies/api-keys": {
+      "get": {
+        "description": "List the API-key policies and templates available to the caller.",
+        "operationId": "PolicyService_ListApiPolicies_REST",
+        "parameters": [
+          {
+            "description": "Optional API-key context.",
+            "in": "query",
+            "name": "keyId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_ListApiPolicies_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List API Policies",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
+      "post": {
+        "description": "Create an API-key policy or template; a policy may be attached in the same call.",
+        "operationId": "PolicyService_CreateApiPolicy_REST",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.PolicyService_CreateApiPolicy_REST.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_CreateApiPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Create API Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      }
+    },
     "/v1/auth/policies/api-keys/{policy_id}": {
+      "delete": {
+        "description": "Delete an unused API-key policy or a template.",
+        "operationId": "PolicyService_DeleteApiPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Delete API Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
+      "get": {
+        "description": "Retrieve one API-key policy or template.",
+        "operationId": "PolicyService_GetApiPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional API-key context.",
+            "in": "query",
+            "name": "keyId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_GetApiPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Get API Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
       "patch": {
         "description": "Partially update an API-key policy using If-Match revision control.",
         "operationId": "PolicyService_UpdateApiPolicy_REST",
@@ -26876,9 +28611,6 @@
                   },
                   "description": {
                     "type": "string"
-                  },
-                  "isTemplate": {
-                    "type": "boolean"
                   },
                   "name": {
                     "type": "string"
@@ -26935,7 +28667,143 @@
         "x-poly-rest": true
       }
     },
+    "/v1/auth/policies/subaccounts": {
+      "get": {
+        "description": "List the sub-account policies and templates available to the caller.",
+        "operationId": "PolicyService_ListSubaccountPolicies_REST",
+        "parameters": [
+          {
+            "description": "Optional sub-account context.",
+            "in": "query",
+            "name": "subaccountId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_ListSubaccountPolicies_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List Subaccount Policies",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
+      "post": {
+        "description": "Create a sub-account policy or template; a policy may be attached in the same call.",
+        "operationId": "PolicyService_CreateSubaccountPolicy_REST",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.PolicyService_CreateSubaccountPolicy_REST.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_CreateSubaccountPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Create Subaccount Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      }
+    },
     "/v1/auth/policies/subaccounts/{policy_id}": {
+      "delete": {
+        "description": "Delete an unused sub-account policy or a template.",
+        "operationId": "PolicyService_DeleteSubaccountPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Delete Subaccount Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
+      "get": {
+        "description": "Retrieve one sub-account policy or template.",
+        "operationId": "PolicyService_GetSubaccountPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional sub-account context.",
+            "in": "query",
+            "name": "subaccountId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_GetSubaccountPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Get Subaccount Policy",
+        "tags": [
+          "Auth Policies"
+        ],
+        "x-poly-rest": true
+      },
       "patch": {
         "description": "Partially update a subaccount policy using If-Match revision control. Omitted fields remain unchanged. Send {\"maxOrderNotional\":null} to remove the per-order notional cap, matching a ConnectRPC update mask selecting max_order_notional with its policy value omitted. To set a cap, supply a positive decimal string in quote units with six decimal places of precision. Additional trailing zeros are accepted. Zero and negative values remain invalid. After clearing, GET returns maxOrderNotional as \"0\", meaning no explicit cap.",
         "operationId": "PolicyService_UpdateSubaccountPolicy_REST",
@@ -27146,6 +29014,49 @@
         "summary": "Update Subaccount",
         "tags": [
           "Subaccounts"
+        ],
+        "x-poly-rest": true
+      }
+    },
+    "/v1/auth/subaccounts/{subaccount_id}/policy": {
+      "patch": {
+        "description": "Attach a policy to a sub-account, apply a template to it as a new copy, or clear its policy.",
+        "operationId": "PolicyService_SetSubaccountPolicy_REST",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subaccount_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.PolicyService_SetSubaccountPolicy_REST.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.PolicyService_SetSubaccountPolicy_REST.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Set Subaccount Policy",
+        "tags": [
+          "Auth Policies"
         ],
         "x-poly-rest": true
       }
@@ -28393,16 +30304,17 @@
             }
           },
           {
-            "description": "Number of price levels per side, from 1 to the maxDepth every response reports. Defaults to 50 when omitted. A depth above maxDepth is rejected, never truncated.",
+            "description": "Depth tier: price levels per side. Defaults to 50 when omitted; any other value is rejected. To follow the book in real time, subscribe to the order book stream at a streamed tier (1, 20, 50, 200 or 500), then fetch this snapshot at exactly that tier.",
             "in": "query",
             "name": "depth",
             "required": false,
             "schema": {
-              "default": 50,
-              "format": "int64",
-              "maximum": 4294967295,
-              "minimum": 1,
-              "type": "integer"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/polyester.rest.enum.polyester.type.v1.DepthTier.integer"
+                }
+              ],
+              "default": 50
             }
           }
         ],
@@ -28587,7 +30499,7 @@
     },
     "/v1/orders/cancel-all": {
       "post": {
-        "description": "Cancel all matching open orders for an account. Supports an optional list of symbols and a side filter plus dry-run preview. Returns up to 200 canceled order IDs, oldest first, with the total count. It cancels open orders, including those that triggers placed (TWAP slices, ladder levels and exit orders), but not triggers. Standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Cancel triggers separately: list them with List Triggers, then cancel each with Cancel Trigger.",
+        "description": "Cancel all matching open orders for an account. Supports an optional list of symbols and a side filter plus dry-run preview. Returns up to 200 canceled order IDs, oldest first, with the total count. Unless it is a dry run, it covers every matching order admitted before its requestId was first admitted, from any interface, including orders not yet open and replacement orders: an order whose create or replace response arrived before the first request with this requestId was sent is covered, while requests still in flight or with an unknown outcome have no defined order with it. A retry with the same requestId keeps the original scope and covers no order admitted since; use a fresh requestId for a new cancellation. Each covered order eventually ends; any still open when the cancellation applies is canceled. It cancels open orders, including those that triggers placed (TWAP slices, ladder levels and exit orders). By default it does not cancel triggers: standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Set include_triggers to also stop every matching trigger, attached legs included, in the same request; matched_triggers counts them.",
         "operationId": "OrdersService_CancelAllOrders",
         "requestBody": {
           "content": {
@@ -28637,7 +30549,7 @@
     },
     "/v1/orders/cancel-all-after": {
       "post": {
-        "description": "Set or disable a dead-man switch timeout for automatic cancel-all. Supports optional symbol and side scope with idempotent heartbeat refresh. On expiry it cancels open orders in scope, including those that triggers placed (TWAP slices, ladder levels and exit orders), but not triggers. Standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Cancel triggers separately: list them with List Triggers, then cancel each with Cancel Trigger.",
+        "description": "Set or disable a dead-man switch timeout for automatic cancel-all. Supports optional symbol and side scope with idempotent heartbeat refresh. On expiry it cancels open orders in scope, including those that triggers placed (TWAP slices, ladder levels and exit orders). By default it does not cancel triggers: standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Set include_triggers to also stop every matching trigger, attached legs included, when the switch fires.",
         "operationId": "OrdersService_CancelAllAfter",
         "requestBody": {
           "content": {
@@ -28737,7 +30649,7 @@
     },
     "/v1/orders/history": {
       "get": {
-        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination. While the current state of an order on the page is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than returning a stale state; retry the same request.",
+        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination. While the current state of an order on the page is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than returning a stale state; retry the same request. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetOrderHistory",
         "parameters": [
           {
@@ -28928,7 +30840,7 @@
     },
     "/v1/orders/open": {
       "get": {
-        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination. While the current state of an order in scope is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than omitting the order or returning a stale state; retry the same request.",
+        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination. While the current state of an order in scope is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than omitting the order or returning a stale state; retry the same request. Costs one unit of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetOpenOrders",
         "parameters": [
           {
@@ -33224,7 +35136,7 @@
     },
     "/v1/rate-limits": {
       "get": {
-        "description": "Get the complete active placement and cancellation quota catalog for VIP0 through VIP10.",
+        "description": "Get the complete active placement, cancellation and read quota catalog for VIP0 through VIP10.",
         "operationId": "RateLimitService_GetRateLimitConfig",
         "responses": {
           "200": {
@@ -33270,7 +35182,7 @@
     },
     "/v1/spot/fee-rates": {
       "get": {
-        "description": "Get effective maker and taker fee rates, the rates an order reserves its fee at, and the components of the effective rates for the authenticated account target.",
+        "description": "Get effective maker and taker fee rates, the rates an order reserves its fee at, and the components of the effective rates for the authenticated account target. Costs one unit of the root account's trading read limit per 100 symbols returned, rounded up.",
         "operationId": "FeeService_GetSpotFeeRates",
         "parameters": [
           {
@@ -33690,7 +35602,7 @@
     },
     "/v1/spot/orders/{order_id}": {
       "get": {
-        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. The order shows a fill as soon as it executes and its trades are recorded shortly after: executionsComplete is true once the trades through this generation, across every page, add up to the order's cumulative quantity, and false while a recent execution is still being recorded. Transfers are eventually consistent.",
+        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. The order shows a fill as soon as it executes and its trades are recorded shortly after: executionsComplete is true once the trades through this generation, across every page, add up to the order's cumulative quantity, and false while a recent execution is still being recorded. Transfers are eventually consistent. Costs one unit of the root account's trading read limit.",
         "operationId": "OrdersReadService_GetOrder",
         "parameters": [
           {
@@ -33785,7 +35697,7 @@
     },
     "/v1/spot/trades": {
       "get": {
-        "description": "Retrieve per-user fills with account-bound keyset pagination. Omit optional filters to list the authenticated account's fills. orderId selects one physical order; lineageId selects the logical order across replacements. These filters are mutually exclusive. throughGeneration requires lineageId. Execution and order-state projections are eventually consistent.",
+        "description": "Retrieve per-user fills with account-bound keyset pagination. Omit optional filters to list the authenticated account's fills. orderId selects one physical order; lineageId selects the logical order across replacements. These filters are mutually exclusive. throughGeneration requires lineageId. Execution and order-state projections are eventually consistent. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetUserTrades",
         "parameters": [
           {
@@ -34353,7 +36265,7 @@
     },
     "/v1/trading/rate-limits": {
       "get": {
-        "description": "Get the effective placement and cancellation limits for the authenticated account target.",
+        "description": "Get the effective placement, cancellation and read limits for the authenticated account target. Costs one unit of the root account's read limit.",
         "operationId": "RateLimitService_GetTradingRateLimits",
         "parameters": [
           {
@@ -34487,7 +36399,7 @@
     },
     "/v1/triggers": {
       "get": {
-        "description": "List triggers for an account with optional symbol, status, and trigger-type filters.",
+        "description": "List triggers for an account with optional symbol, status, and trigger-type filters. Costs one unit of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "TriggersService_ListTriggers",
         "parameters": [
           {
@@ -34846,7 +36758,7 @@
         "x-poly-rest": true
       },
       "get": {
-        "description": "Retrieve a single trigger by trigger ID, including lifecycle state and strategy-specific fields.",
+        "description": "Retrieve a single trigger by trigger ID, including lifecycle state and strategy-specific fields. Costs one unit of the root account's trading read limit.",
         "operationId": "TriggersService_GetTrigger",
         "parameters": [
           {
@@ -34972,7 +36884,7 @@
     },
     "/v1/triggers/{trigger_id}/events": {
       "get": {
-        "description": "List append-only trigger events for a trigger, including child-order actions, with optional event-category filtering and reverse-time pagination. A trigger the caller can read that has no event yet answers an empty list.",
+        "description": "List append-only trigger events for a trigger, including child-order actions, with optional event-category filtering and reverse-time pagination. A trigger the caller can read that has no event yet answers an empty list. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "TriggersService_ListTriggerEvents",
         "parameters": [
           {

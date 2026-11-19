@@ -38,6 +38,17 @@ enum ApiKeyPurpose {
   // assistant key is revoked when its creator loses the role that manages the
   // sub-account's API keys or leaves the sub-account.
   ASSISTANT = 2;
+  // An elevated key the main account's owner created or promoted in a
+  // signed-in session with a fresh step-up proof. Its policy's admin
+  // permissions (MANAGE_API_KEYS, MANAGE_API_KEY_POLICIES and
+  // MANAGE_SUBACCOUNT_POLICIES) let it manage the main account's other keys
+  // and its owned sub-accounts' policies without a session. An admin key acts
+  // for the main account only, needs a non-empty IP allowlist of entries no
+  // broader than /24 (IPv4) or /48 (IPv6), and its policy can never allow an
+  // action that moves value out of the account or manages where it goes. No
+  // API key can create, promote, change or delete an admin key, including the
+  // key itself; only its owner's session with a fresh step-up proof can.
+  ADMIN_KEY = 3;
 }
 
 // ApiKey is public API key metadata. It never includes the private key or seed.
@@ -127,6 +138,15 @@ message CreateApiKeyRequest {
     (buf.validate.field).bytes.len = 32,
     (google.api.field_behavior) = REQUIRED
   ];
+  // What the key is for. Unspecified or STANDARD creates a standard key.
+  // ADMIN_KEY creates an admin key: only the main account's owner may, in a
+  // signed-in session with a fresh step-up proof, for the main account
+  // (subaccount_id unset), with an ip_whitelist that admin keys accept.
+  // ASSISTANT keys are created with SetAssistantKeys.
+  ApiKeyPurpose purpose = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [2]
+  }];
 }
 
 // CreateApiKeyResponse returns the created API key metadata.
@@ -217,6 +237,15 @@ message ApiKeyUpdateSpec {
   ];
   // Expiry time in UTC. When selected, omission or the epoch clears expiry.
   google.protobuf.Timestamp expires_at = 6;
+  // New purpose: STANDARD demotes an admin key, ADMIN_KEY promotes a
+  // standard key. Only the main account's owner may select it, in a signed-in session
+  // with a fresh step-up proof. A promoted key must act for the main account,
+  // have an IP allowlist that admin keys accept, and have no policy that
+  // allows a money-out action. An assistant key's purpose never changes.
+  ApiKeyPurpose purpose = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [2]
+  }];
 }
 
 // UpdateApiKeyRequest changes selected mutable fields on an existing API key.
@@ -300,7 +329,8 @@ message AssistantKeySpec {
     (google.api.field_behavior) = REQUIRED
   ];
   // API policy that bounds the key (opaque ID). It must belong to the same
-  // main account as the key, and must not allow EXTERNAL_WITHDRAW,
+  // main account as the key, must not be a template (FailedPrecondition with
+  // AUTH_POLICY_INVALID), and must not allow EXTERNAL_WITHDRAW,
   // INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW. Set
   // exactly one of policy_id and preset.
   fixed64 policy_id = 3;
@@ -369,9 +399,19 @@ service ApiKeyService {
   // MFA enrollment or a fresh step-up proof. The acting caller's root account
   // must have accepted the current terms, including when targeting a shared
   // subaccount; otherwise FailedPrecondition with AUTH_TERMS_NOT_ACCEPTED is returned.
+  // Creating an admin key always takes a fresh step-up proof.
+  //
+  // An admin API key with MANAGE_API_KEYS may also create a standard key, for
+  // the main account or a sub-account it owns, without a session. The new key
+  // needs an ip_whitelist whose every entry lies within the admin key's own
+  // allowlist (else PermissionDenied with AUTH_ADMIN_KEY_SCOPE_EXCEEDED). A
+  // request for an admin key from any API key returns PermissionDenied with
+  // AUTH_ADMIN_KEY_ESCALATION_DENIED. Any other API key returns
+  // PermissionDenied with AUTH_ADMIN_KEY_REQUIRED.
   rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       post: "/v1/auth/api-keys"
       body: "*"
@@ -412,9 +452,16 @@ service ApiKeyService {
   }
 
   // Revoke an API key permanently.
+  //
+  // An admin API key with MANAGE_API_KEYS may also revoke a standard key of
+  // the main account or of a sub-account it owns, without a session. It can
+  // never revoke an admin or assistant key, itself included:
+  // PermissionDenied with AUTH_ADMIN_KEY_ESCALATION_DENIED or
+  // AUTH_ADMIN_KEY_FORBIDDEN_TARGET.
   rpc DeleteApiKey(DeleteApiKeyRequest) returns (DeleteApiKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {delete: "/v1/auth/api-keys/{key_id}"};
     option (gnostic.openapi.v3.operation) = {
       summary: "Delete API Key"
@@ -424,10 +471,21 @@ service ApiKeyService {
   }
 
   // Update API key metadata and allowed status transitions. Revocation must use
-  // DeleteApiKey.
+  // DeleteApiKey. Promoting a key to an admin key, demoting one, and any change
+  // to an admin key always take a fresh step-up proof.
+  //
+  // An admin API key with MANAGE_API_KEYS may also update a standard key of
+  // the main account or of a sub-account it owns, without a session, when the
+  // key's policy allows no money-out action. The key's ip_whitelist after the
+  // update must lie within the admin key's own allowlist (else
+  // PermissionDenied with AUTH_ADMIN_KEY_SCOPE_EXCEEDED). It can never select
+  // purpose, nor change an admin or assistant key, itself included:
+  // PermissionDenied with AUTH_ADMIN_KEY_ESCALATION_DENIED or
+  // AUTH_ADMIN_KEY_FORBIDDEN_TARGET.
   rpc UpdateApiKey(UpdateApiKeyRequest) returns (UpdateApiKeyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       patch: "/v1/auth/api-keys/{key_id}"
       body: "*"
@@ -442,12 +500,12 @@ service ApiKeyService {
   // Create or replace the caller's Polyester AI assistant key set: one
   // ASSISTANT key per enabled account, each bounded by its API policy or by a
   // permission preset. One step-up covers the whole set, including the
-  // policies its presets create, and the change is all or nothing. Send a
-  // fresh step-up proof in the X-Auth-Step-Up header, which the change
-  // consumes, or no proof while the session's recent-MFA window is open for
-  // RECENT_MFA_ACTION_ASSISTANT_ACCESS (GetRecentMFA). Without either,
-  // PermissionDenied with AUTH_STEP_UP_REQUIRED, or AUTH_RECENT_MFA_EXPIRED
-  // when the window has closed. An entry whose account already has an assistant key with the same
+  // policies its presets create, and the change is all or nothing. An
+  // MFA-elevated session (one that completed an MFA challenge in the last 30
+  // minutes) needs no proof; any other session sends a fresh step-up proof in
+  // the X-Auth-Step-Up header, which the change consumes. Without either,
+  // PermissionDenied with AUTH_STEP_UP_REQUIRED. An entry whose account
+  // already has an assistant key with the same
   // public key keeps that key, with its status, and takes the requested
   // policy; any other entry replaces the account's key. Accounts left out of
   // the set have their assistant key revoked. A sub-account entry needs the
@@ -471,7 +529,7 @@ service ApiKeyService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Set Assistant Keys"
-      description: "Create or replace the caller's Polyester AI assistant key set with one fresh step-up proof, or none while the recent-MFA window is open. All keys change or none do; accounts left out lose their assistant key."
+      description: "Create or replace the caller's Polyester AI assistant key set with one fresh step-up proof, or none from an MFA-elevated session. All keys change or none do; accounts left out lose their assistant key."
       tags: "Auth Service"
     };
   }

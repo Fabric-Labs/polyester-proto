@@ -21,7 +21,9 @@ option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1"
 // exactly the calls it names and never implies another permission. A
 // main-account permission is honored only for an API key scoped to the main
 // account; a key scoped to a sub-account is refused even when its policy
-// grants it. An API key without a policy has no permission at all.
+// grants it. Admin permissions, documented below, apply to API-key policies
+// only and are honored only for an admin API key. An API key without a policy
+// has no permission at all.
 enum PolicyAction {
   // No policy action selected. An empty API-key action list grants no access;
   // sub-account policies retain their mandatory read-only actions.
@@ -157,6 +159,24 @@ enum PolicyAction {
   // reads all of them, a key scoped to a sub-account only that sub-account's.
   // Account permission.
   READ_ACCOUNT_ACTIVITY = 42;
+  // Allow creating, updating and revoking the standard API keys of the main
+  // account and of the sub-accounts it owns. Admin permission: honored only
+  // for an admin API key, which never manages an admin or assistant key, a
+  // key whose policy allows a money-out action, or a sub-account shared with
+  // the main account. A key it creates or updates needs an IP allowlist
+  // within the admin key's own.
+  MANAGE_API_KEYS = 43;
+  // Allow attaching and clearing the API policies of the standard API keys
+  // the admin key may manage. A policy it attaches can never allow a
+  // money-out action or an admin permission, and on a sub-account key can
+  // never allow more actions or markets than the sub-account's policy. Admin
+  // permission: honored only for an admin API key.
+  MANAGE_API_KEY_POLICIES = 44;
+  // Allow attaching, clearing and updating the policies of the sub-accounts
+  // the main account owns. The resulting policy can never allow a money-out
+  // action, and a locked policy is never changed. Admin permission: honored
+  // only for an admin API key.
+  MANAGE_SUBACCOUNT_POLICIES = 45;
 }
 
 // MarketScope describes how a policy applies to spot markets.
@@ -215,13 +235,21 @@ message SubaccountPolicyView {
     }
   ];
 
-  // True if this policy is a reusable template; false if it is a
-  // per-sub-account instance.
+  // True if this policy is a template: a reusable policy of the main account
+  // that is never attached to a sub-account itself. Applying it with
+  // SetSubaccountPolicy attaches a copy, so editing the template later changes
+  // no sub-account. Set when the policy is created and never changes.
   bool is_template = 10;
 
-  // Optional source template this policy was copied from (opaque ID). This is
-  // audit metadata only and does not imply live linkage.
+  // Template this policy was copied from (opaque ID), or 0 when it is not a
+  // copy. Set when the copy is made and never changes, even after the template
+  // is edited or deleted; the copy is not linked to the template.
   fixed64 source_template_id = 11;
+
+  // Revision of the template when this policy was copied from it, or 0 when
+  // it is not a copy. Compare it with the template's current revision to see
+  // whether the template changed since. Never changes.
+  uint64 source_template_revision = 31;
 
   // Maximum notional size allowed for any single order on this sub-account,
   // expressed in canonical quote microunits (one unit is 0.000001 USDT).
@@ -353,17 +381,24 @@ message SubaccountPolicySpec {
   google.protobuf.Timestamp review_at = 26;
   // Optional expiry time in UTC. This does not automatically disable the policy.
   google.protobuf.Timestamp expires_at = 27;
+  // Whether the policy is a template, which SetSubaccountPolicy applies as a
+  // copy. Only the main account owner creates templates, and never together
+  // with subaccount_id. Chosen at creation: an update_mask that selects it is
+  // refused with InvalidArgument.
+  bool is_template = 28;
 }
 
-// CreateSubaccountPolicyRequest defines a new sub-account policy template, with
-// an optional attach step for one target sub-account.
+// CreateSubaccountPolicyRequest defines a new sub-account policy, with an
+// optional attach step for one target sub-account.
 message CreateSubaccountPolicyRequest {
   // Complete mutable policy configuration.
   SubaccountPolicySpec policy = 1 [
     (buf.validate.field).required = true,
     (google.api.field_behavior) = REQUIRED
   ];
-  // Optional target sub-account to attach atomically after creation.
+  // Optional target sub-account to attach atomically after creation. A
+  // template cannot be attached: setting it with policy.is_template is refused
+  // with InvalidArgument.
   optional fixed64 subaccount_id = 2 [(buf.validate.field).fixed64.gt = 0];
 }
 
@@ -406,8 +441,8 @@ message UpdateSubaccountPolicyResponse {
   SubaccountPolicyView policy = 1;
 }
 
-// DeleteSubaccountPolicyRequest deletes a sub-account policy template when it
-// is not in use.
+// DeleteSubaccountPolicyRequest deletes a sub-account policy when it is not in
+// use. A template is never in use; copies made from it keep their lineage.
 message DeleteSubaccountPolicyRequest {
   // Policy identifier (opaque ID).
   fixed64 policy_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -416,19 +451,25 @@ message DeleteSubaccountPolicyRequest {
 // DeleteSubaccountPolicyResponse is empty when the delete succeeds.
 message DeleteSubaccountPolicyResponse {}
 
-// SetSubaccountPolicyRequest attaches or clears a policy template on a
-// sub-account.
+// SetSubaccountPolicyRequest attaches a policy to a sub-account, applies a
+// template to it, or clears its policy.
 message SetSubaccountPolicyRequest {
   // Sub-account identifier (opaque ID).
   fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
 
-  // Policy template to attach (opaque ID). A value of 0 clears the explicit
-  // binding and restores the system Read Only policy.
+  // Policy to attach (opaque ID), owned by the sub-account's main account. A
+  // template is applied: the sub-account gets a new copy of its current
+  // revision, which later edits of the template do not change. A value of 0
+  // clears the explicit binding and restores the system Read Only policy.
   fixed64 policy_id = 2;
 }
 
-// SetSubaccountPolicyResponse is empty when the policy binding succeeds.
-message SetSubaccountPolicyResponse {}
+// SetSubaccountPolicyResponse returns the policy now attached.
+message SetSubaccountPolicyResponse {
+  // Policy now attached to the sub-account (opaque ID): the new copy when
+  // policy_id named a template, else policy_id. 0 when the policy was cleared.
+  fixed64 policy_id = 1;
+}
 
 // ApiPolicyView is the public view of an API key policy template. Its action
 // and spot-market floor cannot exceed an attached sub-account policy.
@@ -461,13 +502,21 @@ message ApiPolicyView {
   MarketScope.Value spot_market_scope = 7 [(buf.validate.field).enum = {defined_only: true}];
   // --- Template / lifecycle metadata ---
 
-  // When true, this policy is intended to be reused as a template across
-  // multiple API keys. When false, it represents a single-key instance.
+  // True if this policy is a template: a reusable policy of the main account
+  // that is never attached to an API key itself. Applying it with
+  // SetApiKeyPolicy attaches a copy, so editing the template later changes no
+  // API key. Set when the policy is created and never changes.
   bool is_template = 19;
 
-  // Optional source template this policy was copied from (opaque ID). This is
-  // audit metadata only and does not imply live linkage.
+  // Template this policy was copied from (opaque ID), or 0 when it is not a
+  // copy. Set when the copy is made and never changes, even after the template
+  // is edited or deleted; the copy is not linked to the template.
   fixed64 source_template_id = 20;
+
+  // Revision of the template when this policy was copied from it, or 0 when
+  // it is not a copy. Compare it with the template's current revision to see
+  // whether the template changed since. Never changes.
+  uint64 source_template_revision = 24;
 
   // Creation time in UTC.
   google.protobuf.Timestamp created_at = 21;
@@ -551,12 +600,15 @@ message ApiPolicySpec {
     }
   ];
 
-  // Whether this policy should be treated as a reusable template.
+  // Whether the policy is a template, which SetApiKeyPolicy applies as a copy.
+  // Only the main account owner creates templates, and never together with
+  // assign_to_key_id. Chosen at creation: an update_mask that selects it is
+  // refused with InvalidArgument.
   bool is_template = 19;
 
 }
 
-// CreateApiPolicyRequest defines a new API key policy template.
+// CreateApiPolicyRequest defines a new API key policy.
 message CreateApiPolicyRequest {
   // Complete mutable policy configuration.
   ApiPolicySpec policy = 1 [
@@ -565,9 +617,12 @@ message CreateApiPolicyRequest {
   ];
   // Optional API key identifier to bind this newly-created policy to
   // atomically. When set, the caller must be allowed to manage the key and the
-  // create+assign operation consumes a single fresh step-up proof. An
-  // assistant API key cannot be assigned a policy that allows a money-out
-  // action: FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
+  // create+assign operation consumes a single fresh step-up proof. A template
+  // cannot be assigned: setting it with policy.is_template is refused with
+  // InvalidArgument. An assistant API key cannot be assigned a policy that
+  // allows a money-out action: FailedPrecondition with
+  // AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED. Nor can an admin API key:
+  // FailedPrecondition with AUTH_ADMIN_KEY_ACTION_NOT_ALLOWED.
   string assign_to_key_id = 2 [(buf.validate.field).string.pattern = "^$|^ak_[a-f0-9]{32}$"];
 }
 
@@ -610,7 +665,8 @@ message UpdateApiPolicyResponse {
   ApiPolicyView policy = 1;
 }
 
-// DeleteApiPolicyRequest deletes an API key policy template when it is not in use.
+// DeleteApiPolicyRequest deletes an API key policy when it is not in use. A
+// template is never in use; copies made from it keep their lineage.
 message DeleteApiPolicyRequest {
   // Policy identifier (opaque ID).
   fixed64 policy_id = 1 [(buf.validate.field).fixed64.gt = 0];
@@ -619,7 +675,8 @@ message DeleteApiPolicyRequest {
 // DeleteApiPolicyResponse is empty when the delete succeeds.
 message DeleteApiPolicyResponse {}
 
-// SetApiKeyPolicyRequest attaches or clears a policy template on an API key.
+// SetApiKeyPolicyRequest attaches a policy to an API key, applies a template to
+// it, or clears its policy.
 message SetApiKeyPolicyRequest {
   // Opaque API key identifier, formatted as "ak_" followed by 32 lowercase hex
   // characters.
@@ -629,15 +686,22 @@ message SetApiKeyPolicyRequest {
     (google.api.field_behavior) = REQUIRED
   ];
 
-  // Policy template to attach (opaque ID). A value of 0 clears the binding.
-  // An API key without an attached policy has no permissions.
+  // Policy to attach (opaque ID), owned by the key's main account. A template
+  // is applied: the key gets a new copy of its current revision, which later
+  // edits of the template do not change. A value of 0 clears the binding. An
+  // API key without an attached policy has no permissions.
   fixed64 policy_id = 2;
 }
 
-// SetApiKeyPolicyResponse is empty when the policy binding succeeds.
-message SetApiKeyPolicyResponse {}
+// SetApiKeyPolicyResponse returns the policy now attached.
+message SetApiKeyPolicyResponse {
+  // Policy now attached to the key (opaque ID): the new copy when policy_id
+  // named a template, else policy_id. 0 when the policy was cleared.
+  fixed64 policy_id = 1;
+}
 
-// PolicyService manages sub-account and API key policy templates and bindings.
+// PolicyService manages sub-account and API key policies, their templates, and
+// which policy each sub-account and API key holds.
 service PolicyService {
   option (polyester.api.docs_group) = "account";
 
@@ -684,17 +748,25 @@ service PolicyService {
     };
   }
 
-  // Change selected fields on an existing sub-account policy template.
+  // Change selected fields on an existing sub-account policy. Editing a
+  // template changes only the template: sub-accounts it was applied to keep
+  // their copies.
+  //
+  // An admin API key with MANAGE_SUBACCOUNT_POLICIES may also update a policy
+  // of the main account's own sub-accounts without a session. The result can
+  // never allow a money-out action, and it can never lock, unlock or change a
+  // locked policy: PermissionDenied with AUTH_ADMIN_KEY_FORBIDDEN_TARGET.
   rpc UpdateSubaccountPolicy(UpdateSubaccountPolicyRequest) returns (UpdateSubaccountPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       patch: "/v1/auth/policies/subaccounts/{policy_id}"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Update Subaccount Policy"
-      description: "Change selected fields on an existing sub-account policy template."
+      description: "Change selected fields on an existing sub-account policy. Editing a template changes only the template: sub-accounts it was applied to keep their copies."
       tags: "Auth Service"
     };
   }
@@ -711,17 +783,25 @@ service PolicyService {
     };
   }
 
-  // Attach or clear a sub-account policy for a sub-account.
+  // Attach a policy to a sub-account, apply a template to it as a new copy, or
+  // clear its policy.
+  //
+  // An admin API key with MANAGE_SUBACCOUNT_POLICIES may also attach, apply or
+  // clear the policy of a sub-account the main account owns, without a
+  // session. It can never attach or apply a policy that allows a money-out
+  // action, replace a locked policy, or reach a sub-account shared with the
+  // main account: PermissionDenied with AUTH_ADMIN_KEY_FORBIDDEN_TARGET.
   rpc SetSubaccountPolicy(SetSubaccountPolicyRequest) returns (SetSubaccountPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       patch: "/v1/auth/subaccounts/{subaccount_id}/policy"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Set Subaccount Policy"
-      description: "Attach or clear a sub-account policy for the target sub-account."
+      description: "Attach a policy to the target sub-account, apply a template to it as a new copy, or clear its policy."
       tags: "Auth Service"
     };
   }
@@ -771,9 +851,12 @@ service PolicyService {
     };
   }
 
-  // Change selected fields on an existing API key policy template. Adding a
-  // money-out action to a policy attached to an assistant API key returns
-  // FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
+  // Change selected fields on an existing API key policy. Editing a template
+  // changes only the template: keys it was applied to keep their copies.
+  // Adding a money-out action to a policy attached to an assistant API key
+  // returns FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED, and
+  // to a policy attached to an admin API key FailedPrecondition with
+  // AUTH_ADMIN_KEY_ACTION_NOT_ALLOWED.
   rpc UpdateApiPolicy(UpdateApiPolicyRequest) returns (UpdateApiPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
@@ -783,7 +866,7 @@ service PolicyService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Update API Key Policy"
-      description: "Change selected fields on an existing API key policy template."
+      description: "Change selected fields on an existing API key policy. Editing a template changes only the template: keys it was applied to keep their copies."
       tags: "Auth Service"
     };
   }
@@ -800,19 +883,32 @@ service PolicyService {
     };
   }
 
-  // Attach or clear an API key policy for a key. Attaching a policy that allows
-  // a money-out action to an assistant API key returns FailedPrecondition with
-  // AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.
+  // Attach a policy to a key, apply a template to it as a new copy, or clear
+  // its policy. Attaching a policy that allows a money-out action to an
+  // assistant API key returns FailedPrecondition with
+  // AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED, and applying a template to one
+  // returns FailedPrecondition with AUTH_POLICY_INVALID.
+  //
+  // An admin API key with MANAGE_API_KEY_POLICIES may also attach, apply or
+  // clear the policy of a standard key it may manage, without a session; the
+  // key needs an IP allowlist within the admin key's own. The policy can never
+  // allow a money-out action (AUTH_ADMIN_KEY_FORBIDDEN_TARGET) or an admin
+  // permission (AUTH_ADMIN_KEY_ESCALATION_DENIED), and on a sub-account key
+  // never more actions or markets than the sub-account's policy
+  // (AUTH_ADMIN_KEY_SCOPE_EXCEEDED), each PermissionDenied. Attaching a
+  // money-out policy to an admin key returns FailedPrecondition with
+  // AUTH_ADMIN_KEY_ACTION_NOT_ALLOWED.
   rpc SetApiKeyPolicy(SetApiKeyPolicyRequest) returns (SetApiKeyPolicyResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
-    option (polyester.api.mfa_requirement) = MFA_FRESH_STEP_UP;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (polyester.api.mfa_requirement) = MFA_CONDITIONAL;
     option (google.api.http) = {
       patch: "/v1/auth/api-keys/{key_id}/policy"
       body: "*"
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Set API Key Policy"
-      description: "Attach or clear an API key policy for the target key."
+      description: "Attach a policy to the target key, apply a template to it as a new copy, or clear its policy."
       tags: "Auth Service"
     };
   }

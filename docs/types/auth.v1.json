@@ -86,11 +86,9 @@
             "doc": "Address-book scope type.",
             "protoRef": "auth.v1.AccountScopeType",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -128,7 +126,7 @@
     {
       "name": "auth.v1.AccountScopeType",
       "kind": "enum",
-      "doc": "AccountScopeType identifies whether address-book data belongs to the root account or a subaccount.",
+      "doc": "AccountScopeType identifies whether address-book data or an API key belongs to the root account or a subaccount.",
       "enum": {
         "values": [
           {
@@ -445,11 +443,9 @@
             "doc": "Caller role for this address book.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -561,11 +557,9 @@
             "doc": "Type of saved destination.",
             "protoRef": "auth.v1.AddressBookEntryKind",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -1132,6 +1126,11 @@
             "name": "ASSISTANT",
             "number": 2,
             "doc": "A key the account holder created for the Polyester AI assistant through\n SetAssistantKeys. Its policy can never allow actions that move value out\n of the account or manage where it goes, such as external withdrawals or\n internal transfers. Only its creator's assistant uses it, so a sub-account\n assistant key is revoked when its creator loses the role that manages the\n sub-account's API keys or leaves the sub-account."
+          },
+          {
+            "name": "ADMIN_KEY",
+            "number": 3,
+            "doc": "An elevated key the main account's owner created or promoted in a\n signed-in session with a fresh step-up proof. Its policy's admin\n permissions (MANAGE_API_KEYS, MANAGE_API_KEY_POLICIES and\n MANAGE_SUBACCOUNT_POLICIES) let it manage the main account's other keys\n and its owned sub-accounts' policies without a session. An admin key acts\n for the main account only, needs a non-empty IP allowlist of entries no\n broader than /24 (IPv4) or /48 (IPv6), and its policy can never allow an\n action that moves value out of the account or manages where it goes. No\n API key can create, promote, change or delete an admin key, including the\n key itself; only its owner's session with a fresh step-up proof can."
           }
         ]
       }
@@ -1250,6 +1249,21 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "purpose",
+            "jsonName": "purpose",
+            "number": 7,
+            "doc": "New purpose: STANDARD demotes an admin key, ADMIN_KEY promotes a\n standard key. Only the main account's owner may select it, in a signed-in session\n with a fresh step-up proof. A promoted key must act for the main account,\n have an IP allowlist that admin keys accept, and have no policy that\n allows a money-out action. An assistant key's purpose never changes.",
+            "protoRef": "auth.v1.ApiKeyPurpose",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  2
+                ]
+              }
+            }
           }
         ]
       }
@@ -1336,7 +1350,7 @@
             "name": "is_template",
             "jsonName": "isTemplate",
             "number": 19,
-            "doc": "Whether this policy should be treated as a reusable template.",
+            "doc": "Whether the policy is a template, which SetApiKeyPolicy applies as a copy.\n Only the main account owner creates templates, and never together with\n assign_to_key_id. Chosen at creation: an update_mask that selects it is\n refused with InvalidArgument.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -1412,7 +1426,7 @@
             "name": "is_template",
             "jsonName": "isTemplate",
             "number": 19,
-            "doc": "When true, this policy is intended to be reused as a template across\n multiple API keys. When false, it represents a single-key instance.",
+            "doc": "True if this policy is a template: a reusable policy of the main account\n that is never attached to an API key itself. Applying it with\n SetApiKeyPolicy attaches a copy, so editing the template later changes no\n API key. Set when the policy is created and never changes.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -1420,10 +1434,19 @@
             "name": "source_template_id",
             "jsonName": "sourceTemplateId",
             "number": 20,
-            "doc": "Optional source template this policy was copied from (opaque ID). This is\n audit metadata only and does not imply live linkage.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Template this policy was copied from (opaque ID), or 0 when it is not a\n copy. Set when the copy is made and never changes, even after the template\n is edited or deleted; the copy is not linked to the template.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
+          },
+          {
+            "name": "source_template_revision",
+            "jsonName": "sourceTemplateRevision",
+            "number": 24,
+            "doc": "Revision of the template when this policy was copied from it, or 0 when\n it is not a copy. Compare it with the template's current revision to see\n whether the template changed since. Never changes.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           },
           {
             "name": "created_at",
@@ -1451,6 +1474,96 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.AppAuthorization",
+      "kind": "message",
+      "doc": "A pending request from an app to connect to the account.",
+      "message": {
+        "fields": [
+          {
+            "name": "client",
+            "jsonName": "client",
+            "number": 1,
+            "doc": "The app that asks.",
+            "protoRef": "auth.v1.ConnectedAppClient"
+          },
+          {
+            "name": "scopes",
+            "jsonName": "scopes",
+            "number": 2,
+            "doc": "OAuth scopes the app asks for. \"account:read\" lets the app read the\n account as the signed-in website does: balances, orders, trades and\n account settings. A connected app never moves money out of the account\n and never changes its security settings.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "resource",
+            "jsonName": "resource",
+            "number": 3,
+            "doc": "The server the app will use the account through, as an absolute URL.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "redirect_host",
+            "jsonName": "redirectHost",
+            "number": 4,
+            "doc": "Host the app receives the answer on, from its registered redirect URL.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 5,
+            "doc": "Time after which the request can no longer be approved or denied.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ApproveAppAuthorizationRequest",
+      "kind": "message",
+      "doc": "Request to approve a pending app connection request.",
+      "message": {
+        "fields": [
+          {
+            "name": "request_id",
+            "jsonName": "requestId",
+            "number": 1,
+            "doc": "Request ID the authorization endpoint gave the consent page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ApproveAppAuthorizationResponse",
+      "kind": "message",
+      "doc": "The approved request's answer to the app.",
+      "message": {
+        "fields": [
+          {
+            "name": "redirect_url",
+            "jsonName": "redirectUrl",
+            "number": 1,
+            "doc": "URL to send the browser to: the app's redirect URL carrying a one-time\n authorization code. It is valid for 60 seconds.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -1507,7 +1620,7 @@
             "name": "policy_id",
             "jsonName": "policyId",
             "number": 3,
-            "doc": "API policy that bounds the key (opaque ID). It must belong to the same\n main account as the key, and must not allow EXTERNAL_WITHDRAW,\n INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW. Set\n exactly one of policy_id and preset.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "API policy that bounds the key (opaque ID). It must belong to the same\n main account as the key, must not be a template (FailedPrecondition with\n AUTH_POLICY_INVALID), and must not allow EXTERNAL_WITHDRAW,\n INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW. Set\n exactly one of policy_id and preset.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -1872,9 +1985,39 @@
             "doc": "The account already changed or unlinked its X/Twitter or Discord account\n less than 30 days ago: one change per provider every 30 days. retry_after\n says when the next one is allowed. HTTP 412, SOCIAL_CHANGE_LIMIT_REACHED."
           },
           {
-            "name": "AUTH_RECENT_MFA_EXPIRED",
-            "number": 66,
-            "doc": "The session's recent-MFA window has closed: the action needs a new\n step-up. Complete an MFA challenge for fresh step-up and retry; the\n step-up opens a new window. PermissionDenied."
+            "name": "AUTH_ADMIN_KEY_REQUIRED",
+            "number": 67,
+            "doc": "Only an admin API key may call this with an API key; the key that signed\n the request is not one. HTTP 403, ADMIN_KEY_REQUIRED."
+          },
+          {
+            "name": "AUTH_ADMIN_KEY_ESCALATION_DENIED",
+            "number": 68,
+            "doc": "The request would create, promote or change an admin key, or attach an\n admin permission, by API key. Only the main account's owner may, in a\n signed-in session with a fresh step-up proof. HTTP 403,\n ADMIN_KEY_ESCALATION_DENIED."
+          },
+          {
+            "name": "AUTH_ADMIN_KEY_SCOPE_EXCEEDED",
+            "number": 69,
+            "doc": "The admin API key's change would give a key more than the admin key's own\n scope allows: an IP allowlist entry outside the admin key's allowlist, or\n on a sub-account key more actions or markets than the sub-account's\n policy. HTTP 403, ADMIN_KEY_SCOPE_EXCEEDED."
+          },
+          {
+            "name": "AUTH_ADMIN_KEY_FORBIDDEN_TARGET",
+            "number": 70,
+            "doc": "An admin API key can never reach this target: an assistant key, a key or\n policy that allows a money-out action, a locked sub-account policy, or a\n sub-account the main account does not own. HTTP 403,\n ADMIN_KEY_FORBIDDEN_TARGET."
+          },
+          {
+            "name": "AUTH_ADMIN_KEY_ALLOWLIST_INVALID",
+            "number": 71,
+            "doc": "An admin key's IP allowlist is empty, or has an entry broader than /24\n (IPv4) or /48 (IPv6), or an IPv4-mapped IPv6 entry. HTTP 400,\n ADMIN_KEY_ALLOWLIST_INVALID."
+          },
+          {
+            "name": "AUTH_ADMIN_KEY_ACTION_NOT_ALLOWED",
+            "number": 72,
+            "doc": "An admin API key can never be allowed an action that moves value out of\n the account or manages where it goes: EXTERNAL_WITHDRAW,\n INTERNAL_TRANSFER, MANAGE_ADDRESS_BOOK or MANAGE_AUTO_WITHDRAW. HTTP 412,\n ADMIN_KEY_ACTION_NOT_ALLOWED."
+          },
+          {
+            "name": "AUTH_CONNECTED_APP_LIMIT_REACHED",
+            "number": 73,
+            "doc": "The account already has the most connected apps it may have. Disconnect\n an app before connecting another. FailedPrecondition."
           }
         ]
       }
@@ -1932,11 +2075,9 @@
             "doc": "Desired challenge outcome: session elevation or fresh step-up.",
             "protoRef": "auth.v1.MFAChallengePurpose",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -2337,11 +2478,9 @@
             "doc": "Provider account to confirm. Only TELEGRAM is accepted.",
             "protoRef": "auth.v1.SocialProvider",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -2375,6 +2514,100 @@
             "number": 1,
             "doc": "Current verification state, STATUS_VERIFIED.",
             "protoRef": "auth.v1.SocialVerification"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ConnectedApp",
+      "kind": "message",
+      "doc": "An app connected to the account.",
+      "message": {
+        "fields": [
+          {
+            "name": "connected_app_id",
+            "jsonName": "connectedAppId",
+            "number": 1,
+            "doc": "Opaque connected app ID.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "client",
+            "jsonName": "client",
+            "number": 2,
+            "doc": "The connected app.",
+            "protoRef": "auth.v1.ConnectedAppClient"
+          },
+          {
+            "name": "scopes",
+            "jsonName": "scopes",
+            "number": 3,
+            "doc": "OAuth scopes the account granted the app.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "resource",
+            "jsonName": "resource",
+            "number": 4,
+            "doc": "The server the app uses the account through, as an absolute URL.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "connected_at",
+            "jsonName": "connectedAt",
+            "number": 5,
+            "doc": "Time when the account connected the app.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "last_used_at",
+            "jsonName": "lastUsedAt",
+            "number": 6,
+            "doc": "Time when the app last used or refreshed its access, at minute\n precision. Empty when it has not used it yet.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "expires_at",
+            "jsonName": "expiresAt",
+            "number": 7,
+            "doc": "Time when the connection ends unless it is disconnected before. The app\n must then be connected again.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ConnectedAppClient",
+      "kind": "message",
+      "doc": "An app that asks to use the account, as the OAuth client that registered\n with Polyester presents itself.",
+      "message": {
+        "fields": [
+          {
+            "name": "client_id",
+            "jsonName": "clientId",
+            "number": 1,
+            "doc": "OAuth client identifier of the app.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "name",
+            "jsonName": "name",
+            "number": 2,
+            "doc": "Name of the app, as shown on the consent page.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -2783,6 +3016,21 @@
                 "len": 32
               }
             }
+          },
+          {
+            "name": "purpose",
+            "jsonName": "purpose",
+            "number": 8,
+            "doc": "What the key is for. Unspecified or STANDARD creates a standard key.\n ADMIN_KEY creates an admin key: only the main account's owner may, in a\n signed-in session with a fresh step-up proof, for the main account\n (subaccount_id unset), with an ip_whitelist that admin keys accept.\n ASSISTANT keys are created with SetAssistantKeys.",
+            "protoRef": "auth.v1.ApiKeyPurpose",
+            "validate": {
+              "enum": {
+                "definedOnly": true,
+                "notIn": [
+                  2
+                ]
+              }
+            }
           }
         ]
       }
@@ -2806,7 +3054,7 @@
     {
       "name": "auth.v1.CreateApiPolicyRequest",
       "kind": "message",
-      "doc": "CreateApiPolicyRequest defines a new API key policy template.",
+      "doc": "CreateApiPolicyRequest defines a new API key policy.",
       "message": {
         "fields": [
           {
@@ -2823,7 +3071,7 @@
             "name": "assign_to_key_id",
             "jsonName": "assignToKeyId",
             "number": 2,
-            "doc": "Optional API key identifier to bind this newly-created policy to\n atomically. When set, the caller must be allowed to manage the key and the\n create+assign operation consumes a single fresh step-up proof. An\n assistant API key cannot be assigned a policy that allows a money-out\n action: FailedPrecondition with AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED.",
+            "doc": "Optional API key identifier to bind this newly-created policy to\n atomically. When set, the caller must be allowed to manage the key and the\n create+assign operation consumes a single fresh step-up proof. A template\n cannot be assigned: setting it with policy.is_template is refused with\n InvalidArgument. An assistant API key cannot be assigned a policy that\n allows a money-out action: FailedPrecondition with\n AUTH_ASSISTANT_KEY_ACTION_NOT_ALLOWED. Nor can an admin API key:\n FailedPrecondition with AUTH_ADMIN_KEY_ACTION_NOT_ALLOWED.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -2942,7 +3190,7 @@
     {
       "name": "auth.v1.CreateSubaccountPolicyRequest",
       "kind": "message",
-      "doc": "CreateSubaccountPolicyRequest defines a new sub-account policy template, with\n an optional attach step for one target sub-account.",
+      "doc": "CreateSubaccountPolicyRequest defines a new sub-account policy, with an\n optional attach step for one target sub-account.",
       "message": {
         "fields": [
           {
@@ -2959,7 +3207,7 @@
             "name": "subaccount_id",
             "jsonName": "subaccountId",
             "number": 2,
-            "doc": "Optional target sub-account to attach atomically after creation.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Optional target sub-account to attach atomically after creation. A\n template cannot be attached: setting it with policy.is_template is refused\n with InvalidArgument.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64",
@@ -3175,11 +3423,9 @@
             "doc": "Operation for which the challenge may be consumed. Must be LOGIN.",
             "protoRef": "auth.v1.WalletChallengePurpose",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -3304,7 +3550,7 @@
     {
       "name": "auth.v1.DeleteApiPolicyRequest",
       "kind": "message",
-      "doc": "DeleteApiPolicyRequest deletes an API key policy template when it is not in use.",
+      "doc": "DeleteApiPolicyRequest deletes an API key policy when it is not in use. A\n template is never in use; copies made from it keep their lineage.",
       "message": {
         "fields": [
           {
@@ -3393,7 +3639,7 @@
     {
       "name": "auth.v1.DeleteSubaccountPolicyRequest",
       "kind": "message",
-      "doc": "DeleteSubaccountPolicyRequest deletes a sub-account policy template when it\n is not in use.",
+      "doc": "DeleteSubaccountPolicyRequest deletes a sub-account policy when it is not in\n use. A template is never in use; copies made from it keep their lineage.",
       "message": {
         "fields": [
           {
@@ -3422,6 +3668,46 @@
       }
     },
     {
+      "name": "auth.v1.DenyAppAuthorizationRequest",
+      "kind": "message",
+      "doc": "Request to deny a pending app connection request.",
+      "message": {
+        "fields": [
+          {
+            "name": "request_id",
+            "jsonName": "requestId",
+            "number": 1,
+            "doc": "Request ID the authorization endpoint gave the consent page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.DenyAppAuthorizationResponse",
+      "kind": "message",
+      "doc": "The denied request's answer to the app.",
+      "message": {
+        "fields": [
+          {
+            "name": "redirect_url",
+            "jsonName": "redirectUrl",
+            "number": 1,
+            "doc": "URL to send the browser to: the app's redirect URL carrying the\n `access_denied` error.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "auth.v1.DestinationWhitelistStatus",
       "kind": "enum",
       "doc": "DestinationWhitelistStatus describes whether a transfer destination currently has an active whitelist allowance.",
@@ -3443,22 +3729,6 @@
             "doc": "Whitelist status could not be resolved for this destination."
           }
         ]
-      }
-    },
-    {
-      "name": "auth.v1.EndRecentMFARequest",
-      "kind": "message",
-      "doc": "Request to end the session's recent-MFA window, for example at sign-out.",
-      "message": {
-        "fields": []
-      }
-    },
-    {
-      "name": "auth.v1.EndRecentMFAResponse",
-      "kind": "message",
-      "doc": "Empty response returned after the recent-MFA window is ended.",
-      "message": {
-        "fields": []
       }
     },
     {
@@ -3535,11 +3805,9 @@
             "doc": "Current active whitelist status for this destination.",
             "protoRef": "auth.v1.DestinationWhitelistStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -3614,11 +3882,9 @@
             "doc": "Direction of the most recent interaction.",
             "protoRef": "auth.v1.TransferCounterpartyDirection",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -4156,6 +4422,45 @@
       }
     },
     {
+      "name": "auth.v1.GetAppAuthorizationRequest",
+      "kind": "message",
+      "doc": "Request to read a pending app connection request for the consent page.",
+      "message": {
+        "fields": [
+          {
+            "name": "request_id",
+            "jsonName": "requestId",
+            "number": 1,
+            "doc": "Request ID the authorization endpoint gave the consent page in its\n `request` query parameter.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 64
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.GetAppAuthorizationResponse",
+      "kind": "message",
+      "doc": "The pending app connection request.",
+      "message": {
+        "fields": [
+          {
+            "name": "authorization",
+            "jsonName": "authorization",
+            "number": 1,
+            "doc": "The request.",
+            "protoRef": "auth.v1.AppAuthorization"
+          }
+        ]
+      }
+    },
+    {
       "name": "auth.v1.GetEffectiveSubaccountPermissionsRequest",
       "kind": "message",
       "doc": "Request for the authenticated caller's effective permissions on one sub-account.",
@@ -4191,11 +4496,9 @@
             "doc": "Current role of the caller on the sub-account. For an API key this is\n OWNER: keys belong to the main account that owns the sub-account.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -4234,56 +4537,6 @@
       }
     },
     {
-      "name": "auth.v1.GetRecentMFARequest",
-      "kind": "message",
-      "doc": "Request to read whether the session's recent-MFA window covers an action.",
-      "message": {
-        "fields": [
-          {
-            "name": "action",
-            "jsonName": "action",
-            "number": 1,
-            "doc": "The action the client is about to perform.",
-            "protoRef": "auth.v1.RecentMFAAction",
-            "validate": {
-              "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "auth.v1.GetRecentMFAResponse",
-      "kind": "message",
-      "doc": "Whether the session's recent-MFA window is open for the action.",
-      "message": {
-        "fields": [
-          {
-            "name": "open",
-            "jsonName": "open",
-            "number": 1,
-            "doc": "True when the action needs no new step-up now: send it without a step-up\n proof. False when the client must complete an MFA challenge for fresh\n step-up first.",
-            "protoScalar": "bool",
-            "jsonType": "boolean"
-          },
-          {
-            "name": "expires_at",
-            "jsonName": "expiresAt",
-            "number": 2,
-            "doc": "Time when the window closes. Empty when open is false. A request that\n arrives after this time needs a new step-up.",
-            "protoRef": "google.protobuf.Timestamp",
-            "jsonType": "string",
-            "format": "date-time"
-          }
-        ]
-      }
-    },
-    {
       "name": "auth.v1.GetSocialVerificationRequest",
       "kind": "message",
       "doc": "GetSocialVerificationRequest fetches the caller's current social verification\n state for one provider.",
@@ -4296,11 +4549,9 @@
             "doc": "Provider account to inspect.",
             "protoRef": "auth.v1.SocialProvider",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -4641,11 +4892,9 @@
             "doc": "Current active whitelist status for this destination.",
             "protoRef": "auth.v1.DestinationWhitelistStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -4772,11 +5021,9 @@
             "doc": "Direction of the most recent interaction.",
             "protoRef": "auth.v1.TransferCounterpartyDirection",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -5104,11 +5351,9 @@
             "doc": "Whether destination account details are available.",
             "protoRef": "auth.v1.InternalWhitelistResolutionStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -5175,11 +5420,9 @@
             "doc": "Role to grant if the invite is accepted.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -5576,6 +5819,31 @@
             "doc": "Non-revoked assistant keys the caller set up, newest first.",
             "repeated": true,
             "protoRef": "auth.v1.ApiKey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.ListConnectedAppsRequest",
+      "kind": "message",
+      "doc": "Request to list the apps connected to the account.",
+      "message": {
+        "fields": []
+      }
+    },
+    {
+      "name": "auth.v1.ListConnectedAppsResponse",
+      "kind": "message",
+      "doc": "The apps connected to the account.",
+      "message": {
+        "fields": [
+          {
+            "name": "apps",
+            "jsonName": "apps",
+            "number": 1,
+            "doc": "Connected apps, newest connection first. An account has at most 20; a\n disconnected or expired connection is not listed.",
+            "repeated": true,
+            "protoRef": "auth.v1.ConnectedApp"
           }
         ]
       }
@@ -6315,11 +6583,9 @@
             "doc": "Type of enrolled factor.",
             "protoRef": "auth.v1.MFAFactorType",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -6442,6 +6708,22 @@
             "jsonType": "string"
           },
           {
+            "name": "api_key_scope",
+            "jsonName": "apiKeyScope",
+            "number": 13,
+            "doc": "Account scope of the API key that authenticated this request: SCOPE_ROOT\n for a key of the main account, SCOPE_SUBACCOUNT for a key bound to one\n sub-account. SCOPE_UNSPECIFIED when the request was not authenticated with\n an API key.",
+            "protoRef": "auth.v1.AccountScopeType"
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 14,
+            "doc": "Sub-account the API key is bound to (opaque ID). Present only when\n api_key_scope is SCOPE_SUBACCOUNT. The key's private realtime channels\n and account reads name this sub-account, for example\n private:ledger:balances:\u003csubaccount_id\u003e.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
             "name": "session",
             "jsonName": "session",
             "number": 20,
@@ -6511,7 +6793,7 @@
     {
       "name": "auth.v1.PolicyAction",
       "kind": "enum",
-      "doc": "PolicyAction is a high-level permission that can be granted by a policy.\n Product actions apply to sub-account and API-key policies, and their\n write-style actions also grant the matching read visibility where needed by\n the product experience. Account permissions, each documented below as an\n account permission or a main-account permission, apply to API-key policies\n only: a sub-account policy refuses them. Each account permission grants\n exactly the calls it names and never implies another permission. A\n main-account permission is honored only for an API key scoped to the main\n account; a key scoped to a sub-account is refused even when its policy\n grants it. An API key without a policy has no permission at all.",
+      "doc": "PolicyAction is a high-level permission that can be granted by a policy.\n Product actions apply to sub-account and API-key policies, and their\n write-style actions also grant the matching read visibility where needed by\n the product experience. Account permissions, each documented below as an\n account permission or a main-account permission, apply to API-key policies\n only: a sub-account policy refuses them. Each account permission grants\n exactly the calls it names and never implies another permission. A\n main-account permission is honored only for an API key scoped to the main\n account; a key scoped to a sub-account is refused even when its policy\n grants it. Admin permissions, documented below, apply to API-key policies\n only and are honored only for an admin API key. An API key without a policy\n has no permission at all.",
       "enum": {
         "values": [
           {
@@ -6703,6 +6985,21 @@
             "name": "READ_ACCOUNT_ACTIVITY",
             "number": 42,
             "doc": "Allow listing the security and activity events of the main account and\n its sub-accounts within the key's scope: a key scoped to the main account\n reads all of them, a key scoped to a sub-account only that sub-account's.\n Account permission."
+          },
+          {
+            "name": "MANAGE_API_KEYS",
+            "number": 43,
+            "doc": "Allow creating, updating and revoking the standard API keys of the main\n account and of the sub-accounts it owns. Admin permission: honored only\n for an admin API key, which never manages an admin or assistant key, a\n key whose policy allows a money-out action, or a sub-account shared with\n the main account. A key it creates or updates needs an IP allowlist\n within the admin key's own."
+          },
+          {
+            "name": "MANAGE_API_KEY_POLICIES",
+            "number": 44,
+            "doc": "Allow attaching and clearing the API policies of the standard API keys\n the admin key may manage. A policy it attaches can never allow a\n money-out action or an admin permission, and on a sub-account key can\n never allow more actions or markets than the sub-account's policy. Admin\n permission: honored only for an admin API key."
+          },
+          {
+            "name": "MANAGE_SUBACCOUNT_POLICIES",
+            "number": 45,
+            "doc": "Allow attaching, clearing and updating the policies of the sub-accounts\n the main account owns. The resulting policy can never allow a money-out\n action, and a locked policy is never changed. Admin permission: honored\n only for an admin API key."
           }
         ]
       }
@@ -6764,30 +7061,6 @@
             "doc": "Human-friendly message for UI/debugging.",
             "protoScalar": "string",
             "jsonType": "string"
-          }
-        ]
-      }
-    },
-    {
-      "name": "auth.v1.RecentMFAAction",
-      "kind": "enum",
-      "doc": "An action that one step-up covers for a short time in the same signed-in\n session: the recent-MFA window. The window opens when the session completes\n an MFA challenge for fresh step-up, and lasts 5 minutes. It closes earlier\n when the session ends (EndRecentMFA or session expiry). Every other action\n that needs MFA, including withdrawals, transfers, auto-withdraw rules, API\n key and policy changes outside the assistant, address book changes and MFA\n settings, still needs a fresh, single-use step-up proof each time.",
-      "enum": {
-        "values": [
-          {
-            "name": "RECENT_MFA_ACTION_TELEGRAM_LINK",
-            "number": 1,
-            "doc": "Confirming a Telegram link (SocialVerificationService.ConfirmSocialVerification\n for TELEGRAM)."
-          },
-          {
-            "name": "RECENT_MFA_ACTION_ASSISTANT_ACCESS",
-            "number": 2,
-            "doc": "Changing the Polyester AI assistant's account access\n (ApiKeyService.SetAssistantKeys, with policies or presets)."
-          },
-          {
-            "name": "RECENT_MFA_ACTION_TELEGRAM_APPROVAL_LIMITS",
-            "number": 3,
-            "doc": "Raising or removing a Telegram approval limit\n (ai.v1.AssistantService.SetTelegramApprovalLimits). Setting or lowering a\n limit never needs MFA."
           }
         ]
       }
@@ -7142,11 +7415,9 @@
             "doc": "Action to apply to the invitation.",
             "protoRef": "auth.v1.SubaccountInviteAction",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -7167,6 +7438,37 @@
             "protoRef": "auth.v1.SubaccountInvite"
           }
         ]
+      }
+    },
+    {
+      "name": "auth.v1.RevokeConnectedAppRequest",
+      "kind": "message",
+      "doc": "Request to disconnect an app.",
+      "message": {
+        "fields": [
+          {
+            "name": "connected_app_id",
+            "jsonName": "connectedAppId",
+            "number": 1,
+            "doc": "Connected app ID from ListConnectedApps.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.RevokeConnectedAppResponse",
+      "kind": "message",
+      "doc": "Empty response returned after the app is disconnected.",
+      "message": {
+        "fields": []
       }
     },
     {
@@ -7254,7 +7556,7 @@
     {
       "name": "auth.v1.SetApiKeyPolicyRequest",
       "kind": "message",
-      "doc": "SetApiKeyPolicyRequest attaches or clears a policy template on an API key.",
+      "doc": "SetApiKeyPolicyRequest attaches a policy to an API key, applies a template to\n it, or clears its policy.",
       "message": {
         "fields": [
           {
@@ -7275,7 +7577,7 @@
             "name": "policy_id",
             "jsonName": "policyId",
             "number": 2,
-            "doc": "Policy template to attach (opaque ID). A value of 0 clears the binding.\n An API key without an attached policy has no permissions.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Policy to attach (opaque ID), owned by the key's main account. A template\n is applied: the key gets a new copy of its current revision, which later\n edits of the template do not change. A value of 0 clears the binding. An\n API key without an attached policy has no permissions.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -7286,9 +7588,19 @@
     {
       "name": "auth.v1.SetApiKeyPolicyResponse",
       "kind": "message",
-      "doc": "SetApiKeyPolicyResponse is empty when the policy binding succeeds.",
+      "doc": "SetApiKeyPolicyResponse returns the policy now attached.",
       "message": {
-        "fields": []
+        "fields": [
+          {
+            "name": "policy_id",
+            "jsonName": "policyId",
+            "number": 1,
+            "doc": "Policy now attached to the key (opaque ID): the new copy when policy_id\n named a template, else policy_id. 0 when the policy was cleared.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
       }
     },
     {
@@ -7373,7 +7685,7 @@
     {
       "name": "auth.v1.SetSubaccountPolicyRequest",
       "kind": "message",
-      "doc": "SetSubaccountPolicyRequest attaches or clears a policy template on a\n sub-account.",
+      "doc": "SetSubaccountPolicyRequest attaches a policy to a sub-account, applies a\n template to it, or clears its policy.",
       "message": {
         "fields": [
           {
@@ -7394,7 +7706,7 @@
             "name": "policy_id",
             "jsonName": "policyId",
             "number": 2,
-            "doc": "Policy template to attach (opaque ID). A value of 0 clears the explicit\n binding and restores the system Read Only policy.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Policy to attach (opaque ID), owned by the sub-account's main account. A\n template is applied: the sub-account gets a new copy of its current\n revision, which later edits of the template do not change. A value of 0\n clears the explicit binding and restores the system Read Only policy.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -7405,9 +7717,19 @@
     {
       "name": "auth.v1.SetSubaccountPolicyResponse",
       "kind": "message",
-      "doc": "SetSubaccountPolicyResponse is empty when the policy binding succeeds.",
+      "doc": "SetSubaccountPolicyResponse returns the policy now attached.",
       "message": {
-        "fields": []
+        "fields": [
+          {
+            "name": "policy_id",
+            "jsonName": "policyId",
+            "number": 1,
+            "doc": "Policy now attached to the sub-account (opaque ID): the new copy when\n policy_id named a template, else policy_id. 0 when the policy was cleared.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
       }
     },
     {
@@ -7620,11 +7942,9 @@
             "doc": "Provider account to check.",
             "protoRef": "auth.v1.SocialProvider",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -7777,11 +8097,9 @@
             "doc": "Provider account to verify.",
             "protoRef": "auth.v1.SocialProvider",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -7934,11 +8252,9 @@
             "doc": "Current public lifecycle status of the sub-account.",
             "protoRef": "auth.v1.SubaccountStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -8078,11 +8394,9 @@
             "doc": "Requested role for the grantee.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -8473,11 +8787,9 @@
             "doc": "Stable permission identifier used by authorization and clients.",
             "protoRef": "auth.v1.SubaccountPermission",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -8641,6 +8953,14 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "is_template",
+            "jsonName": "isTemplate",
+            "number": 28,
+            "doc": "Whether the policy is a template, which SetSubaccountPolicy applies as a\n copy. Only the main account owner creates templates, and never together\n with subaccount_id. Chosen at creation: an update_mask that selects it is\n refused with InvalidArgument.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -8714,7 +9034,7 @@
             "name": "is_template",
             "jsonName": "isTemplate",
             "number": 10,
-            "doc": "True if this policy is a reusable template; false if it is a\n per-sub-account instance.",
+            "doc": "True if this policy is a template: a reusable policy of the main account\n that is never attached to a sub-account itself. Applying it with\n SetSubaccountPolicy attaches a copy, so editing the template later changes\n no sub-account. Set when the policy is created and never changes.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -8722,10 +9042,19 @@
             "name": "source_template_id",
             "jsonName": "sourceTemplateId",
             "number": 11,
-            "doc": "Optional source template this policy was copied from (opaque ID). This is\n audit metadata only and does not imply live linkage.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Template this policy was copied from (opaque ID), or 0 when it is not a\n copy. Set when the copy is made and never changes, even after the template\n is edited or deleted; the copy is not linked to the template.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
+          },
+          {
+            "name": "source_template_revision",
+            "jsonName": "sourceTemplateRevision",
+            "number": 31,
+            "doc": "Revision of the template when this policy was copied from it, or 0 when\n it is not a copy. Compare it with the template's current revision to see\n whether the template changed since. Never changes.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           },
           {
             "name": "max_order_notional",
@@ -8861,11 +9190,9 @@
             "doc": "Stable built-in role identifier.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -9097,11 +9424,9 @@
             "doc": "Most recent transfer direction for this counterparty.",
             "protoRef": "auth.v1.TransferCounterpartyDirection",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -9112,11 +9437,9 @@
             "doc": "Counterparty type.",
             "protoRef": "auth.v1.AddressBookEntryKind",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -9245,11 +9568,9 @@
             "doc": "Destination type.",
             "protoRef": "auth.v1.AddressBookEntryKind",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -9276,11 +9597,9 @@
             "doc": "Current active whitelist status for this destination.",
             "protoRef": "auth.v1.DestinationWhitelistStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -9332,11 +9651,9 @@
             "doc": "Provider account to unlink.",
             "protoRef": "auth.v1.SocialProvider",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -9734,11 +10051,9 @@
             "doc": "New role to assign.",
             "protoRef": "auth.v1.SubaccountRole",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }

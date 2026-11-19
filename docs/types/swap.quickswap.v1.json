@@ -1043,6 +1043,13 @@
             "doc": "Public, URL-safe lifecycle flow identifier of this deposit, usable with\n GET /v1/chain/flows/{flow_id}; empty until the flow exists. Lifecycle flow\n amounts are 18-decimal unified units (amount_e18), not token base units.",
             "protoScalar": "string",
             "jsonType": "string"
+          },
+          {
+            "name": "direct_return",
+            "jsonName": "directReturn",
+            "number": 15,
+            "doc": "Direct return to return_address of a deposit that was never credited: a\n RETURN_ONLY deposit that reached the address after its one eligible\n deposit or after its funding window. On a MANUAL_RECOVERY deposit it\n reports a direct return once one is recorded. Unset until a direct return\n is recorded, and on every other deposit, which is returned through\n withdrawals.",
+            "protoRef": "swap.quickswap.v1.DepositReturn"
           }
         ]
       }
@@ -1090,7 +1097,7 @@
           {
             "name": "RETURN_ONLY",
             "number": 3,
-            "doc": "Not accepted: it is returned to return_address and never executes. A\n deposit found ineligible after it was credited, such as a late deposit\n (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or\n above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong\n asset or network (WRONG_ASSET), keeps credited_at and is returned from its\n credit."
+            "doc": "Not accepted: it is returned to return_address and never executes. A\n deposit found ineligible after it was credited, such as a late deposit\n (LATE_DEPOSIT), one below min_deposit_amount but at least the source\n network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above\n max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong\n asset or network (WRONG_ASSET), keeps credited_at and is returned from its\n credit. One never credited is returned directly, and direct_return\n reports that return."
           },
           {
             "name": "ON_HOLD",
@@ -1178,6 +1185,63 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.DepositReturn",
+      "kind": "message",
+      "doc": "DepositReturn is a deposit's direct return to return_address. It pays the\n return address only, never the deposit's sender, in the asset and on the\n network the deposit was received in.",
+      "message": {
+        "fields": [
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 1,
+            "doc": "Return progress. Accept state values added later.",
+            "protoRef": "swap.quickswap.v1.DepositReturnState"
+          },
+          {
+            "name": "tx_hash",
+            "jsonName": "txHash",
+            "number": 2,
+            "doc": "Return transaction on the deposit's network, in the network's native\n text form; set once RETURN_COMPLETED.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "updated_at",
+            "jsonName": "updatedAt",
+            "number": 3,
+            "doc": "When the return last changed state.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.DepositReturnState",
+      "kind": "enum",
+      "doc": "DepositReturnState is the progress of a deposit's direct return.",
+      "enum": {
+        "values": [
+          {
+            "name": "RETURN_PENDING",
+            "number": 1,
+            "doc": "The return is queued or being sent."
+          },
+          {
+            "name": "RETURN_COMPLETED",
+            "number": 2,
+            "doc": "The return was sent to return_address; tx_hash is its transaction."
+          },
+          {
+            "name": "RETURN_HELD",
+            "number": 3,
+            "doc": "The return is held for review and is not sent until review releases it.\n The broker contacts Polyester broker support with the swap_id."
           }
         ]
       }
@@ -2241,11 +2305,9 @@
             "doc": "The period to group by.",
             "protoRef": "swap.quickswap.v1.StatsPeriod",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -2326,11 +2388,9 @@
             "doc": "How to group the totals.",
             "protoRef": "swap.quickswap.v1.FeeTotalsGrouping",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -2516,11 +2576,9 @@
             "doc": "The window.",
             "protoRef": "swap.quickswap.v1.QuickSwapStatsWindow",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
@@ -2837,10 +2895,10 @@
             "doc": "Role the person gets on accepting; never OWNER.",
             "protoRef": "swap.quickswap.v1.BrokerRole",
             "validate": {
+              "required": true,
               "enum": {
                 "definedOnly": true,
                 "notIn": [
-                  0,
                   1
                 ]
               }
@@ -4607,7 +4665,7 @@
             "name": "is_terminal",
             "jsonName": "isTerminal",
             "number": 5,
-            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Returns made directly for such deposits are not yet\n reported in withdrawals; RETURN_ONLY does not confirm a completed return.\n An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all\n becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user\n reports such a deposit or needs the final retirement time.",
+            "doc": "True when status is terminal; authoritative, including for status values\n added later. Polling can stop at a terminal status. A terminal status\n never changes. Shortly after it, address_retires_at can still move later,\n and withdrawal details can be corrected as documented on Withdrawal;\n another deposit reaching the address also shows as RETURN_ONLY, and\n another deposit observed on an already retired address shows as\n MANUAL_RECOVERY. Such a deposit is returned directly, not through\n withdrawals: its direct_return reports the return, and RETURN_ONLY alone\n does not confirm a completed return.\n An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all\n becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user\n reports such a deposit or needs the final retirement time.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -4903,7 +4961,7 @@
             "name": "min_deposit_amount",
             "jsonName": "minDepositAmount",
             "number": 5,
-            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source\n network's minimum\n (AssetChainVariant.deposit_min_amount in the config), and differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes. For a TWAP it is the slice count times the smallest deposit one\n slice takes, and at least a market execution's minimum.",
+            "doc": "Published minimum deposit, in source token units, compared with the\n deposit before its network fee. Send at least this amount. It is never\n below the source network's minimum deposit\n (AssetChainVariant.deposit_min_amount in the config, for\n DepositInstructions.zipped_asset_id). A smaller deposit is returned to\n return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source\n network's minimum deposit; a deposit below that minimum is not detected,\n recorded or returned, and is lost. For a bridge, min_deposit_amount\n often equals the source network's minimum deposit; when they are equal,\n any smaller deposit is lost. It differs from\n ErrorDetail.min_deposit_amount, the smallest deposit that currently\n quotes. For a TWAP it is the slice count times the smallest deposit one\n slice takes, and at least a market execution's minimum.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -4992,7 +5050,7 @@
           {
             "name": "DEPOSIT_BELOW_MINIMUM",
             "number": 11,
-            "doc": "The deposit is below the published min_deposit_amount, or its credit after\n the deposit network fee is below the smallest order the route's market\n accepts. It is not executed: it is returned to return_address, and the\n QuickSwap shows RETURNING and RETURNED with this reason. A deposit that\n cannot be returned on the network it was received on is held (HELD with\n this reason); the broker contacts Polyester broker support with the\n swap_id."
+            "doc": "The deposit is below the published min_deposit_amount, or its credit after\n the deposit network fee is below the smallest order the route's market\n accepts. It is not executed: it is returned to return_address, and the\n QuickSwap shows RETURNING and RETURNED with this reason. Only a deposit\n that reaches the source network's minimum deposit\n (AssetChainVariant.deposit_min_amount) is returned; one below it is not\n detected and never appears on the QuickSwap. A deposit that\n cannot be returned on the network it was received on is held (HELD with\n this reason); the broker contacts Polyester broker support with the\n swap_id."
           },
           {
             "name": "DEPOSIT_ABOVE_MAXIMUM",
@@ -5063,6 +5121,16 @@
             "name": "SOURCE_WALLET_SCREENING_FAILED",
             "number": 28,
             "doc": "The source wallet supplied in the request failed risk screening. The\n QuickSwap is REJECTED: it never gets a deposit address, and nothing can\n be deposited to it."
+          },
+          {
+            "name": "INSUFFICIENT_LIQUIDITY",
+            "number": 29,
+            "doc": "Available liquidity did not fill an order at its protected price; untraded\n input or intermediate funds are returned or refunded. Shown on the payout\n statuses that follow, including COMPLETED when a partly traded swap\n refunded the rest. A trade failure reason (this one or ORDER_REJECTED)\n is used only when the execution ended without another reason, such as\n EXECUTION_DEADLINE_REACHED or PROTECTION_NOT_MET; it is then the first\n slice in schedule order whose reason or carry_reason is\n INSUFFICIENT_LIQUIDITY or ORDER_REJECTED, the reason before the\n carry_reason within a slice."
+          },
+          {
+            "name": "ORDER_REJECTED",
+            "number": 30,
+            "doc": "An order was refused; untraded input or intermediate funds are returned\n or refunded. Shown on the payout statuses that follow, chosen as for\n INSUFFICIENT_LIQUIDITY."
           }
         ]
       }
@@ -5539,11 +5607,9 @@
             "doc": "Side of the swap that amount denominates.",
             "protoRef": "swap.quickswap.v1.QuoteBasis",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -6384,11 +6450,9 @@
             "doc": "What the change does.",
             "protoRef": "swap.quickswap.v1.AllowlistAction",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           },
@@ -6715,10 +6779,10 @@
             "doc": "New role; never OWNER.",
             "protoRef": "swap.quickswap.v1.BrokerRole",
             "validate": {
+              "required": true,
               "enum": {
                 "definedOnly": true,
                 "notIn": [
-                  0,
                   1
                 ]
               }
@@ -6813,11 +6877,9 @@
             "doc": "New status.",
             "protoRef": "swap.quickswap.v1.VaultStatus",
             "validate": {
+              "required": true,
               "enum": {
-                "definedOnly": true,
-                "notIn": [
-                  0
-                ]
+                "definedOnly": true
               }
             }
           }
