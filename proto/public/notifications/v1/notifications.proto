@@ -59,6 +59,11 @@ enum NotificationType {
   // detail telegram_link. The linked Telegram account also receives it. If the
   // caller did not link it, unlink it and review the account's sessions.
   TELEGRAM_LINKED = 4;
+  // An admin API key of the caller's main account created, changed or
+  // revoked an API key, or changed an API key or sub-account policy.
+  // Category SECURITY; detail admin_key_action. If nobody on the account
+  // made the change, revoke the admin key and review the account's API keys.
+  ADMIN_KEY_ACTION = 5;
 }
 
 // NotificationCategory groups notification types for filtering and counts.
@@ -112,6 +117,8 @@ message Notification {
     BrokerAllowlistNotice broker_allowlist = 12;
     // The Telegram account linked.
     TelegramLinkNotice telegram_link = 13;
+    // The admin API key's change.
+    AdminKeyActionNotice admin_key_action = 14;
   }
 }
 
@@ -155,6 +162,9 @@ enum TelegramApprovalAction {
   RESUME_TRIGGER = 8;
   // Swap between assets within the trading account.
   SWAP = 9;
+  // Convert dust, balances too small to trade, into one asset within the
+  // trading account.
+  CONVERT_DUST = 10;
 }
 
 // NoticeField is one labelled value of a notice, for example "Market" and
@@ -179,10 +189,10 @@ message TelegramApprovalNotice {
   // The approval's ID, as the Assistant API returns it.
   fixed64 approval_id = 1 [(buf.validate.field).fixed64.gt = 0];
   // What the approval approved.
-  TelegramApprovalAction action = 2 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
+  TelegramApprovalAction action = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
   // Public ID of the trading account (sub-account) the action acted on.
   fixed64 account_id = 3 [(buf.validate.field).fixed64.gt = 0];
   // What approving did, written from the exact action: 1 to 512 bytes.
@@ -242,6 +252,48 @@ message BrokerAllowlistNotice {
   string label = 8;
   // Public account ID of the member who requested the change.
   fixed64 requested_by_account_id = 9;
+}
+
+// AdminKeyAction is what an admin API key changed.
+enum AdminKeyAction {
+  // Not set. Never returned.
+  ADMIN_KEY_ACTION_UNSPECIFIED = 0;
+  // Created an API key (CreateApiKey).
+  CREATE_API_KEY = 1;
+  // Updated an API key (UpdateApiKey).
+  UPDATE_API_KEY = 2;
+  // Revoked an API key (DeleteApiKey).
+  DELETE_API_KEY = 3;
+  // Attached or cleared an API key's policy (SetApiKeyPolicy).
+  SET_API_KEY_POLICY = 4;
+  // Attached or cleared a sub-account's policy (SetSubaccountPolicy).
+  SET_SUBACCOUNT_POLICY = 5;
+  // Updated a sub-account policy (UpdateSubaccountPolicy).
+  UPDATE_SUBACCOUNT_POLICY = 6;
+}
+
+// AdminKeyActionNotice is one change an admin API key of the main account
+// made. The account's activity shows the same change.
+message AdminKeyActionNotice {
+  // Opaque identifier of the admin API key that made the change, formatted
+  // as "ak_" followed by 32 lowercase hex characters.
+  string admin_key_id = 1;
+  // What the admin key changed.
+  AdminKeyAction action = 2;
+  // Opaque identifier of the API key changed; empty for a sub-account policy
+  // change.
+  string key_id = 3;
+  // Public ID of the sub-account the change applies to; 0 for the main
+  // account, or for an update of a sub-account policy, which applies to
+  // every sub-account it is attached to.
+  fixed64 subaccount_id = 4;
+  // Public ID of the policy attached or updated; 0 when the change cleared a
+  // policy or attached none.
+  fixed64 policy_id = 5;
+  // Source IP address of the admin key's request.
+  string source_ip = 6;
+  // When the change was made.
+  google.protobuf.Timestamp changed_at = 7;
 }
 
 // ListNotificationsRequest lists the caller's notifications.

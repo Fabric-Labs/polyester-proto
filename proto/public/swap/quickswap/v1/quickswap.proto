@@ -144,10 +144,10 @@ message QuickSwapTerms {
   // this network.
   uint32 destination_zipped_asset_id = 2 [(buf.validate.field).uint32.gt = 0];
   // Side of the swap that amount denominates.
-  QuoteBasis basis = 3 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
+  QuoteBasis basis = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
   // Positive amount in the token units of the route selected by basis: source
   // route for SOURCE_AMOUNT, destination route for DESTINATION_AMOUNT.
   TokenAmount amount = 4 [
@@ -294,10 +294,15 @@ message QuickSwapQuote {
   // quote.
   string min_rate = 4;
   // Published minimum deposit, in source token units, compared with the
-  // deposit before its network fee. A smaller deposit is returned to
-  // return_address (DEPOSIT_BELOW_MINIMUM). It is never below the source
-  // network's minimum
-  // (AssetChainVariant.deposit_min_amount in the config), and differs from
+  // deposit before its network fee. Send at least this amount. It is never
+  // below the source network's minimum deposit
+  // (AssetChainVariant.deposit_min_amount in the config, for
+  // DepositInstructions.zipped_asset_id). A smaller deposit is returned to
+  // return_address (DEPOSIT_BELOW_MINIMUM) only if it reaches the source
+  // network's minimum deposit; a deposit below that minimum is not detected,
+  // recorded or returned, and is lost. For a bridge, min_deposit_amount
+  // often equals the source network's minimum deposit; when they are equal,
+  // any smaller deposit is lost. It differs from
   // ErrorDetail.min_deposit_amount, the smallest deposit that currently
   // quotes. For a TWAP it is the slice count times the smallest deposit one
   // slice takes, and at least a market execution's minimum.
@@ -418,10 +423,12 @@ enum DepositDisposition {
   ELIGIBLE = 2;
   // Not accepted: it is returned to return_address and never executes. A
   // deposit found ineligible after it was credited, such as a late deposit
-  // (LATE_DEPOSIT), one below min_deposit_amount (DEPOSIT_BELOW_MINIMUM) or
-  // above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong
+  // (LATE_DEPOSIT), one below min_deposit_amount but at least the source
+  // network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above
+  // max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong
   // asset or network (WRONG_ASSET), keeps credited_at and is returned from its
-  // credit.
+  // credit. One never credited is returned directly, and direct_return
+  // reports that return.
   RETURN_ONLY = 3;
   // Held for review; it neither executes nor returns until released. A
   // deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this
@@ -462,7 +469,10 @@ enum QuickSwapReason {
   // The deposit is below the published min_deposit_amount, or its credit after
   // the deposit network fee is below the smallest order the route's market
   // accepts. It is not executed: it is returned to return_address, and the
-  // QuickSwap shows RETURNING and RETURNED with this reason. A deposit that
+  // QuickSwap shows RETURNING and RETURNED with this reason. Only a deposit
+  // that reaches the source network's minimum deposit
+  // (AssetChainVariant.deposit_min_amount) is returned; one below it is not
+  // detected and never appears on the QuickSwap. A deposit that
   // cannot be returned on the network it was received on is held (HELD with
   // this reason); the broker contacts Polyester broker support with the
   // swap_id.
@@ -529,6 +539,20 @@ enum QuickSwapReason {
   // QuickSwap is REJECTED: it never gets a deposit address, and nothing can
   // be deposited to it.
   SOURCE_WALLET_SCREENING_FAILED = 28;
+  // Available liquidity did not fill an order at its protected price; untraded
+  // input or intermediate funds are returned or refunded. Shown on the payout
+  // statuses that follow, including COMPLETED when a partly traded swap
+  // refunded the rest. A trade failure reason (this one or ORDER_REJECTED)
+  // is used only when the execution ended without another reason, such as
+  // EXECUTION_DEADLINE_REACHED or PROTECTION_NOT_MET; it is then the first
+  // slice in schedule order whose reason or carry_reason is
+  // INSUFFICIENT_LIQUIDITY or ORDER_REJECTED, the reason before the
+  // carry_reason within a slice.
+  INSUFFICIENT_LIQUIDITY = 29;
+  // An order was refused; untraded input or intermediate funds are returned
+  // or refunded. Shown on the payout statuses that follow, chosen as for
+  // INSUFFICIENT_LIQUIDITY.
+  ORDER_REJECTED = 30;
 }
 
 // Deposit is one deposit detected on the QuickSwap's deposit address.
@@ -573,6 +597,39 @@ message Deposit {
   // GET /v1/chain/flows/{flow_id}; empty until the flow exists. Lifecycle flow
   // amounts are 18-decimal unified units (amount_e18), not token base units.
   string flow_id = 14;
+  // Direct return to return_address of a deposit that was never credited: a
+  // RETURN_ONLY deposit that reached the address after its one eligible
+  // deposit or after its funding window. On a MANUAL_RECOVERY deposit it
+  // reports a direct return once one is recorded. Unset until a direct return
+  // is recorded, and on every other deposit, which is returned through
+  // withdrawals.
+  DepositReturn direct_return = 15;
+}
+
+// DepositReturnState is the progress of a deposit's direct return.
+enum DepositReturnState {
+  // No state; never returned.
+  RETURN_UNSPECIFIED = 0;
+  // The return is queued or being sent.
+  RETURN_PENDING = 1;
+  // The return was sent to return_address; tx_hash is its transaction.
+  RETURN_COMPLETED = 2;
+  // The return is held for review and is not sent until review releases it.
+  // The broker contacts Polyester broker support with the swap_id.
+  RETURN_HELD = 3;
+}
+
+// DepositReturn is a deposit's direct return to return_address. It pays the
+// return address only, never the deposit's sender, in the asset and on the
+// network the deposit was received in.
+message DepositReturn {
+  // Return progress. Accept state values added later.
+  DepositReturnState state = 1;
+  // Return transaction on the deposit's network, in the network's native
+  // text form; set once RETURN_COMPLETED.
+  string tx_hash = 2;
+  // When the return last changed state.
+  google.protobuf.Timestamp updated_at = 3;
 }
 
 // ExecutionProgress is the trading progress of a QuickSwap.
@@ -951,8 +1008,9 @@ message QuickSwap {
   // and withdrawal details can be corrected as documented on Withdrawal;
   // another deposit reaching the address also shows as RETURN_ONLY, and
   // another deposit observed on an already retired address shows as
-  // MANUAL_RECOVERY. Returns made directly for such deposits are not yet
-  // reported in withdrawals; RETURN_ONLY does not confirm a completed return.
+  // MANUAL_RECOVERY. Such a deposit is returned directly, not through
+  // withdrawals: its direct_return reports the return, and RETURN_ONLY alone
+  // does not confirm a completed return.
   // An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all
   // becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user
   // reports such a deposit or needs the final retirement time.

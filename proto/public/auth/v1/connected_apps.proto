@@ -1,0 +1,184 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/auth/v1;authv1";
+
+// An app that asks to use the account, as the OAuth client that registered
+// with Polyester presents itself.
+message ConnectedAppClient {
+  // OAuth client identifier of the app.
+  string client_id = 1;
+  // Name of the app, as shown on the consent page.
+  string name = 2;
+}
+
+// A pending request from an app to connect to the account.
+message AppAuthorization {
+  // The app that asks.
+  ConnectedAppClient client = 1;
+  // OAuth scopes the app asks for. "account:read" lets the app read the
+  // account as the signed-in website does: balances, orders, trades and
+  // account settings. A connected app never moves money out of the account
+  // and never changes its security settings.
+  repeated string scopes = 2;
+  // The server the app will use the account through, as an absolute URL.
+  string resource = 3;
+  // Host the app receives the answer on, from its registered redirect URL.
+  string redirect_host = 4;
+  // Time after which the request can no longer be approved or denied.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// An app connected to the account.
+message ConnectedApp {
+  // Opaque connected app ID.
+  fixed64 connected_app_id = 1;
+  // The connected app.
+  ConnectedAppClient client = 2;
+  // OAuth scopes the account granted the app.
+  repeated string scopes = 3;
+  // The server the app uses the account through, as an absolute URL.
+  string resource = 4;
+  // Time when the account connected the app.
+  google.protobuf.Timestamp connected_at = 5;
+  // Time when the app last used or refreshed its access, at minute
+  // precision. Empty when it has not used it yet.
+  google.protobuf.Timestamp last_used_at = 6;
+  // Time when the connection ends unless it is disconnected before. The app
+  // must then be connected again.
+  google.protobuf.Timestamp expires_at = 7;
+}
+
+// Request to read a pending app connection request for the consent page.
+message GetAppAuthorizationRequest {
+  // Request ID the authorization endpoint gave the consent page in its
+  // `request` query parameter.
+  string request_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// The pending app connection request.
+message GetAppAuthorizationResponse {
+  // The request.
+  AppAuthorization authorization = 1;
+}
+
+// Request to approve a pending app connection request.
+message ApproveAppAuthorizationRequest {
+  // Request ID the authorization endpoint gave the consent page.
+  string request_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// The approved request's answer to the app.
+message ApproveAppAuthorizationResponse {
+  // URL to send the browser to: the app's redirect URL carrying a one-time
+  // authorization code. It is valid for 60 seconds.
+  string redirect_url = 1;
+}
+
+// Request to deny a pending app connection request.
+message DenyAppAuthorizationRequest {
+  // Request ID the authorization endpoint gave the consent page.
+  string request_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// The denied request's answer to the app.
+message DenyAppAuthorizationResponse {
+  // URL to send the browser to: the app's redirect URL carrying the
+  // `access_denied` error.
+  string redirect_url = 1;
+}
+
+// Request to list the apps connected to the account.
+message ListConnectedAppsRequest {}
+
+// The apps connected to the account.
+message ListConnectedAppsResponse {
+  // Connected apps, newest connection first. An account has at most 20; a
+  // disconnected or expired connection is not listed.
+  repeated ConnectedApp apps = 1;
+}
+
+// Request to disconnect an app.
+message RevokeConnectedAppRequest {
+  // Connected app ID from ListConnectedApps.
+  fixed64 connected_app_id = 1 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// Empty response returned after the app is disconnected.
+message RevokeConnectedAppResponse {}
+
+// ConnectedAppService connects outside apps, such as an AI assistant, to the
+// account with OAuth ("Sign in with Polyester"), and lists and disconnects
+// them. A connected app uses the account as the signed-in website does, for
+// the scopes the account granted; it never moves money out of the account
+// and never changes its security settings. A connection lasts until the
+// account or the app disconnects it, or until it expires; signing out of the
+// website does not end it.
+service ConnectedAppService {
+  option (polyester.api.docs_group) = "account";
+
+  // Read a pending app connection request, to show the consent page. An
+  // unknown, expired or already answered request is NotFound.
+  rpc GetAppAuthorization(GetAppAuthorizationRequest) returns (GetAppAuthorizationResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+  }
+
+  // Approve a pending app connection request. The account must have MFA
+  // enrolled, and the request must carry a fresh step-up proof: connecting
+  // an app is durable delegated access. The app receives a one-time
+  // authorization code through the returned redirect URL. An unknown,
+  // expired or already answered request is NotFound; an account with 20
+  // connected apps is FailedPrecondition with AUTH_CONNECTED_APP_LIMIT_REACHED.
+  rpc ApproveAppAuthorization(ApproveAppAuthorizationRequest) returns (ApproveAppAuthorizationResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+  }
+
+  // Deny a pending app connection request. The app receives the
+  // `access_denied` error through the returned redirect URL. An unknown,
+  // expired or already answered request is NotFound.
+  rpc DenyAppAuthorization(DenyAppAuthorizationRequest) returns (DenyAppAuthorizationResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+  }
+
+  // List the apps connected to the account.
+  rpc ListConnectedApps(ListConnectedAppsRequest) returns (ListConnectedAppsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+  }
+
+  // Disconnect an app. Its access and refresh tokens stop working at once.
+  // Disconnecting an app that is already disconnected or expired succeeds;
+  // an ID that is not one of the account's connected apps is NotFound.
+  rpc RevokeConnectedApp(RevokeConnectedAppRequest) returns (RevokeConnectedAppResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+  }
+}

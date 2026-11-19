@@ -29,17 +29,22 @@ enum TradingRateLimitClass {
   TRADING_RATE_LIMIT_CLASS_PLACE = 1;
   // Order and trigger cancellation.
   TRADING_RATE_LIMIT_CLASS_CANCEL = 2;
+  // Order, fill, trigger, trading-limit and fee reads, and order previews.
+  // Every API key, session and subaccount of a root account shares the root
+  // account's read limit.
+  TRADING_RATE_LIMIT_CLASS_READ = 3;
 }
 
-// TradingRateLimitRule describes one weighted placement or cancellation quota
-// for one VIP tier.
+// TradingRateLimitRule describes one weighted placement, cancellation or read
+// quota for one VIP tier.
 message TradingRateLimitRule {
   // Trading operation family governed by this rule. Public responses contain
-  // TRADING_RATE_LIMIT_CLASS_PLACE or TRADING_RATE_LIMIT_CLASS_CANCEL.
-  TradingRateLimitClass policy_class = 1 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: 0
-  }];
+  // TRADING_RATE_LIMIT_CLASS_PLACE, TRADING_RATE_LIMIT_CLASS_CANCEL or
+  // TRADING_RATE_LIMIT_CLASS_READ.
+  TradingRateLimitClass policy_class = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
 
   // VIP tier for this rule, in the inclusive range 0 through 10.
   uint32 vip_tier = 2 [(buf.validate.field).uint32.lte = 10];
@@ -59,8 +64,8 @@ message TradingRateLimitRule {
 // rate-limit catalog.
 message GetRateLimitConfigRequest {}
 
-// GetRateLimitConfigResponse contains all placement and cancellation rules for
-// one complete policy version.
+// GetRateLimitConfigResponse contains all placement, cancellation and read
+// rules for one complete policy version.
 message GetRateLimitConfigResponse {
   // Positive identifier of the returned rate-limit policy version.
   uint64 policy_version = 1 [(buf.validate.field).uint64.gt = 0];
@@ -68,12 +73,13 @@ message GetRateLimitConfigResponse {
   // UTC time at which this policy version became effective.
   google.protobuf.Timestamp effective_from = 2 [(buf.validate.field).required = true];
 
-  // Complete placement and cancellation catalog. Rules are ordered by policy
-  // class, then by tier ascending. The list contains one rule per class for
-  // each VIP0 through VIP10 tier and is not paginated.
+  // Complete placement, cancellation and read catalog. Rules are ordered by
+  // policy class (cancellation, placement, read), then by tier ascending. The
+  // list contains one rule per class for each VIP0 through VIP10 tier and is
+  // not paginated.
   repeated TradingRateLimitRule rules = 3 [(buf.validate.field).repeated = {
-    min_items: 22
-    max_items: 22
+    min_items: 33
+    max_items: 33
   }];
 }
 
@@ -86,10 +92,13 @@ message GetTradingRateLimitsRequest {
   optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
 }
 
-// GetTradingRateLimitsResponse contains the placement and cancellation limits
-// enforced for the selected account target. Trading limits apply per account:
-// the root account and each subaccount have their own limits, and every API
-// key and session that trades for an account shares that account's limits.
+// GetTradingRateLimitsResponse contains the placement, cancellation and read
+// limits enforced for the selected account target. Placement and cancellation
+// limits apply per account: the root account and each subaccount have their
+// own limits, and every API key and session that trades for an account shares
+// that account's limits. The read limit applies per root account: the root
+// account, all of its subaccounts and every API key and session share one
+// read limit.
 message GetTradingRateLimitsResponse {
   // Positive identifier of the rate-limit policy version used for the
   // returned rules.
@@ -98,31 +107,36 @@ message GetTradingRateLimitsResponse {
   // UTC time at which this policy version became effective.
   google.protobuf.Timestamp effective_from = 2 [(buf.validate.field).required = true];
 
-  // Placement and cancellation rules enforced for the selected account,
-  // ordered with placement first and cancellation second. All of the
-  // account's API keys and sessions draw on these limits together.
+  // Placement, cancellation and read rules enforced for the selected
+  // account, ordered placement, cancellation, read. All of the account's API
+  // keys and sessions draw on the placement and cancellation limits together;
+  // the read rule is the root account's, shared with all of its subaccounts.
   repeated TradingRateLimitRule rules = 3 [(buf.validate.field).repeated = {
-    min_items: 2
-    max_items: 2
+    min_items: 3
+    max_items: 3
   }];
 
-  // Placement and cancellation rules resolved for the calling API key, ordered
-  // with placement first and cancellation second. Present only when the caller
+  // Placement, cancellation and read rules resolved for the calling API key,
+  // ordered placement, cancellation, read. Present only when the caller
   // authenticated with an API key. These rules are informational: trading
   // requests are not limited per API key, and only the account rules in
   // `rules` are enforced.
   repeated TradingRateLimitRule api_key_rules = 4 [(buf.validate.field).repeated = {
-    max_items: 2
+    max_items: 3
   }];
 }
 
 // RateLimitService serves public trading quota reference data and authenticated
-// effective trading limits.
+// effective trading limits. A trading read costs units of the root account's
+// read limit: one unit per call, or for a list, one unit per 100 rows its
+// limit asks for, rounded up (two for order history, fills and trigger
+// events). A read over the limit is refused RESOURCE_EXHAUSTED (REST 429
+// RATE_LIMIT_EXCEEDED) with its RateLimitDetail.
 service RateLimitService {
   option (polyester.api.docs_group) = "trading";
 
-  // Get the complete active placement and cancellation quota catalog for
-  // VIP0 through VIP10.
+  // Get the complete active placement, cancellation and read quota catalog
+  // for VIP0 through VIP10.
   // This public, caller-independent catalog supports cacheable ConnectRPC GET.
   rpc GetRateLimitConfig(GetRateLimitConfigRequest) returns (GetRateLimitConfigResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
@@ -131,15 +145,16 @@ service RateLimitService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Rate Limit Config"
       description:
-        "Get the complete active placement and cancellation quota catalog "
-        "for VIP0 through VIP10."
+        "Get the complete active placement, cancellation and read quota "
+        "catalog for VIP0 through VIP10."
       tags: "Rate Limit Service"
       security: [{}]
     };
   }
 
-  // Get the effective placement and cancellation limits for the authenticated
-  // caller's root account or selected subaccount.
+  // Get the effective placement, cancellation and read limits for the
+  // authenticated caller's root account or selected subaccount. Costs one
+  // unit of the root account's read limit.
   rpc GetTradingRateLimits(GetTradingRateLimitsRequest) returns (GetTradingRateLimitsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -147,8 +162,9 @@ service RateLimitService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Trading Rate Limits"
       description:
-        "Get the effective placement and cancellation limits for the "
-        "authenticated account target."
+        "Get the effective placement, cancellation and read limits for the "
+        "authenticated account target. Costs one unit of the root "
+        "account's read limit."
       tags: "Rate Limit Service"
     };
   }

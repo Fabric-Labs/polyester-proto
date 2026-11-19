@@ -253,7 +253,7 @@
           "requestType": "orders.v1.CancelAllAfterRequest",
           "responseType": "orders.v1.CancelAllAfterResponse",
           "summary": "Cancel All After (Dead-Man Switch)",
-          "doc": "Set cancel-all-after (dead-man switch).\n Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.\n When the switch fires, it cancels what CancelAllOrders with the same\n symbol and side scope cancels: open orders, including those that\n triggers placed, and no trigger. Standalone stop-loss, take-profit and\n trailing stops and running TWAPs stay active and can place new orders\n after it fires, and attached legs end or keep protecting the position\n exactly as after CancelAllOrders. The switch does not stop them: only\n TriggersService.CancelTrigger cancels a trigger.",
+          "doc": "Set cancel-all-after (dead-man switch).\n Arms or disables automatic cancel-all if heartbeat is not refreshed before expiry.\n When the switch fires, it cancels what CancelAllOrders with the same\n symbol and side scope cancels: open orders, including those that\n triggers placed, and, only with `include_triggers`, the matching\n triggers. Without it, standalone stop-loss, take-profit and trailing\n stops and running TWAPs stay active and can place new orders after it\n fires, and attached legs end or keep protecting the position exactly\n as after CancelAllOrders.",
           "tags": [
             "trading"
           ],
@@ -268,6 +268,7 @@
           "errorCatalog": "orders-api-write:ordererrors",
           "examples": {
             "request": {
+              "includeTriggers": false,
               "requestId": "request_01J0EXAMPLE",
               "side": "BUY",
               "subaccountId": "6789012345678",
@@ -294,7 +295,7 @@
           "requestType": "orders.v1.CancelAllOrdersRequest",
           "responseType": "orders.v1.CancelAllOrdersResponse",
           "summary": "Cancel All Orders",
-          "doc": "Cancels all matching open orders for an account (kill switch).\n Evaluates matching orders from a consistent snapshot at request start and\n requests cancellation of every one, however many match. The response\n lists up to 200 of them, oldest first, with the total count.\n Final state is confirmed via the order update stream or read path.\n\n It cancels orders, not triggers. Open orders that triggers placed match\n like any other order and are canceled: a TWAP's working slice, a\n ladder's levels, the order a fired stop placed, and the working exit of\n an attached take-profit, stop-loss or trailing stop. The triggers\n themselves are not canceled, and their reserved funds stay reserved:\n - A stop-loss, take-profit or trailing stop that has not fired stays\n   armed and places its order when its condition is met.\n - A TWAP keeps running and places its next slice when it is due.\n - A ladder ends once none of its levels remains open: canceled when\n   none of them filled, completed when any did.\n - An attached leg whose working exit is canceled ends canceled, and so\n   do the parent's other legs when oco is set. Attached legs without a\n   working exit keep protecting the parent's filled position, even when\n   the parent order itself is canceled; they end only if the parent is\n   canceled before any fill.\n - A paused trigger stays paused and can be resumed.\n\n To stop all automated trading, cancel each live trigger with\n TriggersService.CancelTrigger, then cancel the orders: a trigger that\n fires before its cancel places an order that the cancel-all then\n cancels. TriggersService.ListTriggers with the statuses STATUS_CREATED,\n STATUS_ARMED, STATUS_RUNNING and STATUS_PAUSED lists the live triggers,\n attached legs included.",
+          "doc": "Cancels all matching open orders for an account (kill switch).\n Unless dry_run is set, what it cancels is fixed when its request_id is\n first admitted: every matching order of the account admitted before\n that, from any interface, and none admitted after it. An order whose create, batch\n create, modify or batch replace response arrived before this request was\n sent was admitted before it and is covered, including an order not yet\n reported open and an order that replaced an earlier one. Requests still\n in flight when this request is sent, and requests whose outcome is\n unknown, have no defined order with it: an order they create may be\n admitted after it and stay open. Wait for their responses before sending\n the cancel-all, or send another once they are answered.\n\n It requests cancellation of every covered order, however many match. The\n response confirms admission, not completion, and lists up to 200 of them,\n oldest first, with the total count. Each covered order eventually ends;\n any still open when the cancellation applies is canceled. Final state is\n confirmed via the order update stream or read path. A retry with the same\n request_id returns the original outcome and covers no order admitted\n after the original request. A rejected request, or one whose outcome is\n unknown, is no barrier: orders sent before it may stay open, so retry it\n or read open orders before relying on it.\n\n By default it cancels orders, not triggers; with `include_triggers` it\n also stops the account's matching triggers (see the field). Open orders\n that triggers placed match like any other order and are canceled: a TWAP's working slice, a\n ladder's levels, the order a fired stop placed, and the working exit of\n an attached take-profit, stop-loss or trailing stop. The triggers\n themselves are not canceled, and their reserved funds stay reserved:\n - A stop-loss, take-profit or trailing stop that has not fired stays\n   armed and places its order when its condition is met.\n - A TWAP keeps running and places its next slice when it is due.\n - A ladder ends once none of its levels remains open: canceled when\n   none of them filled, completed when any did.\n - An attached leg whose working exit is canceled ends canceled, and so\n   do the parent's other legs when oco is set. Attached legs without a\n   working exit keep protecting the parent's filled position, even when\n   the parent order itself is canceled; they end only if the parent is\n   canceled before any fill.\n - A paused trigger stays paused and can be resumed.\n\n To stop all automated trading in one request, set `include_triggers`:\n every matching trigger ends canceled with reason\n TRIGGER_CANCEL_REASON_CANCEL_ALL, none places an order after the\n response, and `matched_triggers` counts them.",
           "tags": [
             "trading"
           ],
@@ -310,6 +311,7 @@
           "examples": {
             "request": {
               "dryRun": false,
+              "includeTriggers": false,
               "requestId": "request_01J0EXAMPLE",
               "side": "BUY",
               "subaccountId": "6789012345678",
@@ -327,6 +329,7 @@
               "failedCancels": 1,
               "listingStatus": "INCLUDED",
               "matchedOrders": 1,
+              "matchedTriggers": 1,
               "status": "SUBMITTED",
               "submittedCancels": 1,
               "totalCancelled": 1,

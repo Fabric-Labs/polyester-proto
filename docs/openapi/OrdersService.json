@@ -1439,6 +1439,10 @@
       "polyester.rest.OrdersService_CancelAllAfter.Request": {
         "additionalProperties": false,
         "properties": {
+          "includeTriggers": {
+            "description": "If true, the switch's expiry also stops the account's triggers in its scope, as CancelAllOrders with `include_triggers` does: those created before the expiry time, even when the expiry is processed later, and none of them places an order once it is processed. A trigger created at or after the expiry time is not stopped. Defaults to false: only orders are canceled on expiry. Each arm or refresh sets it again; a disable ignores it.",
+            "type": "boolean"
+          },
           "requestId": {
             "description": "Idempotency/trace key from caller (required). 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "type": "string"
@@ -1552,6 +1556,10 @@
             "description": "If true, return matched counts without actually canceling.",
             "type": "boolean"
           },
+          "includeTriggers": {
+            "description": "If true, also stops the account's triggers in the same scope: every stop-loss, take-profit, trailing stop, TWAP, ladder and attached take-profit, stop-loss or trailing leg on the matched symbols whose orders trade on the side filter, created before the request was accepted. Each ends canceled with reason `CANCEL_ALL` and releases its reserved funds, its open orders are canceled with the others, and none places an order after the response. Defaults to false: only orders are canceled and triggers keep running. Part of the criteria a retry must keep.",
+            "type": "boolean"
+          },
           "requestId": {
             "description": "Idempotency key (required). Reuse the same key and criteria for retries. Completed results are retained for at least two minutes. Use a fresh key for a new cancellation; do not reuse a key after its replay window. 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "type": "string"
@@ -1628,6 +1636,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "matchedTriggers": {
+            "description": "With `include_triggers`, the number of the account's triggers that matched the filters when the request was accepted, each stopped unless `dry_run` is set. Zero without `include_triggers`.",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "status": {
             "allOf": [
               {
@@ -1670,6 +1685,7 @@
           "failedCancels",
           "listingStatus",
           "matchedOrders",
+          "matchedTriggers",
           "status",
           "submittedCancels",
           "totalCancelled",
@@ -4007,13 +4023,14 @@
     },
     "/v1/orders/cancel-all": {
       "post": {
-        "description": "Cancel all matching open orders for an account. Supports an optional list of symbols and a side filter plus dry-run preview. Returns up to 200 canceled order IDs, oldest first, with the total count. It cancels open orders, including those that triggers placed (TWAP slices, ladder levels and exit orders), but not triggers. Standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Cancel triggers separately: list them with List Triggers, then cancel each with Cancel Trigger.",
+        "description": "Cancel all matching open orders for an account. Supports an optional list of symbols and a side filter plus dry-run preview. Returns up to 200 canceled order IDs, oldest first, with the total count. Unless it is a dry run, it covers every matching order admitted before its requestId was first admitted, from any interface, including orders not yet open and replacement orders: an order whose create or replace response arrived before the first request with this requestId was sent is covered, while requests still in flight or with an unknown outcome have no defined order with it. A retry with the same requestId keeps the original scope and covers no order admitted since; use a fresh requestId for a new cancellation. Each covered order eventually ends; any still open when the cancellation applies is canceled. It cancels open orders, including those that triggers placed (TWAP slices, ladder levels and exit orders). By default it does not cancel triggers: standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Set include_triggers to also stop every matching trigger, attached legs included, in the same request; matched_triggers counts them.",
         "operationId": "OrdersService_CancelAllOrders",
         "requestBody": {
           "content": {
             "application/json": {
               "example": {
                 "dryRun": false,
+                "includeTriggers": false,
                 "requestId": "request_01J0EXAMPLE",
                 "side": "BUY",
                 "subaccountId": "45LUmqjT",
@@ -4042,6 +4059,7 @@
                   "failedCancels": 1,
                   "listingStatus": "INCLUDED",
                   "matchedOrders": 1,
+                  "matchedTriggers": 1,
                   "status": "SUBMITTED",
                   "submittedCancels": 1,
                   "totalCancelled": 1,
@@ -4103,12 +4121,13 @@
     },
     "/v1/orders/cancel-all-after": {
       "post": {
-        "description": "Set or disable a dead-man switch timeout for automatic cancel-all. Supports optional symbol and side scope with idempotent heartbeat refresh. On expiry it cancels open orders in scope, including those that triggers placed (TWAP slices, ladder levels and exit orders), but not triggers. Standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Cancel triggers separately: list them with List Triggers, then cancel each with Cancel Trigger.",
+        "description": "Set or disable a dead-man switch timeout for automatic cancel-all. Supports optional symbol and side scope with idempotent heartbeat refresh. On expiry it cancels open orders in scope, including those that triggers placed (TWAP slices, ladder levels and exit orders). By default it does not cancel triggers: standalone stop-loss, take-profit and trailing triggers and TWAPs keep running and can place new orders; a ladder stops once its levels are canceled. An attached stop-loss, take-profit or trailing leg whose exit order is canceled ends, and so do the parent's other legs when oco is set, so the position loses that protection. Other attached legs keep protecting the parent's filled quantity; those of a parent canceled before any fill end with it. Set include_triggers to also stop every matching trigger, attached legs included, when the switch fires.",
         "operationId": "OrdersService_CancelAllAfter",
         "requestBody": {
           "content": {
             "application/json": {
               "example": {
+                "includeTriggers": false,
                 "requestId": "request_01J0EXAMPLE",
                 "side": "BUY",
                 "subaccountId": "45LUmqjT",

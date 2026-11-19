@@ -3,6 +3,31 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-19 — develop-20261119T002706Z
+
+add connected apps, admin API keys, trigger-aware cancel-all and one order book depth vocabulary.
+
+- [2026-11-16T2233Z-orders-v1](changes/2026-11-16T2233Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`. **Breaking.**
+- [2026-11-17T0521Z-auth-v1](changes/2026-11-17T0521Z-auth-v1.md): changed `auth.v1.PolicyService`, `ai.v1.AssistantService`, `alerts.v1.PriceAlertService`, `auth.v1.AddressBookService`, `auth.v1.AuthService`, `auth.v1.MFAService`, `auth.v1.SocialVerificationService`, `auth.v1.SubaccountRoleService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `chain.guard.v1.GuardSignerService`, `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`, `checkpoints.v1.CheckpointService`, `marketdata.v1.HeatmapService`, `marketdata.v1.MarketDataService`, `notifications.v1.NotificationService`, `orders.v1.OrdersService`, `ratelimit.v1.RateLimitService`, `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapExplorerService`, `swap.quickswap.v1.QuickSwapService`, `triggers.v1.TriggersService`, `vip.v1.VIPService`.
+- [2026-11-17T0646Z-auth-v1](changes/2026-11-17T0646Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.ApiKeyService`. **Breaking.**
+- [2026-11-17T0721Z-auth-v1](changes/2026-11-17T0721Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `notifications.v1.NotificationService`.
+- [2026-11-17T0729Z-auth-v1](changes/2026-11-17T0729Z-auth-v1.md): added `auth.v1.AuthService`.
+- [2026-11-17T0734Z-ratelimit-v1](changes/2026-11-17T0734Z-ratelimit-v1.md): changed `ratelimit.v1.RateLimitService`, `orders.v1.OrdersReadService`, `triggers.v1.TriggersService`, `fees.v1.FeeService`. **Breaking.**
+- [2026-11-17T0804Z-ledger-read-v1](changes/2026-11-17T0804Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-17T0833Z-orders-v1](changes/2026-11-17T0833Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-17T1055Z-notifications-v1](changes/2026-11-17T1055Z-notifications-v1.md): added `notifications.v1.NotificationService`.
+- [2026-11-17T1154Z-orderbook-v1](changes/2026-11-17T1154Z-orderbook-v1.md): changed `orderbook.v1.OrderbookService`, `marketdata.v1.HeatmapService`. **Breaking.**
+- [2026-11-17T1314Z-chain-lifecycle-v1](changes/2026-11-17T1314Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`.
+- [2026-11-17T1506Z-swap-quickswap-v1](changes/2026-11-17T1506Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-17T1538Z-auth-v1](changes/2026-11-17T1538Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.ApiKeyService`, `auth.v1.AddressBookService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-17T1637Z-orders-v1](changes/2026-11-17T1637Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`, `auth.v1.PolicyService`, `chain.withdraw.v1.WithdrawService`, `chain.withdraw.v1.AutoWithdrawService`, `transfer.v1.InternalTransferService`, `transfer.v1.DustConversionService`, `claims.v1.ClaimsService`. **Breaking.**
+- [2026-11-18T0609Z-auth-v1](changes/2026-11-18T0609Z-auth-v1.md): added `auth.v1.ConnectedAppService`, `auth.v1.AuthService`.
+- [2026-11-18T0625Z-polyester-api-v1](changes/2026-11-18T0625Z-polyester-api-v1.md): changed `alerts.v1.PriceAlertService`, `auth.v1.AccountActivityService`, `auth.v1.AddressBookService`, `auth.v1.ApiKeyService`, `auth.v1.AuthService`, `auth.v1.MFAService`, `auth.v1.PolicyService`, `auth.v1.ProfileService`, `auth.v1.ResolveService`, `auth.v1.SocialVerificationService`, `auth.v1.SubaccountRoleService`, `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`, `chain.analytics.v1.ChainAnalyticsService`, `chain.deposit.v1.DepositAddressService`, `chain.guard.v1.GuardSignerService`, `chain.lifecycle.v1.LifecycleReadService`, `chain.withdraw.v1.AutoWithdrawService`, `chain.withdraw.v1.WithdrawService`, `chain.zipper.v1.ZipperService`, `changelog.v1.ChangelogService`, `checkpoints.v1.CheckpointService`, `claims.v1.ClaimsService`, `fees.v1.FeeService`, `ledger.read.v1.LedgerReadService`, `ledger.read.v1.StatementExportService`, `marketdata.v1.HeatmapService`, `marketdata.v1.MarketDataService`, `marketoverview.v1.MarketOverviewService`, `notifications.v1.NotificationService`, `orderbook.v1.OrderbookService`, `orders.v1.OrdersReadService`, `orders.v1.OrdersService`, `ratelimit.v1.RateLimitService`, `rewards.v1.RewardCampaignService`, `swap.quickswap.v1.QuickSwapBrokerService`, `swap.quickswap.v1.QuickSwapExplorerService`, `swap.quickswap.v1.QuickSwapReferralService`, `swap.quickswap.v1.QuickSwapService`, `swap.v1.SwapService`, `system.v1.SystemService`, `transfer.v1.DustConversionService`, `transfer.v1.InternalTransferService`, `triggers.v1.TriggersService`, `vip.v1.VIPService`.
+- [2026-11-18T0625Z-swap-quickswap-v1](changes/2026-11-18T0625Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-18T0840Z-swap-quickswap-v1](changes/2026-11-18T0840Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-18T0901Z-auth-v1](changes/2026-11-18T0901Z-auth-v1.md): removed `auth.v1.MFAService`, `auth.v1.ApiKeyService`, `auth.v1.SocialVerificationService`, `ai.v1.AssistantService`, `transfer.v1.InternalTransferService`, `chain.withdraw.v1.WithdrawService`. **Breaking.**
+- [2026-11-18T0935Z-transfer-v1](changes/2026-11-18T0935Z-transfer-v1.md): changed `transfer.v1.InternalTransferService`. **Breaking.**
+
 ## 2026-11-18 — develop-20261118T075251Z
 
 0.93.5: account activity history, QuickSwap explorer and statistics, asset market statistics, server time, cancellable statement exports with download links, internal transfer batch reads, recent MFA checks, assistant images and own model keys, Telegram price alerts and catalog-named REST error codes.

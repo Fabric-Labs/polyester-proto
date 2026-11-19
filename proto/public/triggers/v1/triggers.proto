@@ -173,6 +173,10 @@ enum TriggerCancelReason {
   // reserved funds. The market's open orders were canceled at the same time.
   // The market refuses new triggers until it trades again.
   TRIGGER_CANCEL_REASON_MARKET_HALTED = 13;
+  // The account's cancel-all, or its dead-man switch, with triggers included
+  // stopped the trigger: its reserved funds were released and its open
+  // orders were canceled with the account's other orders.
+  TRIGGER_CANCEL_REASON_CANCEL_ALL = 16;
   // The terminal state did not contain a cancellation reason.
   TRIGGER_CANCEL_REASON_MISSING_REASON_CODE = 998;
   // An internal invariant or processing failure canceled the trigger.
@@ -395,6 +399,11 @@ enum TriggerFailureReason {
   // price; once that order is gone or no longer first there, it fires again if
   // its trigger condition still holds.
   TRIGGER_FAILURE_REASON_SELF_TRADE_PREVENTED = 249;
+  // The account's cancel-all, or its dead-man switch, with triggers included
+  // was stopping the trigger, so the fire placed no order; the trigger then
+  // ends canceled with reason TRIGGER_CANCEL_REASON_CANCEL_ALL. Only on
+  // EVENT_FIRE_REFUSED.
+  TRIGGER_FAILURE_REASON_TRIGGER_STOPPING = 263;
   // The terminal state did not contain a failure reason.
   TRIGGER_FAILURE_REASON_MISSING_REASON_CODE = 998;
   // An internal invariant or processing failure caused the trigger to fail.
@@ -505,10 +514,8 @@ message ConditionalTrigger {
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
   // Child order side. Required.
   orders.v1.Side side = 2 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    }
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
   ];
   // Child execution. Required.
   ConditionalChildExecution child = 3 [(buf.validate.field).required = true];
@@ -570,10 +577,8 @@ message TrailingStopTrigger {
   }
   // Child order side. Required.
   orders.v1.Side side = 6 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    }
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
   ];
   // Positive maximum price of a trailing stop that buys, in quote units scaled
   // by 1e9: the most its child pays per unit. Required when `side` is BUY and
@@ -636,10 +641,8 @@ message TwapTrigger {
 
   // Child side. Required.
   orders.v1.Side side = 1 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    }
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
   ];
   // Total execution duration in milliseconds, at least 1000.
   int64 duration_ms = 2 [(buf.validate.field).int64.gte = 1000];
@@ -667,10 +670,8 @@ message LadderTrigger {
 
   // Child side. Required.
   orders.v1.Side side = 1 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    }
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
   ];
   // Positive minimum generated level price in quote units scaled by 1e9.
   int64 price_min_ticks = 2 [(buf.validate.field).int64.gt = 0];
@@ -822,10 +823,8 @@ message OcoIntent {
   // The side both legs trade: SELL protects a held base position, BUY spends
   // held quote. Required.
   orders.v1.Side side = 2 [
-    (buf.validate.field).enum = {
-      defined_only: true
-      not_in: [0]
-    },
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true,
     (google.api.field_behavior) = REQUIRED
   ];
   // Positive quantity both legs trade, scaled by the pair's
@@ -1604,7 +1603,8 @@ service TriggersService {
     };
   }
 
-  // Get a trigger by ID.
+  // Get a trigger by ID. Costs one unit of the root account's trading read
+  // limit.
   rpc GetTrigger(GetTriggerRequest) returns (GetTriggerResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -1613,12 +1613,15 @@ service TriggersService {
       summary: "Get Trigger"
       description:
         "Retrieve a single trigger by trigger ID, including "
-        "lifecycle state and strategy-specific fields."
+        "lifecycle state and strategy-specific fields. Costs one unit of "
+        "the root account's trading read limit."
       tags: "Triggers Service"
     };
   }
 
-  // List triggers for a sub-account with optional filters.
+  // List triggers for a sub-account with optional filters. Costs one unit of
+  // the root account's trading read limit per 100 rows the limit asks for,
+  // rounded up.
   rpc ListTriggers(ListTriggersRequest) returns (ListTriggersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -1627,7 +1630,8 @@ service TriggersService {
       summary: "List Triggers"
       description:
         "List triggers for an account with optional symbol, status, "
-        "and trigger-type filters."
+        "and trigger-type filters. Costs one unit of the root account's "
+        "trading read limit per 100 rows the limit asks for, rounded up."
       tags: "Triggers Service"
     };
   }
@@ -1635,7 +1639,9 @@ service TriggersService {
   // List trigger events (append-only history). A trigger the caller cannot
   // read (no such trigger, another account's, or one outside the selected
   // sub-account) answers NOT_FOUND, as GetTrigger does. A trigger the caller
-  // can read that has no event yet answers an empty list.
+  // can read that has no event yet answers an empty list. Costs two units of
+  // the root account's trading read limit per 100 rows the limit asks for,
+  // rounded up.
   rpc ListTriggerEvents(ListTriggerEventsRequest) returns (ListTriggerEventsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -1645,7 +1651,9 @@ service TriggersService {
       description:
         "List append-only trigger events for a trigger, including "
         "child-order actions, with optional event-category filtering "
-        "and reverse-time pagination."
+        "and reverse-time pagination. Costs two units of the root "
+        "account's trading read limit per 100 rows the limit asks for, "
+        "rounded up."
       tags: "Triggers Service"
     };
   }
