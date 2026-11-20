@@ -7,13 +7,14 @@ import "gnostic/openapi/v3/annotations.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "swap/quickswap/v1/quickswap.proto";
+import "swap/quickswap/v1/quickswap_broker.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
 option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "QuickSwap Referral"
-      description: "A referral partner's own record: enrollment, status, rates, referral code and the QuickSwaps it referred."
+      description: "A referral partner's own record: enrollment, status, rates, referral code, the QuickSwaps it referred and its commission ledger."
     }
   ]
 };
@@ -344,6 +345,52 @@ message GetReferredQuickSwapResponse {
   ReferralBreakdown breakdown = 2;
 }
 
+// ListReferralLedgerRequest lists the commission credits and payouts of the
+// caller's earnings sub-account, newest first.
+message ListReferralLedgerRequest {
+  option (buf.validate.message).cel = {
+    id: "list_referral_ledger_request.window"
+    message: "end_time must be after start_time"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time > this.start_time"
+  };
+
+  // Only entries that occurred at or after start_time, rounded down to the
+  // minute; unset for no lower bound.
+  google.protobuf.Timestamp start_time = 1;
+  // Only entries that occurred before end_time (exclusive), rounded up to
+  // the minute; after start_time when both are set; unset for no upper
+  // bound.
+  google.protobuf.Timestamp end_time = 2;
+  // Maximum number of entries to return; 0 means 25, at most 100.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 100];
+  // Opaque keyset cursor from a previous next_page_token, exclusive, bound
+  // to the caller's partner record, the time bounds and the list order. It
+  // names only the public credit_id or run_id of the place the previous
+  // page ended. Reuse it with the same filters; limit may change. Empty for
+  // the first page.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListReferralLedgerResponse lists ledger entries newest first by
+// occurred_at, as ListVaultLedger does: each referral commission credited to
+// the earnings sub-account (FEE_CREDIT with fee_kind REFERRAL), and each
+// auto-withdraw payout that left it (PAYOUT_DEBIT), with its refund
+// (PAYOUT_REFUND). A credit's occurred_at is rounded down to the minute,
+// and the credits of one minute follow a fixed order that does not follow
+// when they were credited. At one time, payouts come before credits and a
+// refund before its debit. It carries no running balance and lists no other
+// movement of the sub-account, such as a withdrawal or transfer the partner
+// makes itself: read the balance and every movement with
+// LedgerReadService. Paging lists exactly once every entry that sorts after the previous
+// page's last entry when the next page is read. A page may hold fewer than
+// limit entries while next_page_token is set; continue until it is empty.
+message ListReferralLedgerResponse {
+  // The entries.
+  repeated VaultLedgerEntry entries = 1;
+  // Cursor of the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
 // QuickSwapReferralService is a referral partner's own record, over
 // ConnectRPC. A referral partner shares a link with their code; QuickSwaps
 // made through it on Polyester's own QuickSwap app give the user a discount
@@ -366,6 +413,12 @@ message GetReferredQuickSwapResponse {
 // its referral. They return no identity of the person who swapped and no
 // account, address, memo, transaction hash or flow ID; amounts are exact and
 // times are rounded down to the minute.
+//
+// Commissions are credited to the partner's earnings sub-account, which the
+// partner owns: its balance, payouts and payout addresses are managed like
+// any sub-account's, with AutoWithdrawService and the withdraw whitelist.
+// ListReferralLedger lists each commission credit with its QuickSwap and
+// each auto-withdraw payout from that sub-account.
 //
 // Every RPC is rate limited per account: over the limit it fails with
 // RESOURCE_EXHAUSTED, a RateLimitDetail and a Retry-After header.
@@ -488,6 +541,27 @@ service QuickSwapReferralService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get referred QuickSwap"
       description: "Get one QuickSwap the caller referred, with its fee and commission breakdown."
+      tags: "QuickSwap Referral"
+    };
+  }
+  // ListReferralLedger lists the commission credits and payouts of the
+  // caller's earnings sub-account.
+  //
+  // Newest first, filtered by time. A disabled partner still reads its
+  // ledger.
+  //
+  // Errors:
+  // - NOT_FOUND: REFERRAL_PARTNER_NOT_FOUND.
+  // - INVALID_ARGUMENT: a page_token from another partner, other filters or
+  //   malformed.
+  // - UNAVAILABLE: the payouts cannot be read; retry the same request.
+  rpc ListReferralLedger(ListReferralLedgerRequest) returns (ListReferralLedgerResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "REFERRAL_PARTNER_NOT_FOUND";
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List referral ledger"
+      description: "List the commission credits and payouts of the caller's earnings sub-account, newest first."
       tags: "QuickSwap Referral"
     };
   }

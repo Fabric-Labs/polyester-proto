@@ -3,6 +3,37 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-20 — develop-20261120T010241Z
+
+Release 0.93.7 public contract.
+
+- [2026-11-18T1036Z-strategies-v1](changes/2026-11-18T1036Z-strategies-v1.md): changed `strategies.v1.StrategiesService`, `auth.v1.PolicyService`.
+- [2026-11-18T1039Z-triggers-v1](changes/2026-11-18T1039Z-triggers-v1.md): changed `triggers.v1.TriggersService`.
+- [2026-11-18T1231Z-ledger-read-v1](changes/2026-11-18T1231Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-18T1255Z-strategies-v1](changes/2026-11-18T1255Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-18T1311Z-ai-v1](changes/2026-11-18T1311Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-18T1712Z-swap-quickswap-v1](changes/2026-11-18T1712Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapExplorerService`. **Breaking.**
+- [2026-11-18T1926Z-chain-withdraw-v1](changes/2026-11-18T1926Z-chain-withdraw-v1.md): added `chain.withdraw.v1.WithdrawService`.
+- [2026-11-18T2219Z-swap-quickswap-v1](changes/2026-11-18T2219Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapExplorerService`.
+- [2026-11-18T2248Z-swap-quickswap-v1](changes/2026-11-18T2248Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-18T2331Z-swap-quickswap-v1](changes/2026-11-18T2331Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapExplorerService`. **Breaking.**
+- [2026-11-18T2337Z-auth-v1](changes/2026-11-18T2337Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `auth.v1.PolicyService`, `auth.v1.SocialVerificationService`, `orders.v1.OrdersService`. **Breaking.**
+- [2026-11-19T0104Z-orders-v1](changes/2026-11-19T0104Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-19T0118Z-auth-v1](changes/2026-11-19T0118Z-auth-v1.md): changed `auth.v1.AuthService`, `auth.v1.AddressBookService`. **Breaking.**
+- [2026-11-19T0138Z-auth-v1](changes/2026-11-19T0138Z-auth-v1.md): changed `auth.v1.ConnectedAppService`. **Breaking.**
+- [2026-11-19T0234Z-changelog-v1](changes/2026-11-19T0234Z-changelog-v1.md): changed `changelog.v1.ChangelogService`.
+- [2026-11-19T0242Z-swap-quickswap-v1](changes/2026-11-19T0242Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-19T0354Z-swap-quickswap-v1](changes/2026-11-19T0354Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-19T0400Z-swap-quickswap-v1](changes/2026-11-19T0400Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-19T0745Z-transfer-v1](changes/2026-11-19T0745Z-transfer-v1.md): changed `transfer.v1.InternalTransferService`, `transfer.v1.DustConversionService`. **Breaking.**
+- [2026-11-19T0800Z-ledger-read-v1](changes/2026-11-19T0800Z-ledger-read-v1.md): added `ledger.read.v1.LedgerReadService`.
+- [2026-11-19T0800Z-marketdata-v1](changes/2026-11-19T0800Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-19T1039Z-orders-v1](changes/2026-11-19T1039Z-orders-v1.md): changed `orders.v1.OrdersService`, `orders.v1.OrdersReadService`. **Breaking.**
+- [2026-11-19T1107Z-swap-quickswap-v1](changes/2026-11-19T1107Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-19T1231Z-triggers-v1](changes/2026-11-19T1231Z-triggers-v1.md): changed `triggers.v1.TriggersService`, `orders.v1.OrdersService`.
+- [2026-11-19T1252Z-ai-v1](changes/2026-11-19T1252Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-19T1534Z-marketdata-v1](changes/2026-11-19T1534Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+
 ## 2026-11-19 — develop-20261119T002706Z
 
 add connected apps, admin API keys, trigger-aware cancel-all and one order book depth vocabulary.

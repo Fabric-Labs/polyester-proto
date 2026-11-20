@@ -7,7 +7,6 @@ import "gnostic/openapi/v3/annotations.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "swap/quickswap/v1/quickswap.proto";
-import "swap/quickswap/v1/quickswap_broker.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
 option (gnostic.openapi.v3.document) = {
@@ -85,22 +84,102 @@ message ExplorerQuickSwap {
   // The finalized payouts to the destination, oldest first: one in
   // practice. destination_amount is their total.
   repeated ExplorerWithdrawal withdrawals = 9;
+  // USD value of the deposit taken into execution, fixed when it was taken
+  // in, as QuickSwap.deposited_value_usd: in base units of 18 decimals,
+  // rounded down, never repriced. Unset when it has none: not valued by a
+  // current price in time, or from before USD values existed; never zero
+  // for unknown.
+  TokenAmount source_value_usd = 10;
+  // USD value of what the destination was paid, fixed when its payout was
+  // requested, as QuickSwap.delivered_value_usd. Like source_value_usd, it
+  // is unset when it has none, and can be set a few minutes after
+  // completed_at.
+  TokenAmount destination_value_usd = 11;
 }
 
-// ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker.
+// ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker,
+// optionally only those matching every filter given. A side's filters match
+// a QuickSwap whose asset and network is any of its zipped_asset_ids, or on
+// any network of any of its asset_ids. The source and destination
+// filters together may select at most 400 routes (source and destination
+// asset and network pairs), counting each asset_id as all its networks.
+// QuickSwaps created before the Explorer launched never match an asset
+// filter, and those without a source_value_usd never match a USD bound.
+//
+// A USD bound is 0 or 1, 2 or 5 times a power of ten dollars from $1 to
+// $1,000,000,000: $1, $2, $5, $10, $20, $50, $100 and so on. With a USD
+// bound, the list holds only QuickSwaps that completed at least 5 minutes
+// before it is read, when their source_value_usd is final, so it lags
+// completion by up to 5 minutes. The routes times the value steps the range
+// covers may be at most 400, counted from the request alone: the steps run
+// $0 to $1, $1 to $2, $2 to $5, $5 to $10 and so on up to $1,000,000,000 and
+// above, the last one, so a range without a maximum covers the steps from
+// its minimum to the last.
 message ListCompletedQuickSwapsRequest {
-  // Only QuickSwaps from this source asset and network, as a zipped_asset_id;
-  // 0 for every source.
-  uint32 source_zipped_asset_id = 1;
-  // Only QuickSwaps to this destination asset and network, as a
-  // zipped_asset_id; 0 for every destination.
-  uint32 destination_zipped_asset_id = 2;
+  // Only QuickSwaps from one of these source assets and networks, as
+  // AssetChainVariant.zipped_asset_id values from
+  // GET /v1/chain/deposit-withdraw/config; at most 20.
+  repeated uint32 source_zipped_asset_ids = 1 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 20
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+  // Only QuickSwaps to one of these destination assets and networks, as
+  // source_zipped_asset_ids; at most 20.
+  repeated uint32 destination_zipped_asset_ids = 2 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 20
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
   // Maximum number of QuickSwaps to return; 0 means 50, at most 100.
   uint32 limit = 3 [(buf.validate.field).uint32.lte = 100];
   // Opaque keyset cursor from a previous next_page_token, exclusive, bound
-  // to the asset filters and the newest-first order. Reuse it with the same
-  // filters. Empty for the first page.
+  // to the filters, the networks their asset IDs covered and the
+  // newest-first order. Reuse it with the same filters. If a network was
+  // added to or removed from one of the asset IDs since the first page, it
+  // is PAGE_TOKEN_INVALID: request the first page again. Empty for the first
+  // page.
   string page_token = 4 [(buf.validate.field).string.max_len = 256];
+  // Only QuickSwaps from one of these assets, on any of their networks, as
+  // AssetConfig.ledger_id values from GET /v1/chain/deposit-withdraw/config;
+  // at most 20.
+  repeated uint32 source_asset_ids = 5 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 20
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+  // Only QuickSwaps to one of these assets, on any of their networks, as
+  // source_asset_ids; at most 20.
+  repeated uint32 destination_asset_ids = 6 [(buf.validate.field).repeated = {
+    unique: true
+    max_items: 20
+    items: {
+      uint32: {gt: 0}
+    }
+  }];
+  // Only QuickSwaps whose source_value_usd is at least this: a bound on the
+  // grid, in base units of 18 decimals as source_value_usd.base_units, for
+  // example 100000000000000000000 for $100. Unset (empty) for no lower
+  // bound.
+  string min_source_value_usd = 7 [(buf.validate.field).cel = {
+    id: "explorer.min_source_value_usd.grid"
+    message: "min_source_value_usd must be 0 or 1, 2 or 5 times a power of ten dollars from $1 to $1,000,000,000 ($1, $2, $5, $10, $20, $50, ...): base units 0, or 1, 2 or 5 followed by 18 to 26 zeros, or 1 followed by 27 zeros"
+    expression: "this == '' || this.matches('^(0|[125]0{18,26}|10{27})$')"
+  }];
+  // Only QuickSwaps whose source_value_usd is below this: a bound on the
+  // grid, in base units of 18 decimals, above min_source_value_usd when both
+  // are set, so never 0 alone. Unset (empty) for no upper bound.
+  string max_source_value_usd = 8 [(buf.validate.field).cel = {
+    id: "explorer.max_source_value_usd.grid"
+    message: "max_source_value_usd must be 0 or 1, 2 or 5 times a power of ten dollars from $1 to $1,000,000,000 ($1, $2, $5, $10, $20, $50, ...): base units 0, or 1, 2 or 5 followed by 18 to 26 zeros, or 1 followed by 27 zeros"
+    expression: "this == '' || this.matches('^(0|[125]0{18,26}|10{27})$')"
+  }];
 }
 
 // ListCompletedQuickSwapsResponse lists completed QuickSwaps newest
@@ -112,6 +191,19 @@ message ListCompletedQuickSwapsResponse {
   repeated ExplorerQuickSwap quick_swaps = 1;
   // Cursor of the next page. Empty when no more results exist.
   string next_page_token = 2;
+}
+
+// GetCompletedQuickSwapRequest reads one completed QuickSwap of any broker.
+message GetCompletedQuickSwapRequest {
+  // Public QuickSwap identifier. 0, which no QuickSwap has, is
+  // SWAP_NOT_FOUND like any other identifier no completed QuickSwap has.
+  fixed64 swap_id = 1;
+}
+
+// GetCompletedQuickSwapResponse returns one completed QuickSwap.
+message GetCompletedQuickSwapResponse {
+  // The QuickSwap, as ListCompletedQuickSwaps lists it.
+  ExplorerQuickSwap quick_swap = 1;
 }
 
 // QuickSwapStatsWindow is a statistics window ending at the end of the
@@ -149,79 +241,98 @@ enum QuickSwapStatsBucketSize {
   WEEKLY = 3;
 }
 
-// ZippedAssetVolume is a total amount of one asset on one network.
-message ZippedAssetVolume {
-  // Asset and network, as an AssetChainVariant.zipped_asset_id from
-  // GET /v1/chain/deposit-withdraw/config.
-  uint32 zipped_asset_id = 1;
-  // Exact total, in that asset's token units.
-  TokenAmount amount = 2;
-}
-
 // QuickSwapStatsTotals are the totals of the completed QuickSwaps of a
-// period, counted by completion time. Every list has one entry per asset
-// with a non-zero total, in ascending ID order. The USD values are fixed when
-// each amount happened: a deposit when it was taken into execution, a
-// delivery when its payout was requested and a fee when it was charged. Each
-// is valued once, within minutes, and never repriced, so a past period keeps
-// its value.
+// period, counted by completion time. Each per-asset list is parallel to a
+// list of the response: source_volume and destination_volume to
+// GetQuickSwapStatsResponse.zipped_asset_ids, the fee lists to
+// GetQuickSwapStatsResponse.fee_asset_ids, with "0" or 0 for an asset with
+// nothing in this period.
+//
+// USD values are decimal strings of base units of 18 decimals, rounded down,
+// and fixed when each amount happened: a deposit when it was taken into
+// execution, a delivery when its payout was requested and a fee when it was
+// charged. Each is valued once, within minutes, and never repriced, so a
+// past period keeps its value. An amount without a USD value is left out of
+// the USD sums and counted in unvalued_count or fees_unvalued_count: a
+// count equal to the amounts counted means none was valued.
 message QuickSwapStatsTotals {
   // Completed QuickSwaps.
-  uint64 swap_count = 1;
-  // Amounts deposited, per source asset and network.
-  repeated ZippedAssetVolume source_volume = 2;
-  // Amounts delivered, per destination asset and network.
-  repeated ZippedAssetVolume destination_volume = 3;
-  // Fees charged on those QuickSwaps, per asset: the service, broker,
-  // affiliate and referral fees actually charged, summed over every broker.
-  // Network fees are not included. Each asset is an AssetConfig.ledger_id
-  // from GET /v1/chain/deposit-withdraw/config, in base units of 18
-  // decimals. Each entry carries its USD value.
-  repeated AssetVolume fees = 4;
-  // USD value of the deposited amounts that have one, in base units of 18
-  // decimals, rounded down; unset when none has; never zero for unknown.
-  TokenAmount source_volume_usd = 5;
-  // USD value of the delivered amounts that have one, as source_volume_usd.
-  TokenAmount destination_volume_usd = 6;
-  // USD value of the fees that have one, as source_volume_usd.
-  TokenAmount fees_usd = 7;
-  // Completed QuickSwaps counted here whose deposited or delivered amount
-  // has no USD value, and so is left out of source_volume_usd or
+  uint32 swap_count = 1;
+  // Completed QuickSwaps whose deposited or delivered amount has no USD
+  // value, and so is left out of source_volume_usd or
   // destination_volume_usd: not valued by a current price in time, or from
-  // before USD values existed. Fees without one are counted per asset, in
-  // fees. Zero when the volume USD totals cover every QuickSwap.
-  uint64 unvalued_count = 8;
+  // before USD values existed.
+  uint32 unvalued_count = 2;
+  // USD value of the deposited amounts that have one.
+  string source_volume_usd = 3;
+  // USD value of the delivered amounts that have one.
+  string destination_volume_usd = 4;
+  // USD value of the fees that have one.
+  string fees_usd = 5;
+  // Exact amounts deposited, per source asset and network, as decimal
+  // strings of that asset's base units (zipped_asset_decimals), before the
+  // deposit network fee.
+  repeated string source_volume = 6;
+  // Exact amounts delivered, per destination asset and network, as decimal
+  // strings of that asset's base units, after the withdrawal network fee.
+  repeated string destination_volume = 7;
+  // Fees charged on those QuickSwaps, per fee asset: the service, broker,
+  // affiliate and referral fees actually charged, summed over every broker,
+  // as decimal strings of base units of 18 decimals. Network fees are not
+  // included.
+  repeated string fees = 8;
+  // USD value of each fee asset's fees that have one.
+  repeated string fees_usd_by_asset = 9;
+  // Fees of each fee asset without a USD value, left out of
+  // fees_usd_by_asset and fees_usd.
+  repeated uint32 fees_unvalued_count = 10;
 }
 
-// QuickSwapStatsBucket is one bucket of the time series.
-message QuickSwapStatsBucket {
-  // Start of the bucket, inclusive; it ends where the next one starts.
-  google.protobuf.Timestamp start_time = 1;
-  // Totals of the QuickSwaps that completed in the bucket.
-  QuickSwapStatsTotals totals = 2;
-}
-
-// QuickSwapRouteStats are the totals of one route over the window.
-message QuickSwapRouteStats {
-  // Source asset and network, as a zipped_asset_id.
-  uint32 source_zipped_asset_id = 1;
-  // Destination asset and network, as a zipped_asset_id.
-  uint32 destination_zipped_asset_id = 2;
-  // Completed QuickSwaps on the route.
-  uint64 swap_count = 3;
-  // Exact amount deposited, in source token units.
-  TokenAmount source_volume = 4;
-  // Exact amount delivered, in destination token units.
-  TokenAmount destination_volume = 5;
+// QuickSwapStatsBuckets is the window's time series in columns: entry i of
+// every list is bucket i, oldest first, with every bucket of the window,
+// empty ones included. Bucket i starts at start_time plus i bucket lengths,
+// inclusive, and ends where the next one starts. Per-asset amounts are only
+// in the totals.
+message QuickSwapStatsBuckets {
+  // Completed QuickSwaps.
+  repeated uint32 swap_count = 1;
+  // Completed QuickSwaps whose deposited or delivered amount has no USD
+  // value, as QuickSwapStatsTotals.unvalued_count.
+  repeated uint32 unvalued_count = 2;
   // USD value of the deposited amounts that have one, as
   // QuickSwapStatsTotals.source_volume_usd.
-  TokenAmount source_volume_usd = 6;
-  // USD value of the delivered amounts that have one, as
-  // QuickSwapStatsTotals.destination_volume_usd.
-  TokenAmount destination_volume_usd = 7;
+  repeated string source_volume_usd = 3;
+  // USD value of the delivered amounts that have one.
+  repeated string destination_volume_usd = 4;
+  // USD value of the fees that have one.
+  repeated string fees_usd = 5;
+  // Fees without a USD value, left out of fees_usd.
+  repeated uint32 fees_unvalued_count = 6;
+}
+
+// QuickSwapStatsRoutes are the totals of every route with a completed
+// QuickSwap in the window, in columns: entry i of every list is route i,
+// in ascending source then destination order. Amounts are decimal strings
+// of each asset's base units (GetQuickSwapStatsResponse.zipped_asset_ids and
+// zipped_asset_decimals); USD values as in QuickSwapStatsTotals.
+message QuickSwapStatsRoutes {
+  // Source asset and network of each route, as a zipped_asset_id.
+  repeated uint32 source_zipped_asset_ids = 1;
+  // Destination asset and network of each route, as a zipped_asset_id.
+  repeated uint32 destination_zipped_asset_ids = 2;
+  // Completed QuickSwaps on the route.
+  repeated uint32 swap_count = 3;
   // Completed QuickSwaps on the route whose deposited or delivered amount
-  // has no USD value, and so is left out of the USD fields.
-  uint64 unvalued_count = 8;
+  // has no USD value, and so is left out of the USD values.
+  repeated uint32 unvalued_count = 4;
+  // Exact amount deposited, in source token units.
+  repeated string source_volume = 5;
+  // Exact amount delivered, in destination token units.
+  repeated string destination_volume = 6;
+  // USD value of the deposited amounts that have one.
+  repeated string source_volume_usd = 7;
+  // USD value of the delivered amounts that have one.
+  repeated string destination_volume_usd = 8;
 }
 
 // GetQuickSwapStatsRequest reads the statistics of one window.
@@ -234,8 +345,10 @@ message GetQuickSwapStatsRequest {
 }
 
 // GetQuickSwapStatsResponse is the activity of completed QuickSwaps of every
-// broker over a window, with the window just before it for comparison.
-// Amounts are exact, with their USD values fixed when they happened.
+// broker over a window, with the window just before it for comparison, in
+// columns: each asset is listed once, with its decimals, and the per-asset
+// lists of the totals are parallel to that list. Amounts are exact, with
+// their USD values fixed when they happened.
 message GetQuickSwapStatsResponse {
   // The window.
   QuickSwapStatsWindow window = 1;
@@ -245,38 +358,49 @@ message GetQuickSwapStatsResponse {
   google.protobuf.Timestamp end_time = 3;
   // Length of each bucket.
   QuickSwapStatsBucketSize bucket_size = 4;
+  // Every asset and network deposited or delivered in the window or the
+  // previous one, ascending, as an AssetChainVariant.zipped_asset_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  repeated uint32 zipped_asset_ids = 5;
+  // Token decimals of each zipped_asset_ids entry, in the same order.
+  repeated uint32 zipped_asset_decimals = 6;
+  // Every asset a fee was charged in, in the window or the previous one,
+  // ascending, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config. Fees are in base units of 18
+  // decimals.
+  repeated uint32 fee_asset_ids = 7;
   // Totals of the window.
-  QuickSwapStatsTotals totals = 5;
+  QuickSwapStatsTotals totals = 8;
   // Totals of the previous window: the same length, ending at start_time.
-  QuickSwapStatsTotals previous_totals = 6;
-  // Every bucket of the window, oldest first, empty ones included.
-  repeated QuickSwapStatsBucket buckets = 7;
-  // Every route with a completed QuickSwap in the window, in ascending
-  // source then destination order. The set is small: the client ranks
-  // routes, source assets and destination assets from it.
-  repeated QuickSwapRouteStats routes = 8;
+  QuickSwapStatsTotals previous_totals = 9;
+  // The window's buckets.
+  QuickSwapStatsBuckets buckets = 10;
+  // Every route with a completed QuickSwap in the window. The set is small:
+  // the client ranks routes, source assets and destination assets from it.
+  QuickSwapStatsRoutes routes = 11;
   // When the statistics were computed. Each window's outcome, answer or
   // error, is shared for about a minute, so an answer can be that old.
-  google.protobuf.Timestamp as_of = 9;
+  google.protobuf.Timestamp as_of = 12;
 }
 
 // QuickSwapExplorerService is the public, read-only view of QuickSwaps, over
 // ConnectRPC and REST. It needs no credentials and lists QuickSwaps of every
 // broker, Polyester's own QuickSwap app included.
 //
-// Only completed QuickSwaps are shown: one in progress, refunded, returned
-// or expired never is. Each shows its assets and networks, the amounts
-// deposited and delivered, the markets traded, and the transactions and
+// Only completed QuickSwaps are shown, listed or read by swap_id: one in
+// progress, refunded, returned or expired never is. Each shows its assets
+// and networks, the amounts deposited and delivered with their USD values
+// fixed when they happened, the markets traded, and the transactions and
 // addresses of its deposit and destination payout, as public on their
 // networks. It shows no memo or destination tag, no return or refund
 // address and nothing about the broker (see ExplorerQuickSwap).
 //
 // GetQuickSwapStats aggregates the same completed QuickSwaps over a window:
-// totals, a time series and per-route totals, each with exact amounts per
-// asset and their USD values fixed when they happened.
+// totals with exact amounts per asset, a time series of counts and USD
+// values, and per-route totals, with USD values fixed when they happened.
 //
 // QuickSwaps created before the Explorer launched are listed, but never
-// match a source or destination filter and are not counted in statistics.
+// match an asset filter and are not counted in statistics.
 //
 // Calls are rate limited per client address: over the limit a call fails
 // with RESOURCE_EXHAUSTED and a Retry-After header.
@@ -284,18 +408,39 @@ service QuickSwapExplorerService {
   option (polyester.api.docs_group) = "quickswap";
 
   // ListCompletedQuickSwaps lists completed QuickSwaps of every broker,
-  // newest completion first, optionally by source or destination asset and
-  // network.
+  // newest completion first, optionally by source and destination assets,
+  // on given networks or on all of them, and by a range of source USD value.
   //
   // Errors:
-  // - INVALID_ARGUMENT: malformed request, or PAGE_TOKEN_INVALID for a
-  //   page_token that is malformed or from other filters.
+  // - INVALID_ARGUMENT: malformed request; a USD bound off the grid; filters
+  //   that select more than 400 routes, or routes times USD value steps; a
+  //   max_source_value_usd not above min_source_value_usd; or
+  //   PAGE_TOKEN_INVALID for a page_token that is malformed, from other
+  //   filters, or from before a change of the networks the asset IDs cover.
   rpc ListCompletedQuickSwaps(ListCompletedQuickSwapsRequest) returns (ListCompletedQuickSwapsResponse) {
     option (polyester.api.public) = true;
     option (polyester.api.error_codes) = "PAGE_TOKEN_INVALID";
     option (gnostic.openapi.v3.operation) = {
       summary: "List completed QuickSwaps"
-      description: "List completed QuickSwaps of every broker, newest first, by source or destination asset."
+      description: "List completed QuickSwaps of every broker, newest first, by source and destination assets and networks and by source USD value."
+      tags: "QuickSwap Explorer"
+    };
+  }
+
+  // GetCompletedQuickSwap returns one completed QuickSwap of any broker by
+  // swap_id, as ListCompletedQuickSwaps lists it.
+  //
+  // Errors:
+  // - NOT_FOUND: SWAP_NOT_FOUND when no completed QuickSwap has this
+  //   swap_id: none has it, it is 0, or the QuickSwap has not completed,
+  //   whatever its status. Every such answer is the same, so it never tells
+  //   which.
+  rpc GetCompletedQuickSwap(GetCompletedQuickSwapRequest) returns (GetCompletedQuickSwapResponse) {
+    option (polyester.api.public) = true;
+    option (polyester.api.error_codes) = "SWAP_NOT_FOUND";
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get a completed QuickSwap"
+      description: "Get one completed QuickSwap of any broker by its swap ID."
       tags: "QuickSwap Explorer"
     };
   }

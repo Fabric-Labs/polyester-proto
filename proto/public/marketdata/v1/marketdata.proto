@@ -652,6 +652,145 @@ message GetSpotConfigResponse {
   uint32 max_open_orders_total = 4;
 }
 
+// PriceBandState is a pair's price band state.
+enum PriceBandState {
+  // Never returned.
+  BAND_STATE_UNSPECIFIED = 0;
+  // The band is on and at least one price lies inside it.
+  ACTIVE = 1;
+  // The pair applies no price band.
+  OFF = 2;
+  // The band is on and no price lies inside it: every order that adds
+  // exposure, market orders included, is rejected with PRICE_BAND_VIOLATION
+  // until the reference price or the band's settings change. This is not a
+  // trading halt.
+  EMPTY = 3;
+  // No band was confirmed current within the last 5 seconds: do not rely on
+  // the band received before. Only the price band streams send it, once, when
+  // the band lapses; GetPriceBand answers PRICE_BAND_STALE or
+  // PRICE_BAND_UNKNOWN instead, which means the same. An UNKNOWN band has no
+  // prices, reference source or settings. Its epoch, update ID and as-of time
+  // are those of the last confirmation of the band it replaces, 0 when there
+  // was none, and its update and valid-until times equal its as-of time. Keep
+  // the band with the greatest epoch, then update ID, then as-of time; at an
+  // equal one, UNKNOWN replaces the band, and a later confirmation replaces
+  // UNKNOWN.
+  UNKNOWN = 4;
+}
+
+// PriceBandReferenceSource is where a band's reference price came from.
+enum PriceBandReferenceSource {
+  // No reference price: the band is OFF.
+  REFERENCE_SOURCE_UNSPECIFIED = 0;
+  // The price of the pair's last trade.
+  LAST_TRADE = 1;
+  // The pair's listing reference price, on a pair that has not traded yet.
+  LISTING_REFERENCE = 2;
+  // The pair's index price, on the tick grid: the reference moves there when
+  // the candidate reference lies outside the band around the index price.
+  INDEX_PRICE = 3;
+}
+
+// LivePriceBand is one pair's price band as of as_of_ts_ns: the reference
+// price and the limit prices the pair admits. It is advisory: the pair checks
+// every order against its own band when the order arrives, and the band may
+// have moved by then.
+//
+// Limits are inclusive and side-specific. A buy limit order is checked
+// against max_buy_price_ticks, and a sell limit order against
+// min_sell_price_ticks; min_buy_price_ticks and max_sell_price_ticks apply
+// only when present. REST responses render prices as decimal strings and
+// times as RFC 3339 timestamps.
+message LivePriceBand {
+  // Stable numeric pair id from GetSpotConfig.
+  uint32 symbol_id = 1;
+
+  // The band's state.
+  PriceBandState state = 2;
+
+  // The band's reference price in quote-asset units scaled by 1e9. Present
+  // when the state is ACTIVE or EMPTY.
+  optional int64 reference_price_ticks = 3;
+
+  // Where the reference price came from. REFERENCE_SOURCE_UNSPECIFIED when
+  // the state is OFF or UNKNOWN.
+  PriceBandReferenceSource reference_source = 4;
+
+  // The highest buy limit price admitted, inclusive, in quote-asset units
+  // scaled by 1e9. Present only when the state is ACTIVE.
+  optional int64 max_buy_price_ticks = 5;
+
+  // The lowest sell limit price admitted, inclusive, in quote-asset units
+  // scaled by 1e9. Present only when the state is ACTIVE.
+  optional int64 min_sell_price_ticks = 6;
+
+  // The lowest buy limit price admitted, inclusive, in quote-asset units
+  // scaled by 1e9. Present only when the state is ACTIVE and the band limits
+  // passive prices too; absent otherwise, when any buy price below
+  // max_buy_price_ticks is admitted.
+  optional int64 min_buy_price_ticks = 7;
+
+  // The highest sell limit price admitted, inclusive, in quote-asset units
+  // scaled by 1e9. Present only when the state is ACTIVE and the band limits
+  // passive prices too; absent otherwise, when any sell price above
+  // min_sell_price_ticks is admitted.
+  optional int64 max_sell_price_ticks = 8;
+
+  // When the band last changed, in nanoseconds since the Unix epoch (UTC): its
+  // first setting, OFF included, a change of its settings, or a move of its
+  // reference price, to the same price included.
+  uint64 updated_ts_ns = 9;
+
+  // From when the next order operation on the pair may move the reference
+  // price, in nanoseconds since the Unix epoch (UTC). Nothing moves at that
+  // time by itself: from then on, an order, modification, cancellation or
+  // trigger on the pair can move the reference to a newer trade's price, or to
+  // the index price. Present when the state is ACTIVE or EMPTY.
+  optional uint64 reanchor_eligible_ts_ns = 10;
+
+  // True when a trade newer than the reference price is waiting: once the
+  // re-anchor eligibility time has passed, the next order operation moves the
+  // reference to it, unless the index price moves it instead. False does not
+  // promise that the band stays: a move to the index price needs no trade.
+  bool reanchor_pending = 11;
+
+  // The band's settings, as GetSpotConfig returns them. Absent when the state
+  // is OFF, or when the settings in effect cannot be expressed exactly in
+  // basis points and milliseconds; the limits above are authoritative either
+  // way.
+  PriceBand parameters = 12;
+
+  // The band's epoch. It never decreases, and a band of a greater epoch is
+  // newer. Compare update_id only within one epoch.
+  uint64 epoch = 13;
+
+  // Increases with each band update within an epoch, and may increase without
+  // one. Compare it only within one epoch: a greater value is newer.
+  uint64 update_id = 14;
+
+  // When the band was last confirmed current, in nanoseconds since the Unix
+  // epoch (UTC).
+  uint64 as_of_ts_ns = 15;
+
+  // as_of_ts_ns plus 5 seconds. After it, treat the band as unknown and read
+  // it again.
+  uint64 valid_until_ts_ns = 16;
+}
+
+// GetPriceBandRequest selects one spot pair.
+message GetPriceBandRequest {
+  // Stable numeric pair id from GetSpotConfig.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+}
+
+// GetPriceBandResponse carries the pair's live price band.
+message GetPriceBandResponse {
+  // The pair's price band, confirmed current within the last 5 seconds.
+  // GetPriceBand never returns an UNKNOWN band: it refuses one. The price
+  // band streams send this message with an UNKNOWN band too.
+  LivePriceBand band = 1;
+}
+
 // ---------------------------------------------------------------------------
 // MarketDataService
 // ---------------------------------------------------------------------------
@@ -694,6 +833,17 @@ service MarketDataService {
 
   // Retrieve a cacheable snapshot of spot assets and pairs, including precision and trading constraints.
   rpc GetSpotConfig(GetSpotConfigRequest) returns (GetSpotConfigResponse) {
+    option (polyester.api.public) = true;
+  }
+
+  // Retrieve a spot pair's live price band: its reference price and the
+  // limit prices the pair admits now. Never cached. A band is returned only
+  // when it was confirmed current within the last 5 seconds; otherwise the
+  // call fails with unavailable, and its error code tells a band that went
+  // stale (PRICE_BAND_STALE) from one that is not known
+  // (PRICE_BAND_UNKNOWN). Retry after a second. An unknown symbol_id fails with
+  // not_found (UNKNOWN_SYMBOL).
+  rpc GetPriceBand(GetPriceBandRequest) returns (GetPriceBandResponse) {
     option (polyester.api.public) = true;
   }
 }

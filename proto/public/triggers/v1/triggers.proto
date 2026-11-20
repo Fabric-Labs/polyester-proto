@@ -31,9 +31,11 @@ option (gnostic.openapi.v3.document) = {
 enum TriggerType {
   // Trigger type was not provided.
   TRIGGER_TYPE_UNSPECIFIED = 0;
-  // Stop-loss: fires when the price crosses a threshold.
+  // Stop-loss: a SELL fires when the price falls to or below its trigger
+  // price, a BUY when the price rises to or above it.
   STOP_LOSS = 1;
-  // Take-profit: fires when the price crosses a threshold.
+  // Take-profit: a SELL fires when the price rises to or above its trigger
+  // price, a BUY when the price falls to or below it.
   TAKE_PROFIT = 2;
   // Trailing stop: dynamic stop that trails price by a distance.
   TRAILING_STOP = 3;
@@ -508,11 +510,38 @@ message ConditionalChildExecution {
   }
 }
 
-// ConditionalTrigger configures a standalone stop-loss or take-profit.
+// ConditionalTrigger configures a standalone stop-loss or take-profit. There
+// is no direction field: the strategy and the child order's side set the
+// direction in which the watched price must move to fire the trigger.
+//
+// - A SELL stop-loss fires when the price falls to or below the trigger
+//   price: it limits the loss on a held position.
+// - A BUY stop-loss is a breakout buy: it fires when the price rises to or
+//   above the trigger price.
+// - A SELL take-profit sells into a rise: it fires when the price rises to or
+//   above the trigger price.
+// - A BUY take-profit buys a dip: it fires when the price falls to or below
+//   the trigger price.
+//
+// The comparison is inclusive: a price equal to the trigger price fires the
+// trigger, as does one past it. Trigger reads report the direction as
+// StopDetails.trigger_direction, ABOVE or BELOW.
+//
+// A trigger price that the watched price has already reached when the trigger
+// takes effect, at or past it in the firing direction, is not refused at
+// create: CreateTrigger returns a trigger ID, then the trigger ends
+// STATUS_FAILED with failure reason
+// TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY. It never fires,
+// places no order, and its reserved funds are released. Read the trigger
+// after the create to tell this outcome from an armed trigger.
 message ConditionalTrigger {
-  // Positive trigger threshold in quote units scaled by 1e9.
+  // Positive trigger threshold in quote units scaled by 1e9. The side and
+  // strategy set whether the trigger fires at or above it, or at or below it.
   int64 trigger_price_ticks = 1 [(buf.validate.field).int64.gt = 0];
-  // Child order side. Required.
+  // Child order side. Required. With the strategy, it sets the fire
+  // direction: a SELL stop-loss and a BUY take-profit fire at or below the
+  // trigger price; a BUY stop-loss and a SELL take-profit fire at or above
+  // it.
   orders.v1.Side side = 2 [
     (buf.validate.field).required = true,
     (buf.validate.field).enum.defined_only = true
@@ -730,9 +759,19 @@ message TriggerIntent {
   // Required trigger strategy.
   oneof strategy {
     option (buf.validate.oneof).required = true;
-    // Standalone stop-loss.
+    // Standalone stop-loss. A SELL stop-loss fires when the price falls to or
+    // below the trigger price; a BUY stop-loss is a breakout buy that fires
+    // when the price rises to or above it. A trigger price already reached
+    // when the trigger takes effect ends the trigger STATUS_FAILED with
+    // TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY after the
+    // create is accepted, without firing.
     ConditionalTrigger stop_loss = 10;
-    // Standalone take-profit.
+    // Standalone take-profit. A SELL take-profit fires when the price rises to
+    // or above the trigger price; a BUY take-profit buys a dip and fires when
+    // the price falls to or below it. A trigger price already reached when
+    // the trigger takes effect ends the trigger STATUS_FAILED with
+    // TRIGGER_FAILURE_REASON_TRIGGER_WOULD_TRIGGER_IMMEDIATELY after the
+    // create is accepted, without firing.
     ConditionalTrigger take_profit = 11;
     // Trailing stop: a market-IOC sell or a maximum-price IOC buy.
     TrailingStopTrigger trailing_stop = 12;
@@ -1360,7 +1399,10 @@ message StopDetails {
   int64 trigger_price_ticks = 1;
   // Price source used for trigger evaluation.
   orders.v1.TriggerPriceSource trigger_price_source = 2;
-  // Direction the price must cross to fire the trigger.
+  // Direction in which the price must reach the trigger price to fire the
+  // trigger, inclusive: ABOVE fires at or above it, BELOW at or below it. Set
+  // from the strategy and side at create: BELOW for a SELL stop-loss or a BUY
+  // take-profit, ABOVE for a BUY stop-loss or a SELL take-profit.
   orders.v1.TriggerDirection trigger_direction = 3;
 }
 
@@ -1487,9 +1529,13 @@ message Trigger {
   // modifications. The selected variant identifies the trigger category and
   // uses the same shape accepted by CreateTrigger.
   oneof configuration {
-    // Stop-loss configuration.
+    // Stop-loss configuration. A SELL stop-loss fires at or below its trigger
+    // price, a BUY stop-loss at or above it; stop.trigger_direction reports
+    // the direction.
     ConditionalTrigger stop_loss = 30;
-    // Take-profit configuration.
+    // Take-profit configuration. A SELL take-profit fires at or above its
+    // trigger price, a BUY take-profit at or below it; stop.trigger_direction
+    // reports the direction.
     ConditionalTrigger take_profit = 31;
     // Trailing-stop configuration.
     TrailingStopTrigger trailing_stop = 32;
@@ -1674,7 +1720,11 @@ service TriggersService {
   // instead, which then means the same. Pausing, resuming or modifying an
   // ended trigger answers the same way. A trigger ID that names none of the
   // caller's triggers returns ERROR_CODE_TRIGGER_NOT_FOUND. Cancelling
-  // either leg of an OCO cancels both.
+  // either leg of an OCO created with CreateOco, a trigger with an
+  // order_list_id, cancels both. Cancelling one attached take-profit or stop
+  // leg of an order, a trigger with a parent_order_id, ends only that leg,
+  // whether or not the order's legs are oco: the other leg stays active and
+  // keeps protecting the position.
   rpc CancelTrigger(CancelTriggerRequest) returns (CancelTriggerResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;

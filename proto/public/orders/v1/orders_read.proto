@@ -310,6 +310,9 @@ message Order {
   // Public order ID.
   fixed64 order_id = 1;
   // Trading symbol numeric identifier.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   uint32 symbol_id = 3;
   // Client-provided, account-scoped identifier for correlation, lookup, and
   // cancellation. Empty when none was supplied.
@@ -318,21 +321,39 @@ message Order {
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]*$"
   ];
   // Order side.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   Side side = 5 [(buf.validate.field).enum.defined_only = true];
   // Current order lifecycle status.
   OrderStatus status = 6;
   // Order type.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   OrderType order_type = 7;
   // Time-in-force policy.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   TimeInForce time_in_force = 8;
   // Self-trade prevention mode.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   SelfTradePreventionMode self_trade_prevention_mode = 9;
   // Fee asset selected for fills.
+  // Unset for the replacement order of a batch item refused when it applied
+  // (REJECTED with batch_request_id set), which never existed and carries no
+  // order terms: the client knows them from the batch it sent.
   FeeAsset fee_asset = 10;
   // True if the order was submitted as post-only (maker-only).
   bool post_only = 11;
   // Current accepted total order quantity, updated by successful modifies,
   // scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.
+  // 0 as a placeholder for the replacement order of a batch item refused when
+  // it applied, which carries no order terms: the client knows them from the
+  // batch it sent.
   int64 orig_qty_scaled = 12;
   // Cumulative filled quantity across the lineage through this generation,
   // scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.
@@ -418,7 +439,8 @@ message Order {
   // (see MarketIoc). A stop-loss's, take-profit's or
   // trailing stop's market order takes the price that fired it as its
   // reference; a buy stop's is never above the protection price at its
-  // trigger price.
+  // trigger price. 0 as a placeholder for the replacement order of a batch
+  // item refused when it applied, which carries no order terms.
   int64 price_ticks = 15;
   // Creation timestamp in nanoseconds since epoch (UTC).
   uint64 created_ts_ns = 16;
@@ -487,6 +509,8 @@ message Order {
   // method was submitted.
   optional int64 submitted_quote_proceeds_scaled = 41;
   // Logical-order identity and requested generation. Always populated by order reads.
+  // A batch item's refused replacement never joined its predecessor's
+  // lineage: it is its own, at generation 1.
   OrderLineage lineage = 31;
   // Exact UTC expiry time for GTD orders, within the supported signed
   // Unix-nanosecond range from 1677-09-21T00:12:43.145224193Z through
@@ -925,6 +949,16 @@ service OrdersReadService {
   // Retrieve order state and a bounded page of its lineage executions by order or client order ID.
   // Use GetUserTrades for paginated execution history and optional settlement legs.
   // Recent accepted orders may wait briefly for read availability; retry UNAVAILABLE with the same lookup key.
+  // The successor of a BatchReplaceOrders item refused when it applied reads
+  // REJECTED with the refusal's code, at version 1, for 60 seconds from the
+  // batch's acceptance: its order ID, batch_request_id, the batch's admission
+  // as its created time, and its own lineage at generation 1. It has no
+  // terminal time: the refusal's own time is its BatchReplaceItemReject's
+  // eventTsNs on the trading WebSocket. It never existed as an order, so it
+  // carries no order terms: its pair, side, type, time in force, self-trade
+  // prevention mode and fee asset are unset, and its price and quantities read
+  // 0 as placeholders. The client takes its terms from the batch it sent.
+  // After that window it is not found: see BatchReplaceOrdersRequest.
   // Costs one unit of the root account's trading read limit.
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
