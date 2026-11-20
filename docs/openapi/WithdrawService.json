@@ -82,6 +82,135 @@
         ],
         "type": "object"
       },
+      "polyester.rest.WithdrawService_CreateWalletTradingToFundingBatch.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "deadlineTsSec": {
+            "description": "Unix timestamp in seconds after which the signed batch is no longer accepted, at most 15 minutes ahead.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "Client-chosen idempotency key for the whole batch, scoped to the source account. Retrying with the same key and the same signed batch returns the first answer; reusing it for another batch is refused with IDEMPOTENCY_CONFLICT. The first answer stands, after the deadline too. A refused batch is final: a retry under its key answers the same refusal, even once its cause is gone, so a corrected batch needs a new key and signature.",
+            "type": "string"
+          },
+          "legs": {
+            "description": "Moves to make, in order. 1 to 10 legs. Legs may repeat an asset or a destination.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "amount": {
+                  "description": "Amount as a positive decimal string in whole units of the asset, for example '0.5' for half a unit. At most 18 decimal places; a nonzero digit beyond the 18th is refused. The signed batch message carries this amount times 10^18.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "assetId": {
+                  "description": "Unified asset identifier from Polyester asset metadata. amount is in whole units of this asset.",
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "destinationAddress": {
+                  "description": "Funding address credited by this leg; omit it to credit the source account's own Funding account.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "assetId"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nonce": {
+            "description": "Client-generated unsigned 128-bit nonce bound to the signed batch. This is an identifier, not a decimal amount.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "payloadSignature": {
+            "description": "EIP-191 personal_sign signature over the batch message described above.",
+            "type": "string"
+          },
+          "signerWallet": {
+            "description": "Wallet address that produced payload_signature.",
+            "type": "string"
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount id of the source Trading account. Omit to move funds from the caller's own Trading account.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deadlineTsSec",
+          "idempotencyKey",
+          "legs",
+          "nonce",
+          "payloadSignature",
+          "signerWallet"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.WithdrawService_CreateWalletTradingToFundingBatch.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "batchId": {
+            "description": "Stable server-owned identifier of the batch.",
+            "type": "string"
+          },
+          "legs": {
+            "description": "Every leg, in request order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "amount": {
+                  "description": "Echoed amount as a decimal string in whole units of the asset, trailing zeros trimmed, for example '0.5'.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "assetId": {
+                  "description": "Echoed unified asset identifier.",
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "destinationAddress": {
+                  "description": "Echoed destination_address; empty when the leg credits the source account's own Funding account.",
+                  "type": "string"
+                },
+                "intentId": {
+                  "description": "Stable server-owned intent identifier of the leg's withdraw, the same identifier a single wallet withdraw returns. Clients use it to follow the leg's progress.",
+                  "type": "string"
+                },
+                "legIndex": {
+                  "description": "Zero-based position of the leg in the request.",
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "amount",
+                "assetId",
+                "destinationAddress",
+                "intentId",
+                "legIndex"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batchId",
+          "legs"
+        ],
+        "type": "object"
+      },
       "polyester.rest.WithdrawService_CreateWalletTradingWithdraw.Request": {
         "additionalProperties": false,
         "properties": {
@@ -539,6 +668,80 @@
         "x-poly-mfa-requirement": "conditional",
         "x-poly-request-type": "chain.withdraw.v1.CreateWalletTradingWithdrawRequest",
         "x-poly-response-type": "chain.withdraw.v1.CreateWalletTradingWithdrawResponse",
+        "x-poly-rest": true,
+        "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
+      }
+    },
+    "/v1/chain/trading-withdraws:wallet-batch": {
+      "post": {
+        "description": "Move up to 10 amounts from one Trading account to Funding accounts with one wallet signature and one MFA check. All legs are accepted or none, and an accepted batch is paid as one. The wallet signs the batch message in amountE18 units: each leg's amount times 10^18, so '0.5' is signed as 500000000000000000.",
+        "operationId": "WithdrawService_CreateWalletTradingToFundingBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "deadlineTsSec": "1735689600",
+                "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
+                "legs": [
+                  {
+                    "amount": "18.446744073709551617",
+                    "assetId": 100,
+                    "destinationAddress": "0x3333333333333333333333333333333333333333"
+                  }
+                ],
+                "nonce": "18446744073709551617",
+                "payloadSignature": "AQ==",
+                "signerWallet": "0x5555555555555555555555555555555555555555",
+                "subaccountId": "45LUmqjT"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.WithdrawService_CreateWalletTradingToFundingBatch.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "batchId": "value",
+                  "legs": [
+                    {
+                      "amount": "18.446744073709551617",
+                      "assetId": 100,
+                      "destinationAddress": "0x3333333333333333333333333333333333333333",
+                      "intentId": "9155001234567",
+                      "legIndex": 1
+                    }
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.WithdrawService_CreateWalletTradingToFundingBatch.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Wallet Trading To Funding Batch",
+        "tags": [
+          "Trading Withdraws"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "polyester.rest.WithdrawService_CreateWalletTradingToFundingBatch",
+        "x-poly-mfa-requirement": "conditional",
+        "x-poly-request-type": "chain.withdraw.v1.CreateWalletTradingToFundingBatchRequest",
+        "x-poly-response-type": "chain.withdraw.v1.CreateWalletTradingToFundingBatchResponse",
         "x-poly-rest": true,
         "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
       }

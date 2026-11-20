@@ -185,7 +185,7 @@ enum FeeKind {
   AFFILIATE = 3;
   // Network fee withheld from the deposit before it is credited. A quote
   // shows an estimate; the fee withheld is the network's fee when the
-  // deposit arrives.
+  // deposit arrives; Deposit.network_fee reports the fee recorded.
   DEPOSIT_NETWORK = 4;
   // Estimated network fee for a withdrawal. The actual fee is charged at
   // withdrawal time and reported on the withdrawal.
@@ -324,8 +324,9 @@ message QuickSwapQuote {
   // route order (a bridge has one set, charged at payout), then network fees.
   // Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged
   // are each rate applied to the actual execution and can differ from these
-  // amounts; QuickSwap.charged_fees reports the broker, affiliate and
-  // referral fees as charged.
+  // amounts; QuickSwap.charged_fees reports the service, broker, affiliate
+  // and referral fees as charged, and Deposit.network_fee and
+  // Withdrawal.network_fee the network fees.
   repeated QuoteFee fees = 8;
   // When the quote was priced.
   google.protobuf.Timestamp quoted_at = 9;
@@ -604,6 +605,12 @@ message Deposit {
   // is recorded, and on every other deposit, which is returned through
   // withdrawals.
   DepositReturn direct_return = 15;
+  // Deposit network fee that Zipper withheld from this deposit when it
+  // took the deposit in, in zipped_asset_id's token units; zero when it
+  // charged none. Unset until Zipper has taken the deposit in, and on a
+  // deposit it never takes in: a deposit returned or transferred out
+  // without being credited, whose deductions are not reported.
+  TokenAmount network_fee = 16;
 }
 
 // DepositReturnState is the progress of a deposit's direct return.
@@ -1078,11 +1085,14 @@ message QuickSwap {
   // referral (quote.referral), the broker fee charged is broker_bps less the
   // referral's discount and commission.
   RequestedFees fees = 29;
-  // Broker, affiliate and referral fees charged so far, as settled: one
-  // entry per fee kind, credited account and asset, in kind, then
-  // account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is
-  // the requested rate applied to the actual execution, so it can differ
-  // from the quote's fee lines.
+  // Service, broker, affiliate and referral fees charged so far, as
+  // settled: one entry per fee kind, credited account and asset, SERVICE
+  // first, then BROKER, then AFFILIATE and REFERRAL by account_id, each
+  // kind and account by asset_id. Grows while the QuickSwap executes or
+  // pays out a bridge. Each is the rate applied to the actual execution, so
+  // it can differ from the quote's fee lines. The SERVICE entries are
+  // Polyester's fee, not an amount credited to the broker: the broker's
+  // earnings are its BROKER and AFFILIATE entries.
   repeated ChargedFee charged_fees = 30;
   // USD value of the credited deposit taken into execution
   // (execution.input_amount), at the source asset's USD price when it was
@@ -1112,18 +1122,19 @@ message RequestedFees {
   repeated AffiliateShare affiliates = 2;
 }
 
-// ChargedFee is what one vault has been credited with for a QuickSwap in
-// one asset, from settled fills and bridge payouts.
+// ChargedFee is a fee charged on a QuickSwap in one asset, from settled
+// fills and bridge payouts, summed per kind and credited account.
 message ChargedFee {
-  // BROKER, AFFILIATE or REFERRAL.
+  // SERVICE, BROKER, AFFILIATE or REFERRAL.
   FeeKind kind = 1;
   // Public sub-account ID of the credited vault: the default vault for
-  // BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.
+  // BROKER, the affiliate vault for AFFILIATE; zero for SERVICE, credited
+  // to Polyester, and for REFERRAL.
   fixed64 account_id = 2;
   // Asset credited, as an AssetConfig.ledger_id from
   // GET /v1/chain/deposit-withdraw/config.
   uint32 asset_id = 3;
-  // Amount credited, in base units of 18 decimals.
+  // Amount charged, in base units of 18 decimals.
   TokenAmount amount = 4;
   // USD value of amount, each fee summed in it valued at its asset's USD
   // price when it was charged, in base units of 18 decimals, rounded down.

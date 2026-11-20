@@ -246,6 +246,9 @@ enum FundingMode {
   // The caller's own OpenAI API key (SetModelKey): the messages use no
   // credits.
   OWN_KEY = 2;
+  // Polyester pays: the work uses no credits and no key of the caller's. Only
+  // a subagent's work is sponsored (SubagentStarted.funding), never a message.
+  SPONSORED = 3;
 }
 
 // Conversation is one conversation of the caller with the assistant.
@@ -509,6 +512,10 @@ message ToolStarted {
   string name = 2;
   // Arguments the tool was called with.
   google.protobuf.Struct input = 3;
+  // The delegation the call belongs to, as in its SubagentStarted event: set
+  // for a subagent's own calls, which show its progress. Omitted for the
+  // assistant's own calls.
+  optional string subagent_id = 4;
 }
 
 // ToolFinished reports the end of a tool call. Results to show arrive as View
@@ -522,6 +529,9 @@ message ToolFinished {
   bool ok = 3;
   // Short explanation of the failure. Omitted when ok is true.
   optional string error_message = 4;
+  // The delegation the call belongs to, as in its ToolStarted event. Omitted
+  // for the assistant's own calls.
+  optional string subagent_id = 5;
 }
 
 // RecalledMemory is one memory the assistant recalled during a run.
@@ -645,8 +655,17 @@ message SkillLoaded {
 message SubagentStarted {
   // Identifier of the delegation, unique within the run.
   string subagent_id = 1;
-  // Subagent name, for example "strategy-researcher".
+  // Subagent name, for example "strategy-coder".
   string name = 2;
+  // What pays for the subagent's work: SPONSORED, CREDITS or OWN_KEY.
+  // FUNDING_UNSPECIFIED when the server does not say.
+  FundingMode funding = 3;
+  // The most credits the subagent may use, shown before it starts. Each of
+  // its model requests is limited to what is left of the cap, and a request
+  // the rest cannot cover is not sent: the subagent stops there. With
+  // SPONSORED and OWN_KEY funding the cap is measured in credits too, though
+  // none are charged. 0 when the server does not say.
+  uint64 credit_cap = 4;
 }
 
 // SubagentFinished reports the end of a delegated task.
@@ -659,6 +678,10 @@ message SubagentFinished {
   bool ok = 3;
   // Short summary of the subagent's result. Omitted when it has none.
   optional string summary = 4;
+  // The page on the Polyester website where the user deploys the bot the
+  // subagent proposed, after MFA and a wallet signature. Omitted when it
+  // proposed none. The subagent never deploys a bot itself.
+  optional string deploy_url = 5;
 }
 
 // ApprovalParameter is one key parameter of the action an approval approves,
@@ -840,7 +863,12 @@ message AttachedExits {
   AttachedExit stop_loss = 2;
   // The trailing stop. Omitted when there is none.
   AttachedTrailingStop trailing_stop = 3;
-  // True when cancelling one exit ends the other.
+  // True when the exits are linked one-cancels-the-other, as RiskPolicy.oco.
+  // It decides only what canceling an exit's order ends: with oco set,
+  // canceling one exit's order ends both exits; without it, only that exit
+  // ends and the other keeps protecting the remaining position. Canceling an
+  // exit itself with CancelTrigger ends only that exit either way, and the
+  // other exit stays active.
   bool oco = 4;
 }
 

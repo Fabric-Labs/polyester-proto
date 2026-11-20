@@ -634,7 +634,7 @@
             "name": "replacement_order_id",
             "jsonName": "replacementOrderId",
             "number": 4,
-            "doc": "Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED\n item, whose order keeps old_order_id, and for rejected items.",
+            "doc": "Assigned successor order ID, for a REPLACED item only. Unset for an AMENDED\n item, whose order keeps old_order_id, and for rejected items. If the item\n is refused when it applies, this successor never exists as an order.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -718,7 +718,7 @@
     {
       "name": "orders.v1.BatchReplaceOrderItem",
       "kind": "message",
-      "doc": "BatchReplaceOrderItem identifies one order to modify inside a quote-refresh\n batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item\n that keeps the order's price (new_price_ticks unset or equal to it), does not\n raise its total quantity and keeps its client order ID amends the order in\n place, under the same order ID and with its queue priority kept. A new\n price, a larger total quantity or a new client order ID replaces it with a\n successor order under a new order ID, with its queue priority reset. To\n force a replacement, use ModifyOrder with REPLACE_ONLY.",
+      "doc": "BatchReplaceOrderItem identifies one order to modify inside a quote-refresh\n batch. Each item follows ModifyOrder's default AMEND_OR_REPLACE rule: an item\n that keeps the order's price (new_price_ticks unset or equal to it), does not\n raise its total quantity and keeps its client order ID amends the order in\n place, under the same order ID and with its queue priority kept. A new\n price, a larger total quantity or a new client order ID replaces it with a\n successor order under a new order ID, with its queue priority reset. Either\n way, a new total quantity at or below the order's filled quantity when the\n item applies ends the order at its filled quantity with no successor (see\n ModifyBehavior). To force a replacement, use ModifyOrder with REPLACE_ONLY.",
       "message": {
         "cel": [
           {
@@ -824,7 +824,7 @@
     {
       "name": "orders.v1.BatchReplaceOrdersRequest",
       "kind": "message",
-      "doc": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\n Read the batch's status with GetBatchReplaceStatus within the same window;\n after it, reconcile the individual orders and never resubmit an accepted batch.\n The response answers admission, before an admitted item's change completes.\n Until it completes, a later change of that order, an item of the next batch\n included, is rejected with a retryable code: ORDER_MODIFY_IN_PROGRESS when it\n names the order by client order ID, and ORDER_PLACEMENT_PENDING (or\n ORDER_MODIFY_IN_PROGRESS) when it names the replacement_order_id returned\n here. Resend only the rejected items, in a new batch under a fresh key, after\n a short backoff: the rejected batch's key keeps replaying its rejection, and\n admitted items must not be sent again.",
+      "doc": "BatchReplaceOrdersRequest modifies same-symbol orders as one quote refresh:\n each item is amended in place or replaced as ModifyOrder decides by default.\n Identical retries replay the admission result for 60 seconds from acceptance;\n a different payload under the same key conflicts. Use a fresh key for a new batch.\n Read the batch's status with GetBatchReplaceStatus within the same window;\n after it, reconcile the individual orders and never resubmit an accepted batch.\n The response answers admission, before an admitted item's change completes.\n Until it completes, a later change of that order, an item of the next batch\n included, is rejected with a retryable code: ORDER_MODIFY_IN_PROGRESS when it\n names the order by client order ID, and ORDER_PLACEMENT_PENDING (or\n ORDER_MODIFY_IN_PROGRESS) when it names the replacement_order_id returned\n here. Resend only the rejected items, in a new batch under a fresh key, after\n a short backoff: the rejected batch's key keeps replaying its rejection, and\n admitted items must not be sent again.\n An admitted item that amends or replaces its order can still be refused when\n it applies: the item changes nothing, leaving the order as it was (at its old\n price, quantity and client order ID unless it had ended), and a refused\n replacement's successor never exists as an order. Such an item that has not applied 2 seconds after its admission is\n refused with ERROR_CODE_MODIFY_APPLY_EXPIRED, so none applies later than\n that. The trading WebSocket reports each such refusal with one\n BatchReplaceItemReject, which can arrive before this response. A refusal at\n admission is reported in this response alone, so the same code there means\n the item was never admitted. For 60 seconds from acceptance,\n GetBatchReplaceStatus reports a refused item as REJECTED, and GetOrder of a\n refused replacement's successor answers REJECTED with the same code, with no\n order terms: you know them from the batch you sent. After\n that window, a successor that is not found while the order it would have\n replaced is not CANCELED with CANCEL_REASON_REPLACED never becomes an order:\n the item was refused, or it applied by ending that order at its filled\n quantity, which that order's CANCEL_REASON_QTY_AT_OR_BELOW_FILLED shows\n unless a later change of yours ended it so.",
       "message": {
         "cel": [
           {
@@ -1277,7 +1277,7 @@
             "name": "include_triggers",
             "jsonName": "includeTriggers",
             "number": 7,
-            "doc": "If true, also stops the account's triggers in the same scope: every\n stop-loss, take-profit, trailing stop, TWAP, ladder and attached\n take-profit, stop-loss or trailing leg on the matched symbols whose orders\n trade on the side filter, created before the request was accepted. Each\n ends canceled with reason `TRIGGER_CANCEL_REASON_CANCEL_ALL` and releases\n its reserved funds, its open orders are canceled with the others, and none\n places an order after the response. Defaults to false: only orders are\n canceled and triggers keep running. Part of the criteria a retry must keep.",
+            "doc": "If true, also stops the account's triggers in the same scope: every\n stop-loss, take-profit, trailing stop, TWAP, ladder, standalone OCO (both\n its legs) and attached take-profit, stop-loss or trailing leg on the\n matched symbols whose orders trade on the side filter, created before the\n request was accepted. Each ends canceled with reason\n `TRIGGER_CANCEL_REASON_CANCEL_ALL` and releases its reserved funds, its\n open orders are canceled with the others, and none places an order after\n the response. Defaults to false: only orders are canceled and triggers\n keep running. Part of the criteria a retry must keep.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }
@@ -2367,7 +2367,7 @@
           {
             "name": "ERROR_CODE_ORDER_PLACEMENT_PENDING",
             "number": 227,
-            "doc": "The placement of the order, or of the replacement an earlier replace\n created, has not been confirmed yet, so it cannot be modified. It may already\n rest on the book. A refresh that names the replacement order ID from a batch\n whose replace has not been confirmed yet gets this code. Retry after a short\n backoff, as for ORDER_MODIFY_IN_PROGRESS."
+            "doc": "The placement of the order, or of the replacement an earlier replace\n created, has not been confirmed yet, so it cannot be modified. It may already\n rest on the book. An order event may already report the order WORKING before\n it can be modified; retry after a short backoff. A refresh that names the\n replacement order ID from a batch whose replace has not been confirmed yet\n gets this code. Retry as for ORDER_MODIFY_IN_PROGRESS."
           },
           {
             "name": "ERROR_CODE_INVALID_MODIFY_BEHAVIOR",
@@ -2863,6 +2863,11 @@
             "name": "ERROR_CODE_CLIENT_LIST_ID_INVALID",
             "number": 318,
             "doc": "The OCO's client list ID is empty, longer than 36 characters, or has a\n character other than a letter, digit, period, underscore, colon, slash or\n hyphen. Answered by CreateOco and by the ListTriggers client_list_id\n filter. Nothing changed."
+          },
+          {
+            "name": "ERROR_CODE_MODIFY_APPLY_EXPIRED",
+            "number": 319,
+            "doc": "An admitted item of a batch replace had not applied 2 seconds after its\n admission, so it was refused when it applied. Nothing changed: the item\n left the order as it was, and a replacement's successor never exists.\n Send a new batch with the current quote."
           }
         ]
       }
@@ -4050,23 +4055,23 @@
     {
       "name": "orders.v1.ModifyBehavior",
       "kind": "enum",
-      "doc": "ModifyBehavior controls how ModifyOrder should handle amend-vs-replace paths.\n MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE by server logic.",
+      "doc": "ModifyBehavior controls how ModifyOrder should handle amend-vs-replace paths.\n MODIFY_BEHAVIOR_UNSPECIFIED is treated as AMEND_OR_REPLACE by server logic.\n\n An amend keeps the order in place, under the same order ID and with its\n queue priority kept; a replace ends it and creates a successor under a new\n order ID, with its queue priority reset. Either way, a new total quantity at\n or below the order's filled quantity when the change applies, fills after\n the request was sent included, ends the order at its filled quantity\n (CANCEL_REASON_QTY_AT_OR_BELOW_FILLED) with no successor, and ModifyOrder\n answers AMENDED with the order's ID rather than an error.\n\n Order the states of one order ID by version (Order.version), keeping the\n highest applied. A terminal status is final: no later state of that order ID\n is open. Price and quantity order only two open states of one GTC or GTD\n limit order at version 1 or above: its price stays the same and its total\n quantity never rises, so the state with the larger total quantity is the\n older.",
       "enum": {
         "values": [
           {
             "name": "AMEND_OR_REPLACE",
             "number": 1,
-            "doc": "Try in-place amend first; if patch cannot be amended, fall back to replace."
+            "doc": "Replace the order when the patch sets a price other than the order's, a\n total quantity above the order's total quantity, or a client order ID\n other than the order's; otherwise amend it in place."
           },
           {
             "name": "AMEND_ONLY",
             "number": 2,
-            "doc": "In-place amend only; reject if patch requires replace semantics."
+            "doc": "Amend the order in place when AMEND_OR_REPLACE would amend it; reject\n with MODIFICATION_REQUIRES_REPLACE a patch that AMEND_OR_REPLACE would\n replace. Other checks can reject the patch first with their own codes."
           },
           {
             "name": "REPLACE_ONLY",
             "number": 3,
-            "doc": "Always attempt replace semantics."
+            "doc": "Replace the order, even when the patch changes no value."
           }
         ]
       }
@@ -4333,7 +4338,7 @@
             "name": "symbol_id",
             "jsonName": "symbolId",
             "number": 3,
-            "doc": "Trading symbol numeric identifier.",
+            "doc": "Trading symbol numeric identifier.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoScalar": "uint32",
             "jsonType": "integer",
             "format": "int32"
@@ -4356,7 +4361,7 @@
             "name": "side",
             "jsonName": "side",
             "number": 5,
-            "doc": "Order side.",
+            "doc": "Order side.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoRef": "orders.v1.Side",
             "validate": {
               "enum": {
@@ -4375,28 +4380,28 @@
             "name": "order_type",
             "jsonName": "orderType",
             "number": 7,
-            "doc": "Order type.",
+            "doc": "Order type.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoRef": "orders.v1.OrderType"
           },
           {
             "name": "time_in_force",
             "jsonName": "timeInForce",
             "number": 8,
-            "doc": "Time-in-force policy.",
+            "doc": "Time-in-force policy.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoRef": "orders.v1.TimeInForce"
           },
           {
             "name": "self_trade_prevention_mode",
             "jsonName": "selfTradePreventionMode",
             "number": 9,
-            "doc": "Self-trade prevention mode.",
+            "doc": "Self-trade prevention mode.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoRef": "orders.v1.SelfTradePreventionMode"
           },
           {
             "name": "fee_asset",
             "jsonName": "feeAsset",
             "number": 10,
-            "doc": "Fee asset selected for fills.",
+            "doc": "Fee asset selected for fills.\n Unset for the replacement order of a batch item refused when it applied\n (REJECTED with batch_request_id set), which never existed and carries no\n order terms: the client knows them from the batch it sent.",
             "protoRef": "orders.v1.FeeAsset"
           },
           {
@@ -4411,7 +4416,7 @@
             "name": "orig_qty_scaled",
             "jsonName": "origQtyScaled",
             "number": 12,
-            "doc": "Current accepted total order quantity, updated by successful modifies,\n scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.",
+            "doc": "Current accepted total order quantity, updated by successful modifies,\n scaled by the pair's base_quantity_scale from GetSpotConfig for symbol_id.\n 0 as a placeholder for the replacement order of a batch item refused when\n it applied, which carries no order terms: the client knows them from the\n batch it sent.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4495,7 +4500,7 @@
             "name": "price_ticks",
             "jsonName": "priceTicks",
             "number": 15,
-            "doc": "Price in quote units scaled by 1e9. For a LIMIT order, its limit price.\n For a MARKET order, whatever placed it, its protection price: the worst\n price it may fill at, a BUY at or below it and a SELL at or above it. It\n is the order's reference price moved by its maximum slippage, or by the\n pair's default market slippage for its side (200 basis points if none is\n configured), put on the pair's tick grid toward the reference: a BUY's\n rounded down and a SELL's up, so it never allows more than the slippage.\n The reference and the slippage need not be on the tick grid themselves\n (see MarketIoc). A stop-loss's, take-profit's or\n trailing stop's market order takes the price that fired it as its\n reference; a buy stop's is never above the protection price at its\n trigger price.",
+            "doc": "Price in quote units scaled by 1e9. For a LIMIT order, its limit price.\n For a MARKET order, whatever placed it, its protection price: the worst\n price it may fill at, a BUY at or below it and a SELL at or above it. It\n is the order's reference price moved by its maximum slippage, or by the\n pair's default market slippage for its side (200 basis points if none is\n configured), put on the pair's tick grid toward the reference: a BUY's\n rounded down and a SELL's up, so it never allows more than the slippage.\n The reference and the slippage need not be on the tick grid themselves\n (see MarketIoc). A stop-loss's, take-profit's or\n trailing stop's market order takes the price that fired it as its\n reference; a buy stop's is never above the protection price at its\n trigger price. 0 as a placeholder for the replacement order of a batch\n item refused when it applied, which carries no order terms.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -4613,7 +4618,7 @@
             "name": "lineage",
             "jsonName": "lineage",
             "number": 31,
-            "doc": "Logical-order identity and requested generation. Always populated by order reads.",
+            "doc": "Logical-order identity and requested generation. Always populated by order reads.\n A batch item's refused replacement never joined its predecessor's\n lineage: it is its own, at generation 1.",
             "protoRef": "orders.v1.OrderLineage"
           },
           {
@@ -5340,7 +5345,7 @@
     {
       "name": "orders.v1.RiskPolicy",
       "kind": "message",
-      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n Each leg's exit must be able to meet the pair's minimum quantity, step size\n and minimum notional for the parent's whole quantity, valued where it would\n execute: a buy-back at its maximum price (a market exit's slippage bound\n above its trigger price, a limit exit's limit price, a trailing stop's limit\n price), a market sell exit at its slippage bound below its trigger price, a\n limit sell exit at its limit price, and a trailing sell exit by its quantity\n alone. An order, or a ModifyOrder, whose leg could never meet them is\n rejected with that check's code (ERROR_CODE_MIN_QTY,\n ERROR_CODE_QTY_STEP_SIZE or ERROR_CODE_MIN_NOTIONAL), as for the order\n itself, and its ErrorDetail names the leg with a field violation on its\n attached-risk field (take_profit, stop_loss or trailing_stop) whose rule is\n that code. Nothing is placed or changed.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
+      "doc": "RiskPolicy defines optional risk controls (take-profit, stop-loss or\n trailing stop) attached to an order. The legs protect the parent order's\n filled position: they arm as the parent fills and follow its later fills.\n A buy sized by max_quote_debit_scaled has no fixed quantity: its legs\n protect what its fills buy. When the order is created, each leg's exit is\n checked against the pair's minimums at the quantity the whole amount buys\n at the order's limit price, or a market order's maximum slippage price:\n the least it buys if it spends the amount.\n\n Each leg's exit must be able to meet the pair's minimum quantity, step size\n and minimum notional for the parent's whole quantity, valued where it would\n execute: a buy-back at its maximum price (a market exit's slippage bound\n above its trigger price, a limit exit's limit price, a trailing stop's limit\n price), a market sell exit at its slippage bound below its trigger price, a\n limit sell exit at its limit price, and a trailing sell exit by its quantity\n alone. An order, or a ModifyOrder, whose leg could never meet them is\n rejected with that check's code (ERROR_CODE_MIN_QTY,\n ERROR_CODE_QTY_STEP_SIZE or ERROR_CODE_MIN_NOTIONAL), as for the order\n itself, and its ErrorDetail names the leg with a field violation on its\n attached-risk field (take_profit, stop_loss or trailing_stop) whose rule is\n that code. Nothing is placed or changed.\n\n The legs of one parent share that position, whether or not oco is set, and\n only one exit works at a time. The first leg whose condition is met submits\n an exit for the whole remaining position, rounded down to the pair's step\n size; a remainder below one step stays in the balance. If another leg's\n condition is met while that exit works, the working exit is canceled; once\n it ends, that leg is checked again against the latest price it watches and,\n if its condition still holds, exits what remains. After an exit ends, the legs keep\n protecting whatever position remains, unless you canceled the exit: canceling\n a leg's exit order, alone or with a cancel-all, ends that leg, and with oco\n set the other leg too. Canceling a leg itself with CancelTrigger ends only\n that leg, whether or not oco is set, and the other leg stays active.\n\n The legs end once the parent order is terminal and no position they can\n exit remains: the leg whose exit ended last completes, and the others are\n canceled with TRIGGER_CANCEL_REASON_OCO. If the parent order ends without a\n fill, the legs are canceled with\n TRIGGER_CANCEL_REASON_PARENT_CANCELED_NO_FILL. If no exit ran and the\n parent's whole fill is below one step, the legs fail.\n\n The legs reserve what their exits would sell or spend, once for both legs:\n the base a sell exit sells, as each parent fill settles, and the quote a\n buy-back may spend at its legs' highest maximum price. A buy-back is\n reserved from the order's creation for the part of that cost the sale\n itself may not return, so an order whose balance cannot cover it is\n rejected with ERROR_CODE_INSUFFICIENT_FUNDS. The reserve shows in the\n balance's reserved amount, and an exit uses it when it is submitted. While\n the legs protect a position, orders and withdrawals that would use the\n reserved funds are rejected with ERROR_CODE_INSUFFICIENT_FUNDS: reduce or\n cancel the legs first. What the legs no longer need is released as they\n change and in full when they end.",
       "message": {
         "cel": [
           {
@@ -5386,7 +5391,7 @@
             "name": "oco",
             "jsonName": "oco",
             "number": 4,
-            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted. It decides what canceling an\n exit order ends: with oco set, canceling one leg's exit ends both legs;\n without it, only that leg ends and the other keeps protecting the\n remaining position. Changing only this setting with ModifyOrder keeps\n the existing legs, with their IDs, arming and a trailing stop's tracked\n peak; changing a leg's terms, such as its trigger price, limit price or\n trailing distance, still replaces that leg. Default is false.",
+            "doc": "If true, the take-profit and the configured stop leg (stop-loss or\n trailing stop) are linked and shown as one-cancels-the-other. Requires a\n take-profit and exactly one stop leg. The legs of every parent share one\n position and end together as described on RiskPolicy, so this setting\n does not change when exits are submitted. It decides only what canceling\n a leg's exit order ends: with oco set, canceling one leg's exit ends both\n legs; without it, only that leg ends and the other keeps protecting the\n remaining position. Canceling a leg itself with CancelTrigger ends only\n that leg either way, and the other leg stays active. Changing only this\n setting with ModifyOrder keeps the existing legs, with their IDs, arming\n and a trailing stop's tracked peak; changing a leg's terms, such as its\n trigger price, limit price or trailing distance, still replaces that leg.\n Default is false.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           }

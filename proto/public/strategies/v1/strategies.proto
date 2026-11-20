@@ -1,0 +1,1310 @@
+syntax = "proto3";
+
+package strategies.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/strategies/v1;strategiesv1";
+// Document-level OpenAPI metadata for the Strategies API.
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Strategies Service"
+      description: "Write, test and propose trading bots: the bot format, validation, behaviour examples, backtests, deploy proposals, and reads of the caller's bots."
+    }
+  ]
+};
+
+// ErrorCode identifies a Strategies API error.
+enum ErrorCode {
+  // No code.
+  ERROR_UNSPECIFIED = 0;
+  // No strategy version of the caller has this ID, or it expired. Another
+  // account's version is reported the same way.
+  VERSION_NOT_FOUND = 1;
+  // No backtest of the caller has this ID.
+  BACKTEST_NOT_FOUND = 2;
+  // No deploy proposal of the caller has this ID.
+  PROPOSAL_NOT_FOUND = 3;
+  // No bot of the caller has this ID.
+  BOT_NOT_FOUND = 4;
+  // The requested runtime version is not offered. GetStrategyReference
+  // without a runtime version names the current one.
+  RUNTIME_VERSION_UNSUPPORTED = 5;
+  // The manifest is larger than the limit GetStrategyReference states
+  // (StrategyLimits.manifest_bytes), measured as compact JSON.
+  MANIFEST_TOO_LARGE = 6;
+  // A setting is unknown to the version's settings form, or its value is not
+  // a valid value of its kind or lies outside its bounds. field_path names it.
+  SETTINGS_INVALID = 7;
+  // A funding or initial balance names an asset twice, or an asset the bot's
+  // markets do not trade. field_path names it.
+  FUNDING_INVALID = 8;
+  // The version did not validate: ValidateStrategy returned valid false for
+  // it. Fix the errors and validate again.
+  VERSION_INVALID = 9;
+  // A behaviour example of the version fails, or the examples were never
+  // run. RunScenarios shows each result.
+  SCENARIOS_FAILING = 10;
+  // The version has no finished backtest. Bots that cannot be backtested
+  // are exempt.
+  BACKTEST_MISSING = 11;
+  // A market of the bot is not open to bots. markets lists them.
+  MARKET_NOT_ALLOWED = 12;
+  // The funding account does not hold the funding. shortfall gives the
+  // missing amounts.
+  INSUFFICIENT_FUNDS = 13;
+  // The caller already runs as many bots as their VIP tier allows. bot_cap
+  // gives the tier, the cap and the next tier's cap.
+  BOT_CAP_REACHED = 14;
+  // The backtest window holds no market data for the bot's markets and
+  // timeframes.
+  WINDOW_HAS_NO_DATA = 15;
+  // The bot cannot be backtested on candles: it reacts to events candles do
+  // not carry, such as top-of-book or trade updates. ExplainStrategy says so.
+  NOT_BACKTESTABLE = 16;
+  // The caller ran the most behaviour-example runs allowed per minute.
+  // retry_after says when to try again.
+  SCENARIO_RUN_LIMIT_REACHED = 17;
+  // The caller started the most backtests allowed per day. retry_after says
+  // when to try again.
+  BACKTEST_LIMIT_REACHED = 18;
+  // The caller's bots and backtests would read more distinct indicator
+  // settings than allowed. Reuse an indicator setting another bot reads, or
+  // stop a bot.
+  INDICATOR_SETTINGS_LIMIT_REACHED = 19;
+  // The idempotency key was already used with a different request. The
+  // original backtest or proposal stands.
+  IDEMPOTENCY_CONFLICT = 20;
+  // A required service is temporarily unavailable; retry the same request.
+  // Every call of this API is safe to retry.
+  SERVICE_UNAVAILABLE = 21;
+  // The funding subaccount is not a subaccount of the caller's main account.
+  FUNDING_SUBACCOUNT_NOT_FOUND = 22;
+}
+
+// BotCapDetail explains BOT_CAP_REACHED.
+message BotCapDetail {
+  // The caller's current VIP tier.
+  uint32 vip_tier = 1;
+  // The most bots the tier allows at once.
+  uint32 bot_cap = 2;
+  // Bots the caller runs now, deploying ones included.
+  uint32 bots = 3;
+  // The next VIP tier with a higher cap. Zero when no tier lifts it.
+  uint32 next_vip_tier = 4;
+  // The cap of next_vip_tier. Zero when no tier lifts it.
+  uint32 next_bot_cap = 5;
+}
+
+// ErrorDetail is attached to Strategies API errors as an error detail of type
+// strategies.v1.ErrorDetail.
+message ErrorDetail {
+  // Stable error code.
+  ErrorCode code = 1;
+  // Request field the error is about, as a field path such as
+  // settings[0].value or funding[1].asset. Set only with SETTINGS_INVALID,
+  // FUNDING_INVALID and MANIFEST_TOO_LARGE.
+  string field_path = 2;
+  // When the same request may succeed. Set only with
+  // SCENARIO_RUN_LIMIT_REACHED and BACKTEST_LIMIT_REACHED.
+  google.protobuf.Timestamp retry_after = 3;
+  // Set only with BOT_CAP_REACHED.
+  BotCapDetail bot_cap = 4;
+  // Markets not open to bots, as the manifest names them. Set only with
+  // MARKET_NOT_ALLOWED.
+  repeated string markets = 5;
+  // Amounts the funding account lacks, one per asset. Set only with
+  // INSUFFICIENT_FUNDS.
+  repeated Money shortfall = 6;
+}
+
+// Money is an exact amount of one asset.
+message Money {
+  // Asset symbol, for example USDT.
+  string asset = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 32
+  }];
+  // Exact, non-negative decimal amount in whole asset units, for example "50"
+  // or "0.0125". Never a binary floating-point value.
+  string amount = 2 [(buf.validate.field).string.pattern = "^[0-9]{1,30}(\\.[0-9]{1,18})?$"];
+}
+
+// OrderSide is the side of an order.
+enum OrderSide {
+  // Not set. Never returned.
+  SIDE_UNSPECIFIED = 0;
+  // Buy the market's base asset.
+  BUY = 1;
+  // Sell the market's base asset.
+  SELL = 2;
+}
+
+// TimeWindow is a span of time: start_time inclusive, end_time exclusive.
+message TimeWindow {
+  // Start of the window, inclusive.
+  google.protobuf.Timestamp start_time = 1;
+  // End of the window, exclusive.
+  google.protobuf.Timestamp end_time = 2;
+}
+
+// IndicatorLibrary names the indicator library a runtime version computes
+// indicators with.
+message IndicatorLibrary {
+  // Library name.
+  string name = 1;
+  // Exact library version, pinned for every bot deployed on the runtime
+  // version.
+  string version = 2;
+}
+
+// IndicatorParameter is one parameter of an allowed indicator.
+message IndicatorParameter {
+  // Parameter name, as bot code passes it, for example period.
+  string name = 1;
+  // What the parameter sets.
+  string description = 2;
+  // Smallest allowed value, as an exact decimal.
+  string minimum = 3;
+  // Largest allowed value, as an exact decimal.
+  string maximum = 4;
+  // Value used when bot code omits the parameter, as an exact decimal.
+  string default_value = 5;
+  // True when only whole numbers are allowed.
+  bool integer = 6;
+}
+
+// Indicator is one indicator bot code may read.
+message Indicator {
+  // Indicator name, as bot code calls it, for example rsi.
+  string name = 1;
+  // What the indicator measures.
+  string description = 2;
+  // Parameters, in the order bot code passes them.
+  repeated IndicatorParameter parameters = 3;
+  // Output names, for example value for RSI or upper, middle and lower for
+  // Bollinger bands.
+  repeated string outputs = 4;
+  // Closed candles needed before the indicator has a value, as an expression
+  // of its parameters, for example "period + 1". Until then bot code reads no
+  // value.
+  string warmup_bars = 5;
+}
+
+// StrategyLimits are the limits every bot of a runtime version runs under.
+message StrategyLimits {
+  // CPU time one handler call may use, in milliseconds.
+  uint32 cpu_ms_per_call = 1;
+  // Memory one handler call may use, in bytes.
+  uint64 memory_bytes_per_call = 2;
+  // Largest saved bot state, in bytes.
+  uint64 state_bytes = 3;
+  // Largest bot code, in bytes.
+  uint64 code_bytes = 4;
+  // Largest manifest, in bytes of compact JSON.
+  uint64 manifest_bytes = 5;
+  // Most distinct indicator settings the caller's bots and backtests may read
+  // at once. A setting is one indicator with one market, timeframe and set of
+  // parameters.
+  uint32 unique_indicator_settings = 6;
+  // Most backtests the caller may start per UTC day.
+  uint32 backtests_per_day = 7;
+  // Most RunScenarios calls the caller may make per minute.
+  uint32 scenario_runs_per_minute = 8;
+}
+
+// GetStrategyReferenceRequest asks for what bot code is written against.
+message GetStrategyReferenceRequest {
+  // Runtime version to describe. Empty means the current one. Until the
+  // runtime catalog is available, any other value is
+  // RUNTIME_VERSION_UNSUPPORTED.
+  string runtime_version = 1 [(buf.validate.field).string.max_len = 64];
+}
+
+// GetStrategyReferenceResponse is the bot format of one runtime version, and
+// the skill pack for writing bots.
+//
+// The runtime catalog (runtime_version, indicator_library, manifest_schema,
+// indicators and limits) is not available yet: those fields are empty until
+// it is. The reference and the skill pack are always set.
+message GetStrategyReferenceResponse {
+  // The runtime version described. Empty until the runtime catalog is
+  // available.
+  string runtime_version = 1;
+  // The indicator library and its pinned version. Unset until the runtime
+  // catalog is available.
+  IndicatorLibrary indicator_library = 2;
+  // The bot API reference as Markdown: events and handlers, the manifest,
+  // reads, actions, money rules, limits and language rules, with examples.
+  string reference = 3;
+  // JSON Schema of the manifest. Unset until the runtime catalog is
+  // available.
+  google.protobuf.Struct manifest_schema = 4;
+  // Every indicator bot code may read, by name. Empty until the runtime
+  // catalog is available; the reference lists the indicators meanwhile.
+  repeated Indicator indicators = 5;
+  // Limits every bot of this runtime version runs under. Unset until the
+  // runtime catalog is available.
+  StrategyLimits limits = 6;
+  // The skill pack: guidance for writing bots against the reference (the
+  // workflow, the language subset, patterns and pitfalls), one Markdown
+  // document per part, workflow first.
+  repeated SkillDocument skill_pack = 7;
+  // Version of the skill pack: "sha256:" followed by the lowercase hex
+  // SHA-256 of, for each document in skill_pack order, the UTF-8 bytes of its
+  // name and then of its Markdown, each preceded by its length in bytes as an
+  // unsigned 64-bit big-endian integer. It changes exactly when a document's
+  // name, content or position does.
+  string skill_pack_version = 8;
+}
+
+// SkillDocument is one document of the skill pack.
+message SkillDocument {
+  // File name of the document, for example writing-bots.md. Links between
+  // documents use these names.
+  string name = 1;
+  // The document, as Markdown.
+  string markdown = 2;
+}
+
+// StrategyTemplate is a starting point for a bot.
+message StrategyTemplate {
+  // Stable template ID, for example weekly-dca.
+  string template_id = 1;
+  // Display name.
+  string name = 2;
+  // What the template's bot does.
+  string description = 3;
+  // The template's manifest, as ValidateStrategy takes it.
+  google.protobuf.Struct manifest = 4;
+  // The template's bot code.
+  string code = 5;
+  // Runtime version the template is written for.
+  string runtime_version = 6;
+}
+
+// ListStrategyTemplatesRequest lists the bot templates.
+message ListStrategyTemplatesRequest {}
+
+// ListStrategyTemplatesResponse returns every bot template.
+message ListStrategyTemplatesResponse {
+  // Every template, in display order. The list is short and complete; it is
+  // not paginated.
+  repeated StrategyTemplate templates = 1;
+}
+
+// ValidationIssue is one problem ValidateStrategy found.
+message ValidationIssue {
+  // Path of the manifest value at fault, for example limits.max_order.amount.
+  // Empty when the issue is in the code.
+  string manifest_path = 1;
+  // Line of the code at fault, from 1. Zero when the issue is in the
+  // manifest.
+  uint32 line = 2;
+  // Column of the code at fault, from 1. Zero when unknown or when the issue
+  // is in the manifest.
+  uint32 column = 3;
+  // Stable rule identifier, for example UNSUPPORTED_SYNTAX, UNKNOWN_CALL,
+  // MISSING_REASON, LIMIT_ABOVE_MAXIMUM or SCENARIO_UNPARSEABLE. A runtime
+  // version may add rules.
+  string rule = 4;
+  // What is wrong.
+  string message = 5;
+  // What to change to fix it.
+  string hint = 6;
+}
+
+// MoneyCard is what a bot may do with money, in the quote asset of its
+// markets.
+message MoneyCard {
+  // Most the bot may spend in total.
+  Money budget = 1;
+  // Largest single order.
+  Money max_order = 2;
+  // Most good-till-cancelled orders the bot may have open at once.
+  uint32 max_open_gtc_orders = 3;
+  // Loss within one UTC day at which the bot pauses.
+  Money daily_loss_threshold = 4;
+  // Markets the bot trades, for example BTC/USDT.
+  repeated string markets = 5;
+  // Events the bot handles, as the manifest declares them, for example
+  // "schedule mon 09:00 UTC" or "candles BTC/USDT 1h".
+  repeated string events = 6;
+}
+
+// SettingField is one setting a user may change without editing code.
+message SettingField {
+  // Setting name, as bot code reads it.
+  string name = 1;
+  // What the setting controls.
+  string description = 2;
+  // Kind of value, as the manifest declares it, for example quote for an
+  // amount of the quote asset.
+  string kind = 3;
+  // Asset of an amount setting. Empty for other kinds.
+  string asset = 4;
+  // Value used when none is given.
+  string default_value = 5;
+  // Smallest allowed value. Empty when unbounded.
+  string minimum = 6;
+  // Largest allowed value. Empty when unbounded.
+  string maximum = 7;
+}
+
+// ValidateStrategyRequest checks a bot and stores it as a version.
+message ValidateStrategyRequest {
+  // Name of the strategy.
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // The manifest: settings, events, limits and behaviour examples, as a JSON
+  // object whose shape GetStrategyReference's manifest_schema gives. Write
+  // amounts as decimal strings.
+  google.protobuf.Struct manifest = 2 [(buf.validate.field).required = true];
+  // The bot code: at most 65536 bytes (64 KiB) of UTF-8.
+  string code = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 65536
+  }];
+  // Runtime version to validate against. Empty means the current one.
+  string runtime_version = 4 [(buf.validate.field).string.max_len = 64];
+}
+
+// ValidateStrategyResponse is the outcome of validating a bot.
+message ValidateStrategyResponse {
+  // ID of the stored version, derived from the runtime version, manifest and
+  // code: the same content always gets the same ID.
+  string version_id = 1;
+  // The runtime version validated against.
+  string runtime_version = 2;
+  // True when the bot has no errors.
+  bool valid = 3;
+  // Errors, in code and manifest order: at most 50. Further errors may show
+  // once these are fixed.
+  repeated ValidationIssue errors = 4;
+  // Warnings, in the same order and shape: at most 50.
+  repeated ValidationIssue warnings = 5;
+  // What the bot may do with money. Set only when valid.
+  MoneyCard money_card = 6;
+  // The settings a user may change. Set only when valid.
+  repeated SettingField settings_form = 7;
+}
+
+// RunScenariosRequest runs a version's behaviour examples.
+message RunScenariosRequest {
+  // Version to run.
+  string version_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+}
+
+// ScenarioResult is the outcome of one behaviour example.
+message ScenarioResult {
+  // The example's name, from the manifest.
+  string name = 1;
+  // True when the code made exactly the expected orders.
+  bool passed = 2;
+  // The orders the example expects, as the manifest writes them.
+  repeated google.protobuf.Struct expected = 3;
+  // The orders the code made, in the same shape.
+  repeated google.protobuf.Struct actual = 4;
+  // The code's log lines, oldest first: at most 50.
+  repeated string logs = 5;
+  // The handler's error, when it failed. Empty otherwise.
+  string error = 6;
+}
+
+// RunScenariosResponse is the outcome of every behaviour example of a
+// version.
+message RunScenariosResponse {
+  // The version run.
+  string version_id = 1;
+  // Examples that passed.
+  uint32 passed = 2;
+  // Examples that failed.
+  uint32 failed = 3;
+  // One result per example, in manifest order.
+  repeated ScenarioResult results = 4;
+}
+
+// BacktestMetrics are the results of a bot over one period.
+message BacktestMetrics {
+  // Return over the period, in percent, for example "4.2" or "-1.5".
+  string return_percent = 1;
+  // Largest fall from a peak, in percent.
+  string max_drawdown_percent = 2;
+  // Trades made.
+  uint32 trades = 3;
+  // Share of closed trades that made a profit, in percent.
+  string win_rate_percent = 4;
+  // Fees paid, in the quote asset.
+  Money fees = 5;
+  // Share of the period the bot held a position, in percent.
+  string exposure_percent = 6;
+}
+
+// Baseline is a simple strategy a backtest is compared with.
+message Baseline {
+  // Baseline name: buy_and_hold or cash.
+  string name = 1;
+  // Its results over the same period.
+  BacktestMetrics metrics = 2;
+}
+
+// BacktestTrade is one trade a backtest made.
+message BacktestTrade {
+  // When the trade happened, in simulated time.
+  google.protobuf.Timestamp time = 1;
+  // Market, for example BTC/USDT.
+  string market = 2;
+  // Side.
+  OrderSide side = 3;
+  // Price, as an exact decimal in the quote asset.
+  string price = 4;
+  // Quantity, as an exact decimal in the base asset.
+  string quantity = 5;
+  // Fee paid.
+  Money fee = 6;
+  // The reason the bot gave for the order.
+  string reason = 7;
+}
+
+// DataGap is a span with missing market data.
+message DataGap {
+  // Market, for example BTC/USDT.
+  string market = 1;
+  // Candle timeframe, for example 1h.
+  string timeframe = 2;
+  // The span without data.
+  TimeWindow window = 3;
+}
+
+// BacktestReport is the result of a finished backtest.
+message BacktestReport {
+  // How closely the simulation follows live trading, as a short label.
+  string fidelity = 1;
+  // How much the result can be trusted, as a short grade.
+  string evidence_grade = 2;
+  // The period the bot was tuned on.
+  TimeWindow period = 3;
+  // The most recent months, held back from tuning.
+  TimeWindow held_back_period = 4;
+  // Results over period.
+  BacktestMetrics metrics = 5;
+  // Results over held_back_period.
+  BacktestMetrics held_back_metrics = 6;
+  // The baselines over period: buy-and-hold and cash.
+  repeated Baseline baselines = 7;
+  // Backtests run so far for this bot's family of versions. Many attempts
+  // make a good result more likely to be luck.
+  uint32 attempts = 8;
+  // The first trades, oldest first: at most 20. report_url lists all of them.
+  repeated BacktestTrade trades = 9;
+  // Spans without market data, oldest first.
+  repeated DataGap data_gaps = 10;
+  // What to keep in mind when reading the result.
+  repeated string warnings = 11;
+  // The full report on the website.
+  string report_url = 12;
+}
+
+// Backtest is one backtest of a version.
+message Backtest {
+  // Status is where a backtest is.
+  enum Status {
+    // Not set. Never returned.
+    STATUS_UNSPECIFIED = 0;
+    // Waiting for capacity.
+    QUEUED = 1;
+    // Simulating.
+    RUNNING = 2;
+    // Finished: report is set.
+    DONE = 3;
+    // Failed: failure says why.
+    FAILED = 4;
+  }
+
+  // Public backtest ID.
+  fixed64 backtest_id = 1;
+  // The version backtested.
+  string version_id = 2;
+  // Current status.
+  Status status = 3;
+  // The simulated window.
+  TimeWindow window = 4;
+  // When the backtest was started.
+  google.protobuf.Timestamp created_at = 5;
+  // When it finished or failed. Omitted before.
+  google.protobuf.Timestamp finished_at = 6;
+  // The result. Set only when status is DONE.
+  BacktestReport report = 7;
+  // Why it failed. Empty unless status is FAILED.
+  string failure = 8;
+}
+
+// StartBacktestRequest starts a backtest of a version.
+//
+// A retry is bound by idempotency_key: the same key and request return the
+// backtest the first request started, even when an unset window bound would
+// now resolve differently, and never count again against the backtest quota
+// or the attempts.
+//
+// Across keys, a backtest's identity is its version, effective window,
+// effective settings and effective initial balances. A request whose
+// identity matches an earlier backtest of the caller returns that backtest
+// rather than running again, so a request that spells out a default refers to
+// the same run, while a request that changes any of them starts a new one:
+// - effective window: start_time and end_time, an unset bound replaced by
+//   the bound of the longest window with data when the request arrives;
+// - effective settings: every setting of the version's settings form, by
+//   name, with its default value where the request leaves it out;
+// - effective initial balances: initial_balances, or when it is empty, the
+//   effective budget setting in the quote asset; one per asset, sorted by
+//   asset;
+// - every decimal in its canonical form, without leading zeros or trailing
+//   fractional zeros, so "50", "50.0" and "050" are the same amount.
+message StartBacktestRequest {
+  // Version to backtest.
+  string version_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // Start of the window, inclusive. Unset means the start of the longest
+  // window with data for the bot's markets and timeframes.
+  google.protobuf.Timestamp start_time = 2;
+  // End of the window, exclusive. Unset means the end of that longest
+  // window.
+  google.protobuf.Timestamp end_time = 3;
+  // Values for the version's settings form, at most 64, each setting once.
+  // Settings left out take their default value.
+  repeated SettingValue settings = 4 [(buf.validate.field).repeated.max_items = 64];
+  // Starting balances of the simulated account, one per asset. Empty means
+  // the budget setting in the quote asset. Part of the backtest's identity:
+  // the same run with other balances is another backtest.
+  repeated Money initial_balances = 5 [(buf.validate.field).repeated.max_items = 16];
+  // Client-chosen key, unique per caller, that makes the call idempotent: the
+  // same key and request return the backtest the first call started; another
+  // request with the same key is IDEMPOTENCY_CONFLICT.
+  string idempotency_key = 6 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+}
+
+// StartBacktestResponse is the started backtest.
+message StartBacktestResponse {
+  // Public backtest ID. A retry with the same idempotency_key and request
+  // returns the same ID; across keys, so does a request with the same
+  // version, effective window, effective settings and effective initial
+  // balances (see StartBacktestRequest).
+  fixed64 backtest_id = 1;
+  // Status: QUEUED for a new backtest, or the current status of the same
+  // backtest started before.
+  Backtest.Status status = 2;
+  // Estimated seconds until it finishes.
+  uint32 estimated_seconds = 3;
+}
+
+// GetBacktestRequest reads one backtest of the caller.
+message GetBacktestRequest {
+  // Public backtest ID.
+  fixed64 backtest_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetBacktestResponse returns the backtest.
+message GetBacktestResponse {
+  // The backtest.
+  Backtest backtest = 1;
+}
+
+// ScenarioSummary is one behaviour example of a version and its last result.
+message ScenarioSummary {
+  // Outcome is a behaviour example's last result.
+  enum Outcome {
+    // Not set. Never returned.
+    OUTCOME_UNSPECIFIED = 0;
+    // The examples were never run.
+    NOT_RUN = 1;
+    // The code made exactly the expected orders.
+    PASSED = 2;
+    // The code made other orders, or failed.
+    FAILED = 3;
+  }
+
+  // The example's name, from the manifest.
+  string name = 1;
+  // Its last result.
+  Outcome outcome = 2;
+}
+
+// BacktestSummary is the headline of a version's latest backtest.
+message BacktestSummary {
+  // Public backtest ID.
+  fixed64 backtest_id = 1;
+  // Its status.
+  Backtest.Status status = 2;
+  // Results over the tuning period. Set only when status is DONE.
+  BacktestMetrics metrics = 3;
+  // Results over the held-back period. Set only when status is DONE.
+  BacktestMetrics held_back_metrics = 4;
+  // Backtests run so far for this bot's family of versions.
+  uint32 attempts = 5;
+  // The full report on the website. Set only when status is DONE.
+  string report_url = 6;
+}
+
+// ExplainStrategyRequest asks for the review summary of a version.
+message ExplainStrategyRequest {
+  // Version to explain.
+  string version_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+}
+
+// ExplainStrategyResponse is what a user reviews before deploying a version.
+// It is built from the manifest and the recorded results alone, so it states
+// exactly what the user approves.
+message ExplainStrategyResponse {
+  // The version explained.
+  string version_id = 1;
+  // What the bot may do with money, its markets and its events.
+  MoneyCard money_card = 2;
+  // The settings a user may change.
+  repeated SettingField settings = 3;
+  // Each behaviour example and its last result, in manifest order.
+  repeated ScenarioSummary scenarios = 4;
+  // The latest backtest. Omitted when there is none; backtest_absent_reason
+  // then says why.
+  BacktestSummary backtest = 5;
+  // Why there is no backtest, for example that the bot cannot be backtested
+  // on candles. Empty when backtest is set.
+  string backtest_absent_reason = 6;
+  // What to weigh before deploying, for example "never backtested" or "trades
+  // a thin market".
+  repeated string warnings = 7;
+  // What the bot does not do, for example "stopping the bot does not sell its
+  // holdings".
+  repeated string limitations = 8;
+}
+
+// SettingValue is one setting and its value.
+message SettingValue {
+  // Setting name, from the settings form.
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // Its value, as a string: an amount or number as an exact decimal.
+  string value = 2 [(buf.validate.field).string.max_len = 256];
+}
+
+// DeployProposalSummary is what a deploy proposal binds, for showing beside
+// its link.
+message DeployProposalSummary {
+  // The version proposed.
+  string version_id = 1;
+  // The bot's name.
+  string bot_name = 2;
+  // What the bot may do with money.
+  MoneyCard money_card = 3;
+  // Every setting, with its value, in settings-form order.
+  repeated SettingValue settings = 4;
+  // The subaccount the funding comes from. Zero means the main account.
+  fixed64 funding_subaccount_id = 8;
+  // What moves into the bot's new subaccount from the funding account.
+  repeated Money funding = 5;
+  // Behaviour examples that passed.
+  uint32 scenarios_passed = 6;
+  // The version's latest backtest. Omitted when the bot cannot be
+  // backtested.
+  BacktestSummary backtest = 7;
+}
+
+// ProposeDeployRequest records a deploy proposal. It never deploys.
+message ProposeDeployRequest {
+  // Version to deploy.
+  string version_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // Name of the new bot.
+  string bot_name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // Values for the version's settings form, at most 64, each setting once.
+  // Settings left out take their default value.
+  repeated SettingValue settings = 3 [(buf.validate.field).repeated.max_items = 64];
+  // Assets and amounts to move from the funding account into the bot's new
+  // subaccount when the user deploys it: one to 16 assets, each once.
+  repeated Money funding = 4 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 16
+  }];
+  // Client-chosen key, unique per caller, that makes the call idempotent: the
+  // same key and request return the proposal the first call recorded; another
+  // request with the same key is IDEMPOTENCY_CONFLICT.
+  string idempotency_key = 5 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+  // The subaccount that funds the bot. Zero means the main account. It must
+  // belong to the caller's main account; another subaccount is refused as
+  // not found.
+  fixed64 funding_subaccount_id = 6;
+}
+
+// ProposeDeployResponse is the recorded proposal and where the user deploys
+// it.
+message ProposeDeployResponse {
+  // Public proposal ID.
+  fixed64 proposal_id = 1;
+  // The website page where the user reviews the proposal and deploys it.
+  string deploy_url = 2;
+  // What the proposal binds.
+  DeployProposalSummary summary = 3;
+  // When the proposal expires if the user has not deployed it.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// DeployStatus is where a deploy proposal is.
+message DeployStatus {
+  // State is a deploy proposal's step.
+  enum State {
+    // Not set. Never returned.
+    STATE_UNSPECIFIED = 0;
+    // Recorded; waiting for the user to deploy it.
+    PROPOSED = 1;
+    // Checking the version, its behaviour examples and limits again.
+    VALIDATING = 2;
+    // Preparing the bot's subaccount.
+    CREATING_SUBACCOUNT = 3;
+    // Moving the funding into the bot's subaccount.
+    FUNDING = 4;
+    // Starting the bot.
+    DEPLOYING = 5;
+    // The bot runs: bot_id is set.
+    LIVE = 6;
+    // The deploy stopped: failure says why.
+    FAILED = 7;
+    // The user did not deploy the proposal in time.
+    EXPIRED = 8;
+  }
+
+  // Public proposal ID.
+  fixed64 proposal_id = 1;
+  // Current step.
+  State state = 2;
+  // The current step as the user sees it, for example "Funding the
+  // account…".
+  string step = 3;
+  // Public ID of the bot. Zero until the bot exists.
+  fixed64 bot_id = 4;
+  // Public ID of the bot's subaccount. Zero until it exists.
+  fixed64 subaccount_id = 5;
+  // Why the deploy stopped and what the user can do. Empty unless state is
+  // FAILED.
+  string failure = 6;
+  // When the proposal expires if not deployed.
+  google.protobuf.Timestamp expires_at = 7;
+  // When the state last changed.
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// GetDeployStatusRequest reads one deploy proposal of the caller.
+message GetDeployStatusRequest {
+  // Public proposal ID.
+  fixed64 proposal_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetDeployStatusResponse returns the proposal's status.
+message GetDeployStatusResponse {
+  // The status.
+  DeployStatus status = 1;
+}
+
+// Bot is one bot of the caller.
+message Bot {
+  // Status is a bot's state.
+  enum Status {
+    // Not set. Never returned.
+    STATUS_UNSPECIFIED = 0;
+    // Being deployed.
+    DEPLOYING = 1;
+    // Handling its events.
+    RUNNING = 2;
+    // Being stopped.
+    STOPPING = 3;
+    // Stopped by the user.
+    STOPPED = 4;
+    // Paused, by itself or after an environment reset: status_reason says
+    // why. Its orders stay.
+    PAUSED = 5;
+    // Paused because its calls kept failing to run: status_reason says why.
+    // Its orders stay.
+    QUARANTINED = 6;
+  }
+
+  // Public bot ID.
+  fixed64 bot_id = 1;
+  // The bot's name.
+  string name = 2;
+  // Public ID of the bot's own subaccount, which the caller's main account
+  // owns.
+  fixed64 subaccount_id = 3;
+  // Current state.
+  Status status = 4;
+  // Why the bot is in its state. Empty when RUNNING.
+  string status_reason = 5;
+  // The version it runs.
+  string version_id = 6;
+  // Profit and loss since deployment, as an exact decimal in quote_asset:
+  // negative for a loss, for example "-12.5".
+  string profit_and_loss = 7;
+  // When the bot last decided. Omitted before its first decision.
+  google.protobuf.Timestamp last_decision_at = 8;
+  // When the bot was deployed.
+  google.protobuf.Timestamp created_at = 9;
+  // Quote asset of the bot's markets, for example USDT.
+  string quote_asset = 10;
+}
+
+// ListBotsRequest lists the caller's bots.
+message ListBotsRequest {
+  // Maximum number of bots to return: default 50, max 200.
+  uint32 limit = 1 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller.
+  string page_token = 2 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListBotsResponse returns one page of the caller's bots.
+message ListBotsResponse {
+  // Bots, newest first.
+  repeated Bot bots = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// BotBalance is one asset balance of a bot's subaccount.
+message BotBalance {
+  // Asset symbol, for example USDT.
+  string asset = 1;
+  // Balance free to use, as an exact decimal.
+  string free = 2;
+  // Balance held by open orders, as an exact decimal.
+  string locked = 3;
+}
+
+// BotOrder is one open order of a bot.
+message BotOrder {
+  // Public order ID.
+  fixed64 order_id = 1;
+  // Market, for example BTC/USDT.
+  string market = 2;
+  // Side.
+  OrderSide side = 3;
+  // Order type, for example limit or stop_loss.
+  string type = 4;
+  // Limit or trigger price, as an exact decimal in the quote asset. Empty for
+  // a market order.
+  string price = 5;
+  // Quantity, as an exact decimal in the base asset.
+  string quantity = 6;
+  // Quantity filled so far.
+  string filled_quantity = 7;
+  // When the order was placed.
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// BotDecision is one handler call of a bot.
+message BotDecision {
+  // When the decision was made.
+  google.protobuf.Timestamp decided_at = 1;
+  // The event that woke the bot, for example "schedule mon 09:00 UTC".
+  string event = 2;
+  // The orders the bot asked for, each with its reason, in the shape the
+  // manifest's behaviour examples use. Empty when it decided to do nothing.
+  repeated google.protobuf.Struct orders = 3;
+  // The bot's log lines from the call, oldest first.
+  repeated string logs = 4;
+  // What the bot saw: prices, indicator values, balances and open orders at
+  // the event.
+  google.protobuf.Struct snapshot = 5;
+}
+
+// BotError is one failed handler call of a bot.
+message BotError {
+  // When the call failed.
+  google.protobuf.Timestamp time = 1;
+  // The event that woke the bot.
+  string event = 2;
+  // The error.
+  string message = 3;
+}
+
+// GetBotRequest reads one bot of the caller.
+message GetBotRequest {
+  // Public bot ID.
+  fixed64 bot_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetBotResponse is a bot with its money rules, account and recent
+// decisions.
+message GetBotResponse {
+  // The bot.
+  Bot bot = 1;
+  // What the bot may do with money.
+  MoneyCard money_card = 2;
+  // Its settings, with their values, in settings-form order.
+  repeated SettingValue settings = 3;
+  // Balances of its subaccount, by asset.
+  repeated BotBalance balances = 4;
+  // Open orders of its subaccount, newest first.
+  repeated BotOrder open_orders = 5;
+  // Its last decisions, newest first: at most 20.
+  repeated BotDecision decisions = 6;
+  // Its last errors, newest first: at most 20.
+  repeated BotError errors = 7;
+}
+
+// BotLogEntry is one line of a bot's log.
+message BotLogEntry {
+  // Kind is what a log entry records.
+  enum Kind {
+    // Not set. Never returned.
+    KIND_UNSPECIFIED = 0;
+    // A line the bot wrote.
+    LOG = 1;
+    // A decision: the orders it asked for, or that it did nothing.
+    DECISION = 2;
+    // A failed handler call.
+    ERROR = 3;
+  }
+
+  // Position in the bot's log, increasing.
+  uint64 sequence = 1;
+  // When it was written.
+  google.protobuf.Timestamp time = 2;
+  // What it records.
+  Kind kind = 3;
+  // The line.
+  string message = 4;
+}
+
+// ListBotLogsRequest reads a bot's log.
+message ListBotLogsRequest {
+  // Public bot ID.
+  fixed64 bot_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Earliest entry time, inclusive. Unset means the start of the retained
+  // log.
+  google.protobuf.Timestamp start_time = 2;
+  // Maximum number of entries to return: default 100, max 200.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller, bot_id and start_time; reuse
+  // it only with the same values.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListBotLogsResponse returns one page of a bot's log.
+message ListBotLogsResponse {
+  // Entries, oldest first.
+  repeated BotLogEntry entries = 1;
+  // Cursor for the next page. Empty when no more results exist. Entries
+  // written later are read with a new listing whose start_time is the last
+  // entry's time, skipping sequences already read.
+  string next_page_token = 2;
+}
+
+// StrategiesService writes, tests and proposes the caller's trading bots and
+// reads them. Bots belong to the caller's main account, and each runs on its
+// own subaccount, created when the user deploys it. No call moves money,
+// creates a subaccount, deploys a bot or stops one: deploying takes the
+// user's MFA and wallet signature on the deploy page ProposeDeploy links.
+//
+// Requests name no account, except the funding subaccount of ProposeDeploy:
+// every call acts for the caller's main account. An
+// API key must be scoped to the main account, and its policy must grant the
+// call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to store and
+// test versions, PROPOSE_STRATEGY_DEPLOY to propose deploys. An API key
+// scoped to a subaccount is refused (PERMISSION_DENIED,
+// AUTH_API_KEY_ACCESS_DENIED) even when its policy grants the permission.
+// Every call is safe to retry.
+service StrategiesService {
+  option (polyester.api.docs_group) = "trading";
+
+  // GetStrategyReference returns what bot code is written against for one
+  // runtime version: the bot API reference and the skill pack, then the
+  // manifest's JSON Schema, the allowed indicators and the limits once the
+  // runtime catalog is available.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or RUNTIME_VERSION_UNSUPPORTED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  rpc GetStrategyReference(GetStrategyReferenceRequest) returns (GetStrategyReferenceResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Strategy Reference"
+      description: "Get the bot API reference and the skill pack for writing bots, and the manifest's JSON Schema, the allowed indicators and the limits of one runtime version once they are available."
+      tags: "Strategies Service"
+      security: [{}]
+    };
+  }
+
+  // ListStrategyTemplates lists the bot templates: starting points with a
+  // manifest and code.
+  //
+  // Errors:
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  rpc ListStrategyTemplates(ListStrategyTemplatesRequest) returns (ListStrategyTemplatesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Strategy Templates"
+      description: "List the bot templates: starting points with a manifest and code."
+      tags: "Strategies Service"
+      security: [{}]
+    };
+  }
+
+  // ValidateStrategy checks a bot and stores it as an immutable version of
+  // the caller. The same runtime version, manifest and code always return the
+  // same version. A bot with mistakes is no error: it returns valid false
+  // with its errors, so it can be fixed and validated again.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, RUNTIME_VERSION_UNSUPPORTED or
+  //   MANIFEST_TOO_LARGE.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ValidateStrategy(ValidateStrategyRequest) returns (ValidateStrategyResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Validate Strategy"
+      description: "Check a bot and store it as an immutable version. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // RunScenarios runs a version's behaviour examples against its code and
+  // records the results. The result is deterministic: a version always gets
+  // the same one.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: VERSION_NOT_FOUND.
+  // - FAILED_PRECONDITION: VERSION_INVALID.
+  // - RESOURCE_EXHAUSTED: SCENARIO_RUN_LIMIT_REACHED; retry after
+  //   retry_after.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc RunScenarios(RunScenariosRequest) returns (RunScenariosResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Run Scenarios"
+      description: "Run a version's behaviour examples against its code and record the results. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // StartBacktest starts a backtest of a version. A retry with the same
+  // idempotency_key and request returns the backtest the first call started.
+  // Across keys, a request with the same version, effective window, effective
+  // settings and effective initial balances returns the same backtest rather
+  // than running again; defaults count as their resolved values (see
+  // StartBacktestRequest). Every new backtest counts in the attempts of the
+  // bot's family of versions.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, SETTINGS_INVALID or
+  //   FUNDING_INVALID.
+  // - NOT_FOUND: VERSION_NOT_FOUND.
+  // - FAILED_PRECONDITION: VERSION_INVALID, WINDOW_HAS_NO_DATA or
+  //   NOT_BACKTESTABLE.
+  // - RESOURCE_EXHAUSTED: BACKTEST_LIMIT_REACHED, retry after retry_after; or
+  //   INDICATOR_SETTINGS_LIMIT_REACHED.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original backtest stands.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc StartBacktest(StartBacktestRequest) returns (StartBacktestResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Start Backtest"
+      description: "Start a backtest of a version over a window of past market data. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // GetBacktest reads one backtest of the caller, with its report once it is
+  // done.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: BACKTEST_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetBacktest(GetBacktestRequest) returns (GetBacktestResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Backtest"
+      description: "Read one backtest, with its report once it is done. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ExplainStrategy returns the review summary of a version: what a user
+  // approves when deploying it.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: VERSION_NOT_FOUND.
+  // - FAILED_PRECONDITION: VERSION_INVALID.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ExplainStrategy(ExplainStrategyRequest) returns (ExplainStrategyResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Explain Strategy"
+      description: "Get the review summary of a version: its money rules, settings, behaviour examples, latest backtest and warnings. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ProposeDeploy records an immutable deploy proposal and returns the link
+  // to the deploy page, where the user deploys it with MFA and a wallet
+  // signature. It never deploys, creates a subaccount or moves funds. The
+  // version must be valid, pass every behaviour example and have a finished
+  // backtest unless it cannot be backtested; its markets must be open to
+  // bots; the funding account must hold the funding; and the caller must be
+  // under their bot cap.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, SETTINGS_INVALID or
+  //   FUNDING_INVALID.
+  // - NOT_FOUND: VERSION_NOT_FOUND, or FUNDING_SUBACCOUNT_NOT_FOUND.
+  // - FAILED_PRECONDITION: VERSION_INVALID, SCENARIOS_FAILING,
+  //   BACKTEST_MISSING, MARKET_NOT_ALLOWED, INSUFFICIENT_FUNDS or
+  //   BOT_CAP_REACHED.
+  // - RESOURCE_EXHAUSTED: INDICATOR_SETTINGS_LIMIT_REACHED.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original proposal stands.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant PROPOSE_STRATEGY_DEPLOY or the key is scoped to a
+  //   subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ProposeDeploy(ProposeDeployRequest) returns (ProposeDeployResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Propose Deploy"
+      description: "Record a deploy proposal for a version and get the link where the user deploys it. It never deploys or moves funds. An API key needs PROPOSE_STRATEGY_DEPLOY and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // GetDeployStatus reads where one deploy proposal of the caller is.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: PROPOSAL_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetDeployStatus(GetDeployStatusRequest) returns (GetDeployStatusResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Deploy Status"
+      description: "Read the step a deploy proposal is at, and its bot once it is live. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListBots lists the caller's bots, newest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListBots(ListBotsRequest) returns (ListBotsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Bots"
+      description: "List the caller's bots, newest first. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // GetBot reads one bot of the caller: its money rules and settings, its
+  // subaccount's balances and open orders, and its recent decisions and
+  // errors.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: BOT_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetBot(GetBotRequest) returns (GetBotResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Bot"
+      description: "Read one bot with its money rules, balances, open orders and recent decisions. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListBotLogs reads a bot's log lines, decisions and errors, oldest first.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - NOT_FOUND: BOT_NOT_FOUND.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListBotLogs(ListBotLogsRequest) returns (ListBotLogsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Bot Logs"
+      description: "Read a bot's log lines, decisions and errors, oldest first. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+}

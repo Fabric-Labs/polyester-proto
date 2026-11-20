@@ -553,21 +553,21 @@
     {
       "name": "swap.quickswap.v1.ChargedFee",
       "kind": "message",
-      "doc": "ChargedFee is what one vault has been credited with for a QuickSwap in\n one asset, from settled fills and bridge payouts.",
+      "doc": "ChargedFee is a fee charged on a QuickSwap in one asset, from settled\n fills and bridge payouts, summed per kind and credited account.",
       "message": {
         "fields": [
           {
             "name": "kind",
             "jsonName": "kind",
             "number": 1,
-            "doc": "BROKER, AFFILIATE or REFERRAL.",
+            "doc": "SERVICE, BROKER, AFFILIATE or REFERRAL.",
             "protoRef": "swap.quickswap.v1.FeeKind"
           },
           {
             "name": "account_id",
             "jsonName": "accountId",
             "number": 2,
-            "doc": "Public sub-account ID of the credited vault: the default vault for\n BROKER, the affiliate vault for AFFILIATE; zero for REFERRAL.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "doc": "Public sub-account ID of the credited vault: the default vault for\n BROKER, the affiliate vault for AFFILIATE; zero for SERVICE, credited\n to Polyester, and for REFERRAL.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -585,7 +585,7 @@
             "name": "amount",
             "jsonName": "amount",
             "number": 4,
-            "doc": "Amount credited, in base units of 18 decimals.",
+            "doc": "Amount charged, in base units of 18 decimals.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
@@ -1050,6 +1050,13 @@
             "number": 15,
             "doc": "Direct return to return_address of a deposit that was never credited: a\n RETURN_ONLY deposit that reached the address after its one eligible\n deposit or after its funding window. On a MANUAL_RECOVERY deposit it\n reports a direct return once one is recorded. Unset until a direct return\n is recorded, and on every other deposit, which is returned through\n withdrawals.",
             "protoRef": "swap.quickswap.v1.DepositReturn"
+          },
+          {
+            "name": "network_fee",
+            "jsonName": "networkFee",
+            "number": 16,
+            "doc": "Deposit network fee that Zipper withheld from this deposit when it\n took the deposit in, in zipped_asset_id's token units; zero when it\n charged none. Unset until Zipper has taken the deposit in, and on a\n deposit it never takes in: a deposit returned or transferred out\n without being credited, whose deductions are not reported.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }
@@ -1966,6 +1973,20 @@
             "doc": "The finalized payouts to the destination, oldest first: one in\n practice. destination_amount is their total.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ExplorerWithdrawal"
+          },
+          {
+            "name": "source_value_usd",
+            "jsonName": "sourceValueUsd",
+            "number": 10,
+            "doc": "USD value of the deposit taken into execution, fixed when it was taken\n in, as QuickSwap.deposited_value_usd: in base units of 18 decimals,\n rounded down, never repriced. Unset when it has none: not valued by a\n current price in time, or from before USD values existed; never zero\n for unknown.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "destination_value_usd",
+            "jsonName": "destinationValueUsd",
+            "number": 11,
+            "doc": "USD value of what the destination was paid, fixed when its payout was\n requested, as QuickSwap.delivered_value_usd. Like source_value_usd, it\n is unset when it has none, and can be set a few minutes after\n completed_at.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }
@@ -2037,7 +2058,7 @@
           {
             "name": "DEPOSIT_NETWORK",
             "number": 4,
-            "doc": "Network fee withheld from the deposit before it is credited. A quote\n shows an estimate; the fee withheld is the network's fee when the\n deposit arrives."
+            "doc": "Network fee withheld from the deposit before it is credited. A quote\n shows an estimate; the fee withheld is the network's fee when the\n deposit arrives; Deposit.network_fee reports the fee recorded."
           },
           {
             "name": "WITHDRAWAL_NETWORK",
@@ -2356,6 +2377,40 @@
       }
     },
     {
+      "name": "swap.quickswap.v1.GetCompletedQuickSwapRequest",
+      "kind": "message",
+      "doc": "GetCompletedQuickSwapRequest reads one completed QuickSwap of any broker.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 1,
+            "doc": "Public QuickSwap identifier. 0, which no QuickSwap has, is\n SWAP_NOT_FOUND like any other identifier no completed QuickSwap has.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.GetCompletedQuickSwapResponse",
+      "kind": "message",
+      "doc": "GetCompletedQuickSwapResponse returns one completed QuickSwap.",
+      "message": {
+        "fields": [
+          {
+            "name": "quick_swap",
+            "jsonName": "quickSwap",
+            "number": 1,
+            "doc": "The QuickSwap, as ListCompletedQuickSwaps lists it.",
+            "protoRef": "swap.quickswap.v1.ExplorerQuickSwap"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.quickswap.v1.GetFeeTotalsRequest",
       "kind": "message",
       "doc": "GetFeeTotalsRequest totals the broker and affiliate fees charged to the\n broker's QuickSwaps in a time window: the fees credited to the broker's\n vaults, never a referral partner's commission.",
@@ -2588,7 +2643,7 @@
     {
       "name": "swap.quickswap.v1.GetQuickSwapStatsResponse",
       "kind": "message",
-      "doc": "GetQuickSwapStatsResponse is the activity of completed QuickSwaps of every\n broker over a window, with the window just before it for comparison.\n Amounts are exact, with their USD values fixed when they happened.",
+      "doc": "GetQuickSwapStatsResponse is the activity of completed QuickSwaps of every\n broker over a window, with the window just before it for comparison, in\n columns: each asset is listed once, with its decimals, and the per-asset\n lists of the totals are parallel to that list. Amounts are exact, with\n their USD values fixed when they happened.",
       "message": {
         "fields": [
           {
@@ -2624,39 +2679,67 @@
             "protoRef": "swap.quickswap.v1.QuickSwapStatsBucketSize"
           },
           {
+            "name": "zipped_asset_ids",
+            "jsonName": "zippedAssetIds",
+            "number": 5,
+            "doc": "Every asset and network deposited or delivered in the window or the\n previous one, ascending, as an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "zipped_asset_decimals",
+            "jsonName": "zippedAssetDecimals",
+            "number": 6,
+            "doc": "Token decimals of each zipped_asset_ids entry, in the same order.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "fee_asset_ids",
+            "jsonName": "feeAssetIds",
+            "number": 7,
+            "doc": "Every asset a fee was charged in, in the window or the previous one,\n ascending, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config. Fees are in base units of 18\n decimals.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
             "name": "totals",
             "jsonName": "totals",
-            "number": 5,
+            "number": 8,
             "doc": "Totals of the window.",
             "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
           },
           {
             "name": "previous_totals",
             "jsonName": "previousTotals",
-            "number": 6,
+            "number": 9,
             "doc": "Totals of the previous window: the same length, ending at start_time.",
             "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
           },
           {
             "name": "buckets",
             "jsonName": "buckets",
-            "number": 7,
-            "doc": "Every bucket of the window, oldest first, empty ones included.",
-            "repeated": true,
-            "protoRef": "swap.quickswap.v1.QuickSwapStatsBucket"
+            "number": 10,
+            "doc": "The window's buckets.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsBuckets"
           },
           {
             "name": "routes",
             "jsonName": "routes",
-            "number": 8,
-            "doc": "Every route with a completed QuickSwap in the window, in ascending\n source then destination order. The set is small: the client ranks\n routes, source assets and destination assets from it.",
-            "repeated": true,
-            "protoRef": "swap.quickswap.v1.QuickSwapRouteStats"
+            "number": 11,
+            "doc": "Every route with a completed QuickSwap in the window. The set is small:\n the client ranks routes, source assets and destination assets from it.",
+            "protoRef": "swap.quickswap.v1.QuickSwapStatsRoutes"
           },
           {
             "name": "as_of",
             "jsonName": "asOf",
-            "number": 9,
+            "number": 12,
             "doc": "When the statistics were computed. Each window's outcome, answer or\n error, is shared for about a minute, so an answer can be that old.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
@@ -2926,26 +3009,40 @@
     {
       "name": "swap.quickswap.v1.ListCompletedQuickSwapsRequest",
       "kind": "message",
-      "doc": "ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker.",
+      "doc": "ListCompletedQuickSwapsRequest lists completed QuickSwaps of every broker,\n optionally only those matching every filter given. A side's filters match\n a QuickSwap whose asset and network is any of its zipped_asset_ids, or on\n any network of any of its asset_ids. The source and destination\n filters together may select at most 400 routes (source and destination\n asset and network pairs), counting each asset_id as all its networks.\n QuickSwaps created before the Explorer launched never match an asset\n filter, and those without a source_value_usd never match a USD bound.\n\n A USD bound is 0 or 1, 2 or 5 times a power of ten dollars from $1 to\n $1,000,000,000: $1, $2, $5, $10, $20, $50, $100 and so on. With a USD\n bound, the list holds only QuickSwaps that completed at least 5 minutes\n before it is read, when their source_value_usd is final, so it lags\n completion by up to 5 minutes. The routes times the value steps the range\n covers may be at most 400, counted from the request alone: the steps run\n $0 to $1, $1 to $2, $2 to $5, $5 to $10 and so on up to $1,000,000,000 and\n above, the last one, so a range without a maximum covers the steps from\n its minimum to the last.",
       "message": {
         "fields": [
           {
-            "name": "source_zipped_asset_id",
-            "jsonName": "sourceZippedAssetId",
+            "name": "source_zipped_asset_ids",
+            "jsonName": "sourceZippedAssetIds",
             "number": 1,
-            "doc": "Only QuickSwaps from this source asset and network, as a zipped_asset_id;\n 0 for every source.",
+            "doc": "Only QuickSwaps from one of these source assets and networks, as\n AssetChainVariant.zipped_asset_id values from\n GET /v1/chain/deposit-withdraw/config; at most 20.",
+            "repeated": true,
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32"
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 20,
+                "unique": true
+              }
+            }
           },
           {
-            "name": "destination_zipped_asset_id",
-            "jsonName": "destinationZippedAssetId",
+            "name": "destination_zipped_asset_ids",
+            "jsonName": "destinationZippedAssetIds",
             "number": 2,
-            "doc": "Only QuickSwaps to this destination asset and network, as a\n zipped_asset_id; 0 for every destination.",
+            "doc": "Only QuickSwaps to one of these destination assets and networks, as\n source_zipped_asset_ids; at most 20.",
+            "repeated": true,
             "protoScalar": "uint32",
             "jsonType": "integer",
-            "format": "int32"
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 20,
+                "unique": true
+              }
+            }
           },
           {
             "name": "limit",
@@ -2965,13 +3062,79 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 4,
-            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the asset filters and the newest-first order. Reuse it with the same\n filters. Empty for the first page.",
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the filters, the networks their asset IDs covered and the\n newest-first order. Reuse it with the same filters. If a network was\n added to or removed from one of the asset IDs since the first page, it\n is PAGE_TOKEN_INVALID: request the first page again. Empty for the first\n page.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
               "string": {
                 "maxLen": 256
               }
+            }
+          },
+          {
+            "name": "source_asset_ids",
+            "jsonName": "sourceAssetIds",
+            "number": 5,
+            "doc": "Only QuickSwaps from one of these assets, on any of their networks, as\n AssetConfig.ledger_id values from GET /v1/chain/deposit-withdraw/config;\n at most 20.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 20,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "destination_asset_ids",
+            "jsonName": "destinationAssetIds",
+            "number": 6,
+            "doc": "Only QuickSwaps to one of these assets, on any of their networks, as\n source_asset_ids; at most 20.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "repeated": {
+                "maxItems": 20,
+                "unique": true
+              }
+            }
+          },
+          {
+            "name": "min_source_value_usd",
+            "jsonName": "minSourceValueUsd",
+            "number": 7,
+            "doc": "Only QuickSwaps whose source_value_usd is at least this: a bound on the\n grid, in base units of 18 decimals as source_value_usd.base_units, for\n example 100000000000000000000 for $100. Unset (empty) for no lower\n bound.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "cel": [
+                {
+                  "id": "explorer.min_source_value_usd.grid",
+                  "message": "min_source_value_usd must be 0 or 1, 2 or 5 times a power of ten dollars from $1 to $1,000,000,000 ($1, $2, $5, $10, $20, $50, ...): base units 0, or 1, 2 or 5 followed by 18 to 26 zeros, or 1 followed by 27 zeros",
+                  "expression": "this == '' || this.matches('^(0|[125]0{18,26}|10{27})$')"
+                }
+              ]
+            }
+          },
+          {
+            "name": "max_source_value_usd",
+            "jsonName": "maxSourceValueUsd",
+            "number": 8,
+            "doc": "Only QuickSwaps whose source_value_usd is below this: a bound on the\n grid, in base units of 18 decimals, above min_source_value_usd when both\n are set, so never 0 alone. Unset (empty) for no upper bound.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "cel": [
+                {
+                  "id": "explorer.max_source_value_usd.grid",
+                  "message": "max_source_value_usd must be 0 or 1, 2 or 5 times a power of ten dollars from $1 to $1,000,000,000 ($1, $2, $5, $10, $20, $50, ...): base units 0, or 1, 2 or 5 followed by 18 to 26 zeros, or 1 followed by 27 zeros",
+                  "expression": "this == '' || this.matches('^(0|[125]0{18,26}|10{27})$')"
+                }
+              ]
             }
           }
         ]
@@ -3255,7 +3418,7 @@
     {
       "name": "swap.quickswap.v1.ListPayoutsResponse",
       "kind": "message",
-      "doc": "ListPayoutsResponse lists payouts newest first by scheduled slot. Runs of\n the same slot follow a stable server-defined order, the same on every\n page; it does not follow run_id. Paging lists exactly once every run that\n sorts after the previous page's last run when the next page is read,\n including a run started meanwhile for an older slot. A run started\n meanwhile for a newer slot sorts before the cursor and appears only in a\n listing started again from the first page.",
+      "doc": "ListPayoutsResponse lists payouts newest first by scheduled slot. Runs of\n the same slot follow a stable server-defined order, the same on every\n page; it does not follow run_id. next_page_token marks a position in the\n run history, in that order. Without a status filter it is the last payout\n returned. On any page filtered by status, a full one included, the\n position can lie past the last payout returned: when the page uses up its\n scan before finding another match, it is the last run the page examined.\n A page may hold fewer than limit payouts, or none, while next_page_token\n is set and matching payouts remain; keep paging until next_page_token is\n empty. A complete traversal, followed until next_page_token is empty,\n lists every payout that matched throughout it exactly once, in order. A\n run started meanwhile past the position, for an older slot, is listed by\n a later page. A run started meanwhile at or before the position,\n including one between the last payout returned and the position, and a\n run there whose status changes meanwhile into the filter (in progress\n becoming paid, for example) appear only in a listing started again from\n the first page.",
       "message": {
         "fields": [
           {
@@ -3386,6 +3549,92 @@
             "doc": "The QuickSwaps.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.QuickSwapSummary"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor of the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListReferralLedgerRequest",
+      "kind": "message",
+      "doc": "ListReferralLedgerRequest lists the commission credits and payouts of the\n caller's earnings sub-account, newest first.",
+      "message": {
+        "cel": [
+          {
+            "id": "list_referral_ledger_request.window",
+            "message": "end_time must be after start_time",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e this.start_time"
+          }
+        ],
+        "fields": [
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 1,
+            "doc": "Only entries that occurred at or after start_time, rounded down to the\n minute; unset for no lower bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 2,
+            "doc": "Only entries that occurred before end_time (exclusive), rounded up to\n the minute; after start_time when both are set; unset for no upper\n bound.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Maximum number of entries to return; 0 means 25, at most 100.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "100"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 4,
+            "doc": "Opaque keyset cursor from a previous next_page_token, exclusive, bound\n to the caller's partner record, the time bounds and the list order. It\n names only the public credit_id or run_id of the place the previous\n page ended. Reuse it with the same filters; limit may change. Empty for\n the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.ListReferralLedgerResponse",
+      "kind": "message",
+      "doc": "ListReferralLedgerResponse lists ledger entries newest first by\n occurred_at, as ListVaultLedger does: each referral commission credited to\n the earnings sub-account (FEE_CREDIT with fee_kind REFERRAL), and each\n auto-withdraw payout that left it (PAYOUT_DEBIT), with its refund\n (PAYOUT_REFUND). A credit's occurred_at is rounded down to the minute,\n and the credits of one minute follow a fixed order that does not follow\n when they were credited. At one time, payouts come before credits and a\n refund before its debit. It carries no running balance and lists no other\n movement of the sub-account, such as a withdrawal or transfer the partner\n makes itself: read the balance and every movement with\n LedgerReadService. Paging lists exactly once every entry that sorts after the previous\n page's last entry when the next page is read. A page may hold fewer than\n limit entries while next_page_token is set; continue until it is empty.",
+      "message": {
+        "fields": [
+          {
+            "name": "entries",
+            "jsonName": "entries",
+            "number": 1,
+            "doc": "The entries.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.VaultLedgerEntry"
           },
           {
             "name": "next_page_token",
@@ -4849,7 +5098,7 @@
             "name": "charged_fees",
             "jsonName": "chargedFees",
             "number": 30,
-            "doc": "Broker, affiliate and referral fees charged so far, as settled: one\n entry per fee kind, credited account and asset, in kind, then\n account_id, then asset_id order. Grows while the QuickSwap executes or pays out a bridge. Each is\n the requested rate applied to the actual execution, so it can differ\n from the quote's fee lines.",
+            "doc": "Service, broker, affiliate and referral fees charged so far, as\n settled: one entry per fee kind, credited account and asset, SERVICE\n first, then BROKER, then AFFILIATE and REFERRAL by account_id, each\n kind and account by asset_id. Grows while the QuickSwap executes or\n pays out a bridge. Each is the rate applied to the actual execution, so\n it can differ from the quote's fee lines. The SERVICE entries are\n Polyester's fee, not an amount credited to the broker: the broker's\n earnings are its BROKER and AFFILIATE entries.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ChargedFee"
           },
@@ -4984,7 +5233,7 @@
             "name": "fees",
             "jsonName": "fees",
             "number": 8,
-            "doc": "Estimated fee components for deposit_amount at quoted_at: each leg's\n service, broker and affiliate or referral fees, in that order, legs in\n route order (a bridge has one set, charged at payout), then network fees.\n Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged\n are each rate applied to the actual execution and can differ from these\n amounts; QuickSwap.charged_fees reports the broker, affiliate and\n referral fees as charged.",
+            "doc": "Estimated fee components for deposit_amount at quoted_at: each leg's\n service, broker and affiliate or referral fees, in that order, legs in\n route order (a bridge has one set, charged at payout), then network fees.\n Affiliates are in ascending account_id order. Zero fees are omitted. The fees charged\n are each rate applied to the actual execution and can differ from these\n amounts; QuickSwap.charged_fees reports the service, broker, affiliate\n and referral fees as charged, and Deposit.network_fee and\n Withdrawal.network_fee the network fees.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.QuoteFee"
           },
@@ -5136,104 +5385,6 @@
       }
     },
     {
-      "name": "swap.quickswap.v1.QuickSwapRouteStats",
-      "kind": "message",
-      "doc": "QuickSwapRouteStats are the totals of one route over the window.",
-      "message": {
-        "fields": [
-          {
-            "name": "source_zipped_asset_id",
-            "jsonName": "sourceZippedAssetId",
-            "number": 1,
-            "doc": "Source asset and network, as a zipped_asset_id.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "destination_zipped_asset_id",
-            "jsonName": "destinationZippedAssetId",
-            "number": 2,
-            "doc": "Destination asset and network, as a zipped_asset_id.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "swap_count",
-            "jsonName": "swapCount",
-            "number": 3,
-            "doc": "Completed QuickSwaps on the route.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "source_volume",
-            "jsonName": "sourceVolume",
-            "number": 4,
-            "doc": "Exact amount deposited, in source token units.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "destination_volume",
-            "jsonName": "destinationVolume",
-            "number": 5,
-            "doc": "Exact amount delivered, in destination token units.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "source_volume_usd",
-            "jsonName": "sourceVolumeUsd",
-            "number": 6,
-            "doc": "USD value of the deposited amounts that have one, as\n QuickSwapStatsTotals.source_volume_usd.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "destination_volume_usd",
-            "jsonName": "destinationVolumeUsd",
-            "number": 7,
-            "doc": "USD value of the delivered amounts that have one, as\n QuickSwapStatsTotals.destination_volume_usd.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "unvalued_count",
-            "jsonName": "unvaluedCount",
-            "number": 8,
-            "doc": "Completed QuickSwaps on the route whose deposited or delivered amount\n has no USD value, and so is left out of the USD fields.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "swap.quickswap.v1.QuickSwapStatsBucket",
-      "kind": "message",
-      "doc": "QuickSwapStatsBucket is one bucket of the time series.",
-      "message": {
-        "fields": [
-          {
-            "name": "start_time",
-            "jsonName": "startTime",
-            "number": 1,
-            "doc": "Start of the bucket, inclusive; it ends where the next one starts.",
-            "protoRef": "google.protobuf.Timestamp",
-            "jsonType": "string",
-            "format": "date-time"
-          },
-          {
-            "name": "totals",
-            "jsonName": "totals",
-            "number": 2,
-            "doc": "Totals of the QuickSwaps that completed in the bucket.",
-            "protoRef": "swap.quickswap.v1.QuickSwapStatsTotals"
-          }
-        ]
-      }
-    },
-    {
       "name": "swap.quickswap.v1.QuickSwapStatsBucketSize",
       "kind": "enum",
       "doc": "QuickSwapStatsBucketSize is the length of one statistics bucket.",
@@ -5258,9 +5409,9 @@
       }
     },
     {
-      "name": "swap.quickswap.v1.QuickSwapStatsTotals",
+      "name": "swap.quickswap.v1.QuickSwapStatsBuckets",
       "kind": "message",
-      "doc": "QuickSwapStatsTotals are the totals of the completed QuickSwaps of a\n period, counted by completion time. Every list has one entry per asset\n with a non-zero total, in ascending ID order. The USD values are fixed when\n each amount happened: a deposit when it was taken into execution, a\n delivery when its payout was requested and a fee when it was charged. Each\n is valued once, within minutes, and never repriced, so a past period keeps\n its value.",
+      "doc": "QuickSwapStatsBuckets is the window's time series in columns: entry i of\n every list is bucket i, oldest first, with every bucket of the window,\n empty ones included. Bucket i starts at start_time plus i bucket lengths,\n inclusive, and ends where the next one starts. Per-asset amounts are only\n in the totals.",
       "message": {
         "fields": [
           {
@@ -5268,63 +5419,239 @@
             "jsonName": "swapCount",
             "number": 1,
             "doc": "Completed QuickSwaps.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "source_volume",
-            "jsonName": "sourceVolume",
-            "number": 2,
-            "doc": "Amounts deposited, per source asset and network.",
             "repeated": true,
-            "protoRef": "swap.quickswap.v1.ZippedAssetVolume"
-          },
-          {
-            "name": "destination_volume",
-            "jsonName": "destinationVolume",
-            "number": 3,
-            "doc": "Amounts delivered, per destination asset and network.",
-            "repeated": true,
-            "protoRef": "swap.quickswap.v1.ZippedAssetVolume"
-          },
-          {
-            "name": "fees",
-            "jsonName": "fees",
-            "number": 4,
-            "doc": "Fees charged on those QuickSwaps, per asset: the service, broker,\n affiliate and referral fees actually charged, summed over every broker.\n Network fees are not included. Each asset is an AssetConfig.ledger_id\n from GET /v1/chain/deposit-withdraw/config, in base units of 18\n decimals. Each entry carries its USD value.",
-            "repeated": true,
-            "protoRef": "swap.quickswap.v1.AssetVolume"
-          },
-          {
-            "name": "source_volume_usd",
-            "jsonName": "sourceVolumeUsd",
-            "number": 5,
-            "doc": "USD value of the deposited amounts that have one, in base units of 18\n decimals, rounded down; unset when none has; never zero for unknown.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "destination_volume_usd",
-            "jsonName": "destinationVolumeUsd",
-            "number": 6,
-            "doc": "USD value of the delivered amounts that have one, as source_volume_usd.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
-          },
-          {
-            "name": "fees_usd",
-            "jsonName": "feesUsd",
-            "number": 7,
-            "doc": "USD value of the fees that have one, as source_volume_usd.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           },
           {
             "name": "unvalued_count",
             "jsonName": "unvaluedCount",
+            "number": 2,
+            "doc": "Completed QuickSwaps whose deposited or delivered amount has no USD\n value, as QuickSwapStatsTotals.unvalued_count.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "source_volume_usd",
+            "jsonName": "sourceVolumeUsd",
+            "number": 3,
+            "doc": "USD value of the deposited amounts that have one, as\n QuickSwapStatsTotals.source_volume_usd.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "destination_volume_usd",
+            "jsonName": "destinationVolumeUsd",
+            "number": 4,
+            "doc": "USD value of the delivered amounts that have one.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees_usd",
+            "jsonName": "feesUsd",
+            "number": 5,
+            "doc": "USD value of the fees that have one.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees_unvalued_count",
+            "jsonName": "feesUnvaluedCount",
+            "number": 6,
+            "doc": "Fees without a USD value, left out of fees_usd.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsRoutes",
+      "kind": "message",
+      "doc": "QuickSwapStatsRoutes are the totals of every route with a completed\n QuickSwap in the window, in columns: entry i of every list is route i,\n in ascending source then destination order. Amounts are decimal strings\n of each asset's base units (GetQuickSwapStatsResponse.zipped_asset_ids and\n zipped_asset_decimals); USD values as in QuickSwapStatsTotals.",
+      "message": {
+        "fields": [
+          {
+            "name": "source_zipped_asset_ids",
+            "jsonName": "sourceZippedAssetIds",
+            "number": 1,
+            "doc": "Source asset and network of each route, as a zipped_asset_id.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "destination_zipped_asset_ids",
+            "jsonName": "destinationZippedAssetIds",
+            "number": 2,
+            "doc": "Destination asset and network of each route, as a zipped_asset_id.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "swap_count",
+            "jsonName": "swapCount",
+            "number": 3,
+            "doc": "Completed QuickSwaps on the route.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 4,
+            "doc": "Completed QuickSwaps on the route whose deposited or delivered amount\n has no USD value, and so is left out of the USD values.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "source_volume",
+            "jsonName": "sourceVolume",
+            "number": 5,
+            "doc": "Exact amount deposited, in source token units.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "destination_volume",
+            "jsonName": "destinationVolume",
+            "number": 6,
+            "doc": "Exact amount delivered, in destination token units.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "source_volume_usd",
+            "jsonName": "sourceVolumeUsd",
+            "number": 7,
+            "doc": "USD value of the deposited amounts that have one.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "destination_volume_usd",
+            "jsonName": "destinationVolumeUsd",
             "number": 8,
-            "doc": "Completed QuickSwaps counted here whose deposited or delivered amount\n has no USD value, and so is left out of source_volume_usd or\n destination_volume_usd: not valued by a current price in time, or from\n before USD values existed. Fees without one are counted per asset, in\n fees. Zero when the volume USD totals cover every QuickSwap.",
-            "protoScalar": "uint64",
-            "jsonType": "string",
-            "format": "uint64"
+            "doc": "USD value of the delivered amounts that have one.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.QuickSwapStatsTotals",
+      "kind": "message",
+      "doc": "QuickSwapStatsTotals are the totals of the completed QuickSwaps of a\n period, counted by completion time. Each per-asset list is parallel to a\n list of the response: source_volume and destination_volume to\n GetQuickSwapStatsResponse.zipped_asset_ids, the fee lists to\n GetQuickSwapStatsResponse.fee_asset_ids, with \"0\" or 0 for an asset with\n nothing in this period.\n\n USD values are decimal strings of base units of 18 decimals, rounded down,\n and fixed when each amount happened: a deposit when it was taken into\n execution, a delivery when its payout was requested and a fee when it was\n charged. Each is valued once, within minutes, and never repriced, so a\n past period keeps its value. An amount without a USD value is left out of\n the USD sums and counted in unvalued_count or fees_unvalued_count: a\n count equal to the amounts counted means none was valued.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_count",
+            "jsonName": "swapCount",
+            "number": 1,
+            "doc": "Completed QuickSwaps.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "unvalued_count",
+            "jsonName": "unvaluedCount",
+            "number": 2,
+            "doc": "Completed QuickSwaps whose deposited or delivered amount has no USD\n value, and so is left out of source_volume_usd or\n destination_volume_usd: not valued by a current price in time, or from\n before USD values existed.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "source_volume_usd",
+            "jsonName": "sourceVolumeUsd",
+            "number": 3,
+            "doc": "USD value of the deposited amounts that have one.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "destination_volume_usd",
+            "jsonName": "destinationVolumeUsd",
+            "number": 4,
+            "doc": "USD value of the delivered amounts that have one.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees_usd",
+            "jsonName": "feesUsd",
+            "number": 5,
+            "doc": "USD value of the fees that have one.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "source_volume",
+            "jsonName": "sourceVolume",
+            "number": 6,
+            "doc": "Exact amounts deposited, per source asset and network, as decimal\n strings of that asset's base units (zipped_asset_decimals), before the\n deposit network fee.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "destination_volume",
+            "jsonName": "destinationVolume",
+            "number": 7,
+            "doc": "Exact amounts delivered, per destination asset and network, as decimal\n strings of that asset's base units, after the withdrawal network fee.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees",
+            "jsonName": "fees",
+            "number": 8,
+            "doc": "Fees charged on those QuickSwaps, per fee asset: the service, broker,\n affiliate and referral fees actually charged, summed over every broker,\n as decimal strings of base units of 18 decimals. Network fees are not\n included.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees_usd_by_asset",
+            "jsonName": "feesUsdByAsset",
+            "number": 9,
+            "doc": "USD value of each fee asset's fees that have one.",
+            "repeated": true,
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "fees_unvalued_count",
+            "jsonName": "feesUnvaluedCount",
+            "number": 10,
+            "doc": "Fees of each fee asset without a USD value, left out of\n fees_usd_by_asset and fees_usd.",
+            "repeated": true,
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -5520,7 +5847,7 @@
             "name": "charged_fees",
             "jsonName": "chargedFees",
             "number": 8,
-            "doc": "Broker, affiliate and referral fees charged so far, as settled, as on\n QuickSwap.",
+            "doc": "Service, broker, affiliate and referral fees charged so far, as\n settled, as on QuickSwap.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.ChargedFee"
           },
@@ -7335,7 +7662,7 @@
             "name": "expires_at",
             "jsonName": "expiresAt",
             "number": 9,
-            "doc": "The end of the change's approval window: a change not applied by then\n ends NOT_APPLIED / TIMED_OUT. A change can stay PENDING shortly past it\n while its outcome is confirmed.",
+            "doc": "The end of the change's approval window: a change not applied by then\n ends NOT_APPLIED / TIMED_OUT. A change can stay PENDING shortly past it\n while its outcome is confirmed, and longer while an outcome that cannot\n be confirmed yet is investigated; the vault takes no other change\n meanwhile.",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -7513,7 +7840,7 @@
     {
       "name": "swap.quickswap.v1.VaultLedgerEntry",
       "kind": "message",
-      "doc": "VaultLedgerEntry is one movement of a broker vault's funds.",
+      "doc": "VaultLedgerEntry is one movement of a broker vault's funds, or of a\n referral partner's earnings sub-account (ListReferralLedger).",
       "message": {
         "oneofs": [
           {
@@ -7537,7 +7864,7 @@
             "name": "occurred_at",
             "jsonName": "occurredAt",
             "number": 2,
-            "doc": "When it happened: when a fee credit was credited; a payout debit's and\n refund's run's scheduled slot (Payout.scheduled_for).",
+            "doc": "When it happened: when a fee credit was credited (rounded down to the\n minute in ListReferralLedger); a payout debit's and refund's run's\n scheduled slot (Payout.scheduled_for).",
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
@@ -7546,7 +7873,7 @@
             "name": "vault_account_id",
             "jsonName": "vaultAccountId",
             "number": 3,
-            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault.",
+            "doc": "Public sub-account ID of the vault: the default vault or an affiliate\n vault. In ListReferralLedger, the partner's earnings sub-account\n (ReferralPartner.earnings_subaccount_id).",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -7603,7 +7930,7 @@
           {
             "name": "FEE_CREDIT",
             "number": 1,
-            "doc": "A broker or affiliate fee a QuickSwap credited to the vault."
+            "doc": "A broker or affiliate fee a QuickSwap credited to the vault, or a\n referral commission credited to a referral partner's earnings\n sub-account."
           },
           {
             "name": "PAYOUT_DEBIT",
@@ -7613,7 +7940,7 @@
           {
             "name": "PAYOUT_REFUND",
             "number": 3,
-            "doc": "The net of a payout the destination network's bridge rejected, refunded\n to the vault's own smart account, less the network fee it kept. The\n funds stay in that smart account: the refund is not part of the vault\n balance ListVaultBalances reads, and no entry returns it to the vault."
+            "doc": "The net of a payout the destination network's bridge rejected, refunded\n to the vault's own smart account, less the network fee it kept. The\n funds stay in that smart account: the refund is not part of the vault\n balance ListVaultBalances reads, and no entry returns it to the vault.\n A referral partner's earnings sub-account is refunded the same way."
           }
         ]
       }
@@ -7628,7 +7955,7 @@
             "name": "credit_id",
             "jsonName": "creditId",
             "number": 1,
-            "doc": "Public ID of the credit, unique among the broker's fee credits.",
+            "doc": "Public ID of the credit, unique among fee credits.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -7637,7 +7964,7 @@
             "name": "swap_id",
             "jsonName": "swapId",
             "number": 2,
-            "doc": "Public ID of the QuickSwap the fee was charged on. Read it with\n GetQuickSwap for its full detail.",
+            "doc": "Public ID of the QuickSwap the fee was charged on. Read it with\n GetQuickSwap for its full detail; a referral partner reads it with\n QuickSwapReferralService.GetReferredQuickSwap.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -7646,7 +7973,7 @@
             "name": "fee_kind",
             "jsonName": "feeKind",
             "number": 3,
-            "doc": "BROKER (the broker fee, credited to the default vault) or AFFILIATE (an\n affiliate fee, credited to that affiliate vault).",
+            "doc": "BROKER (the broker fee, credited to the default vault), AFFILIATE (an\n affiliate fee, credited to that affiliate vault) or REFERRAL (a referral\n commission, credited to the partner's earnings sub-account; only\n QuickSwapReferralService.ListReferralLedger returns it).",
             "protoRef": "swap.quickswap.v1.FeeKind"
           },
           {
@@ -8084,31 +8411,6 @@
             "name": "NOT_SENT",
             "number": 5,
             "doc": "Final: no transaction was or will be made for this withdrawal, because\n its amount was below the withdrawal minimum of its asset and network\n (REFUND_BELOW_MINIMUM); unsent_amount is that amount."
-          }
-        ]
-      }
-    },
-    {
-      "name": "swap.quickswap.v1.ZippedAssetVolume",
-      "kind": "message",
-      "doc": "ZippedAssetVolume is a total amount of one asset on one network.",
-      "message": {
-        "fields": [
-          {
-            "name": "zipped_asset_id",
-            "jsonName": "zippedAssetId",
-            "number": 1,
-            "doc": "Asset and network, as an AssetChainVariant.zipped_asset_id from\n GET /v1/chain/deposit-withdraw/config.",
-            "protoScalar": "uint32",
-            "jsonType": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "amount",
-            "jsonName": "amount",
-            "number": 2,
-            "doc": "Exact total, in that asset's token units.",
-            "protoRef": "swap.quickswap.v1.TokenAmount"
           }
         ]
       }
