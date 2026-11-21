@@ -88,6 +88,9 @@ enum ErrorCode {
   TOO_MANY_IMAGES = 19;
   // No image of the caller's messages has this ID.
   IMAGE_NOT_FOUND = 20;
+  // The message names a subject other than its conversation's: a
+  // conversation's subject is fixed when it starts. Nothing is recorded.
+  CONVERSATION_SUBJECT_MISMATCH = 21;
 }
 
 // ErrorDetail is attached to Assistant API errors as an error detail of type
@@ -262,6 +265,9 @@ message Conversation {
   google.protobuf.Timestamp created_at = 3;
   // When the latest message of the conversation was recorded.
   google.protobuf.Timestamp updated_at = 4;
+  // What the conversation is about, fixed when it started. Omitted for a
+  // general conversation.
+  Subject subject = 5;
 }
 
 // Message is one message of a conversation.
@@ -1576,6 +1582,27 @@ message CurrentPage {
   }];
 }
 
+// Subject is the one thing a conversation is about, such as one of the
+// caller's strategies. A client that shows the assistant beside that thing
+// names it with each message: the subject selects the conversation about it
+// and tells the assistant what the user is working on. It grants nothing:
+// every read and change the assistant makes is still checked against the
+// caller's own access.
+message Subject {
+  // What the conversation is about.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // One of the caller's strategies.
+    StrategySubject strategy = 1;
+  }
+}
+
+// StrategySubject names one of the caller's strategies.
+message StrategySubject {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
 // SendMessageRequest sends the caller's message and starts a run that answers
 // it.
 message SendMessageRequest {
@@ -1673,6 +1700,14 @@ message SendMessageRequest {
   // as part of the picture, never as instructions to the assistant. They are
   // part of the request the idempotency key covers.
   repeated ImageAttachment images = 10;
+  // What the conversation is about. Without conversation_id, the message
+  // continues the caller's conversation about this subject, or starts it:
+  // there is at most one per subject. With conversation_id, omit it or send
+  // the conversation's own subject. A conversation's subject is fixed when it
+  // starts: any other subject, or a subject for a conversation that has none,
+  // is FAILED_PRECONDITION with CONVERSATION_SUBJECT_MISMATCH, and nothing is
+  // recorded. It is part of the request the idempotency key covers.
+  Subject subject = 11;
 }
 
 // SendMessageResponse identifies the started run.
@@ -1732,6 +1767,9 @@ message ListConversationsRequest {
   // Opaque, keyset-backed, exclusive cursor from a previous response. Bound to
   // the caller, updated_at and conversation_id.
   string page_token = 2 [(buf.validate.field).string.max_len = 512];
+  // Only the caller's conversation about this subject: at most one. Omit it
+  // to list every conversation, those about a subject included.
+  Subject subject = 3;
 }
 
 // ListConversationsResponse returns conversations.

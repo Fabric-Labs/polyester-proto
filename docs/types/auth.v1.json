@@ -1105,8 +1105,17 @@
             "name": "purpose",
             "jsonName": "purpose",
             "number": 27,
-            "doc": "What the key is for. ASSISTANT keys are managed with SetAssistantKeys and\n are otherwise listed, updated and revoked like any key.",
+            "doc": "What the key is for. ASSISTANT keys are managed with SetAssistantKeys and\n are otherwise listed, updated and revoked like any key. STRATEGY_BOT keys\n are managed only with SetStrategyBotAccess and EndStrategyBotAccess.",
             "protoRef": "auth.v1.ApiKeyPurpose"
+          },
+          {
+            "name": "strategy_bot_id",
+            "jsonName": "strategyBotId",
+            "number": 28,
+            "doc": "Strategy bot the key trades for: the bot's public ID (opaque ID), the\n same bot_id strategies.v1 GetBot takes. Present only on a STRATEGY_BOT\n key.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -1131,6 +1140,11 @@
             "name": "ADMIN_KEY",
             "number": 3,
             "doc": "An elevated key the main account's owner created or promoted in a\n signed-in session with a fresh step-up proof. Its policy's admin\n permissions (MANAGE_API_KEYS, MANAGE_API_KEY_POLICIES and\n MANAGE_SUBACCOUNT_POLICIES) let it manage the main account's other keys\n and its owned sub-accounts' policies without a session. An admin key acts\n for the main account only, needs a non-empty IP allowlist of entries no\n broader than /24 (IPv4) or /48 (IPv6), and its policy can never allow an\n action that moves value out of the account or manages where it goes. No\n API key can create, promote, change or delete an admin key, including the\n key itself; only its owner's session with a fresh step-up proof can."
+          },
+          {
+            "name": "STRATEGY_BOT",
+            "number": 4,
+            "doc": "A strategy bot's trade key, created with SetStrategyBotAccess on the\n bot's own sub-account and linked to the bot (strategy_bot_id). Its policy\n allows spot trading only, within the sub-account's trading limits, and\n never an action that moves value out of the account. No other call\n changes, revokes or re-binds it until EndStrategyBotAccess revokes it:\n FailedPrecondition with AUTH_STRATEGY_BOT_MANAGED. Disabling its\n sub-account disables it."
           }
         ]
       }
@@ -1254,13 +1268,14 @@
             "name": "purpose",
             "jsonName": "purpose",
             "number": 7,
-            "doc": "New purpose: STANDARD demotes an admin key, ADMIN_KEY promotes a\n standard key. Only the main account's owner may select it, in a signed-in session\n with a fresh step-up proof. A promoted key must act for the main account,\n have an IP allowlist that admin keys accept, and have no policy that\n allows a money-out action. An assistant key's purpose never changes.",
+            "doc": "New purpose: STANDARD demotes an admin key, ADMIN_KEY promotes a\n standard key. Only the main account's owner may select it, in a signed-in session\n with a fresh step-up proof. A promoted key must act for the main account,\n have an IP allowlist that admin keys accept, and have no policy that\n allows a money-out action. An assistant key's purpose never changes, and\n no key becomes or stops being a STRATEGY_BOT key.",
             "protoRef": "auth.v1.ApiKeyPurpose",
             "validate": {
               "enum": {
                 "definedOnly": true,
                 "notIn": [
-                  2
+                  2,
+                  4
                 ]
               }
             }
@@ -1495,7 +1510,7 @@
             "name": "scopes",
             "jsonName": "scopes",
             "number": 2,
-            "doc": "OAuth scopes the app asks for. \"account:read\" lets the app read the\n account as the signed-in website does: balances, orders, trades and\n account settings. A connected app never moves money out of the account\n and never changes its security settings.",
+            "doc": "OAuth scopes the app asks for. \"account:read\" lets the app read the\n account as the signed-in website does: balances, orders, trades and\n account settings. \"strategies:manage\", which an app asks for only\n together with \"account:read\": Build, test and propose trading bots, and\n stop running bots. It can't deploy a bot or move funds. A connected app\n never moves money out of the account and never changes its security\n settings.",
             "repeated": true,
             "protoScalar": "string",
             "jsonType": "string"
@@ -2018,6 +2033,21 @@
             "name": "AUTH_CONNECTED_APP_LIMIT_REACHED",
             "number": 73,
             "doc": "The account already has the most connected apps it may have. Disconnect\n an app before connecting another. FailedPrecondition."
+          },
+          {
+            "name": "AUTH_STRATEGY_BOT_MANAGED",
+            "number": 74,
+            "doc": "A strategy bot manages this API key, policy or sub-account: until\n EndStrategyBotAccess ends the bot's access, no other call changes the\n bot's key or its policy, or the sub-account's policy, keys, members or\n invites, or enables the sub-account again. Disabling the sub-account,\n renaming it and removing its members stay available. HTTP 412,\n AUTH_STRATEGY_BOT_MANAGED."
+          },
+          {
+            "name": "AUTH_STRATEGY_BOT_SUBACCOUNT_INELIGIBLE",
+            "number": 75,
+            "doc": "The sub-account cannot be given to a strategy bot: it is disabled,\n already a bot's or a QuickSwap broker vault, or has a policy, an API key\n that is not revoked, a member or a pending invite. HTTP 412,\n AUTH_STRATEGY_BOT_SUBACCOUNT_INELIGIBLE."
+          },
+          {
+            "name": "AUTH_STRATEGY_BOT_OPERATION_CONFLICT",
+            "number": 76,
+            "doc": "The deploy operation identifier names a different strategy bot access\n request, or an operation that already ended. HTTP 409,\n AUTH_STRATEGY_BOT_OPERATION_CONFLICT."
           }
         ]
       }
@@ -3021,13 +3051,14 @@
             "name": "purpose",
             "jsonName": "purpose",
             "number": 8,
-            "doc": "What the key is for. Unspecified or STANDARD creates a standard key.\n ADMIN_KEY creates an admin key: only the main account's owner may, in a\n signed-in session with a fresh step-up proof, for the main account\n (subaccount_id unset), with an ip_whitelist that admin keys accept.\n ASSISTANT keys are created with SetAssistantKeys.",
+            "doc": "What the key is for. Unspecified or STANDARD creates a standard key.\n ADMIN_KEY creates an admin key: only the main account's owner may, in a\n signed-in session with a fresh step-up proof, for the main account\n (subaccount_id unset), with an ip_whitelist that admin keys accept.\n ASSISTANT keys are created with SetAssistantKeys, STRATEGY_BOT keys with\n SetStrategyBotAccess.",
             "protoRef": "auth.v1.ApiKeyPurpose",
             "validate": {
               "enum": {
                 "definedOnly": true,
                 "notIn": [
-                  2
+                  2,
+                  4
                 ]
               }
             }
@@ -3727,6 +3758,47 @@
             "name": "DESTINATION_WHITELIST_UNRESOLVED",
             "number": 3,
             "doc": "Whitelist status could not be resolved for this destination."
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.EndStrategyBotAccessRequest",
+      "kind": "message",
+      "doc": "EndStrategyBotAccessRequest ends a strategy bot's access.",
+      "message": {
+        "fields": [
+          {
+            "name": "deploy_operation_id",
+            "jsonName": "deployOperationId",
+            "number": 1,
+            "doc": "Identifier of the deploy operation SetStrategyBotAccess was called with,\n or would be.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 128,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.EndStrategyBotAccessResponse",
+      "kind": "message",
+      "doc": "EndStrategyBotAccessResponse names the key the request revoked.",
+      "message": {
+        "fields": [
+          {
+            "name": "revoked_key_id",
+            "jsonName": "revokedKeyId",
+            "number": 1,
+            "doc": "The bot's key this request revoked. Empty when the operation had no\n access to end: none was set under it, or it already ended.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -7015,6 +7087,16 @@
             "name": "PROPOSE_STRATEGY_DEPLOY",
             "number": 48,
             "doc": "Allow recording a deploy proposal for a bot strategy version, which the\n user then deploys on the website with MFA and a wallet signature. It\n never deploys a bot, creates a subaccount or moves funds. Main-account\n permission."
+          },
+          {
+            "name": "READ_PNL",
+            "number": 49,
+            "doc": "Allow reading the account's profit and loss: realized and unrealized PnL,\n holdings with their entry price, trading statistics and the daily\n series. It grants no balance or trade read. Like READ_BALANCES, it is\n part of every sub-account's read floor."
+          },
+          {
+            "name": "STOP_STRATEGIES",
+            "number": 50,
+            "doc": "Allow stopping the main account's bots, keeping or cancelling their\n orders. Stopping only reduces what a bot does: it never deploys a bot,\n changes its money rules or moves funds. Main-account permission."
           }
         ]
       }
@@ -7659,6 +7741,117 @@
       }
     },
     {
+      "name": "auth.v1.SetStrategyBotAccessRequest",
+      "kind": "message",
+      "doc": "SetStrategyBotAccessRequest gives a strategy bot its trade key on its own\n sub-account.",
+      "message": {
+        "fields": [
+          {
+            "name": "deploy_operation_id",
+            "jsonName": "deployOperationId",
+            "number": 1,
+            "doc": "Identifier of the deploy operation, chosen by the caller and unique\n within the main account: 1 to 128 characters of letters, digits, '.',\n '_', ':' and '-'. Repeating a request under it changes nothing.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "minLen": 1,
+                "maxLen": 128,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              }
+            }
+          },
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 2,
+            "doc": "Sub-account the bot trades on (opaque ID).\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "public_key_ed25519",
+            "jsonName": "publicKeyEd25519",
+            "number": 3,
+            "doc": "Ed25519 public key bytes of the bot's trade key. Must be exactly 32\n bytes. The private key or seed must never be sent to the API.",
+            "protoScalar": "bytes",
+            "jsonType": "string",
+            "format": "byte",
+            "validate": {
+              "bytes": {
+                "len": 32
+              }
+            }
+          },
+          {
+            "name": "strategy_bot_id",
+            "jsonName": "strategyBotId",
+            "number": 4,
+            "doc": "Strategy bot the key trades for: the bot's public ID (opaque ID), the\n same bot_id strategies.v1 GetBot takes.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "limits",
+            "jsonName": "limits",
+            "number": 5,
+            "doc": "Trading limits of the sub-account.",
+            "protoRef": "auth.v1.StrategyBotLimits",
+            "validate": {
+              "required": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.SetStrategyBotAccessResponse",
+      "kind": "message",
+      "doc": "SetStrategyBotAccessResponse names the bot's key and the policies that\n bound it.",
+      "message": {
+        "fields": [
+          {
+            "name": "key_id",
+            "jsonName": "keyId",
+            "number": 1,
+            "doc": "The bot's STRATEGY_BOT key, formatted as \"ak_\" followed by 32 lowercase\n hex characters.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "api_policy_id",
+            "jsonName": "apiPolicyId",
+            "number": 2,
+            "doc": "API policy bound to the key (opaque ID).\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "subaccount_policy_id",
+            "jsonName": "subaccountPolicyId",
+            "number": 3,
+            "doc": "Sub-account policy bound to the bot's sub-account (opaque ID).\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
       "name": "auth.v1.SetSubaccountMemberMFARequirementRequest",
       "kind": "message",
       "doc": "Request to update the delegated-member MFA requirement for a sub-account.",
@@ -8190,6 +8383,65 @@
             "doc": "Link that completes the user action, when the provider has one. Telegram:\n opening it starts a chat with the Polyester bot that submits the code.\n Empty for other providers.",
             "protoScalar": "string",
             "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth.v1.StrategyBotLimits",
+      "kind": "message",
+      "doc": "StrategyBotLimits are the trading limits of a strategy bot's sub-account.\n They become the sub-account's policy, which also bounds every member and\n key of the sub-account. The bot's key policy allows the same markets.",
+      "message": {
+        "cel": [
+          {
+            "id": "spot_allowlist_requires_markets",
+            "message": "spot_markets must be non-empty when spot_market_scope is ALLOWLIST",
+            "expression": "this.spot_market_scope != 2 ? true : size(this.spot_markets) \u003e 0"
+          },
+          {
+            "id": "spot_markets_unique",
+            "message": "spot_markets must not contain duplicate symbol IDs",
+            "expression": "this.spot_markets.map(m, m.symbol_id).unique()"
+          }
+        ],
+        "fields": [
+          {
+            "name": "spot_markets",
+            "jsonName": "spotMarkets",
+            "number": 1,
+            "doc": "Spot markets the bot may trade, enforced when spot_market_scope is\n ALLOWLIST.",
+            "repeated": true,
+            "protoRef": "auth.v1.SpotMarketSelector"
+          },
+          {
+            "name": "spot_market_scope",
+            "jsonName": "spotMarketScope",
+            "number": 2,
+            "doc": "Market-level scope for spot markets. When unspecified, defaults to ALL.",
+            "protoRef": "auth.v1.MarketScope.Value",
+            "validate": {
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "max_order_notional",
+            "jsonName": "maxOrderNotional",
+            "number": 3,
+            "doc": "Maximum notional size for any single order, in canonical quote\n microunits (one unit is 0.000001 USDT). A value of 0 means no explicit\n cap.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "max_open_orders",
+            "jsonName": "maxOpenOrders",
+            "number": 4,
+            "doc": "Maximum number of resting orders at any time. A value of 0 means no\n explicit cap.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -8785,6 +9037,16 @@
             "name": "SUBACCOUNT_PERMISSION_READ_FUNDING_FLOWS",
             "number": 31,
             "doc": "View the sub-account's deposit, withdrawal, and transfer flows, including\n those without a public chain transaction."
+          },
+          {
+            "name": "SUBACCOUNT_PERMISSION_READ_PNL",
+            "number": 32,
+            "doc": "View the sub-account's profit and loss: realized and unrealized PnL,\n holdings with their entry price, trading statistics and the daily series."
+          },
+          {
+            "name": "SUBACCOUNT_PERMISSION_STOP_STRATEGIES",
+            "number": 33,
+            "doc": "Stop the bot that runs on the sub-account, keeping or cancelling its\n orders."
           }
         ]
       }

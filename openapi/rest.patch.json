@@ -230,6 +230,18 @@
     "PolicyService_UpdateSubaccountPolicy_REST": {
       "responseSchema": "polyester.rest.PolicyService_UpdateSubaccountPolicy_REST.Response"
     },
+    "ProfitAndLossService_GetProfitAndLoss": {
+      "requestSchema": "polyester.rest.ProfitAndLossService_GetProfitAndLoss.Request",
+      "responseSchema": "polyester.rest.ProfitAndLossService_GetProfitAndLoss.Response"
+    },
+    "ProfitAndLossService_GetTradingStatistics": {
+      "requestSchema": "polyester.rest.ProfitAndLossService_GetTradingStatistics.Request",
+      "responseSchema": "polyester.rest.ProfitAndLossService_GetTradingStatistics.Response"
+    },
+    "ProfitAndLossService_ListDailyProfitAndLoss": {
+      "requestSchema": "polyester.rest.ProfitAndLossService_ListDailyProfitAndLoss.Request",
+      "responseSchema": "polyester.rest.ProfitAndLossService_ListDailyProfitAndLoss.Response"
+    },
     "QuickSwapBrokerService_CreateAffiliateVault": {
       "requestSchema": "polyester.rest.QuickSwapBrokerService_CreateAffiliateVault.Request",
       "responseSchema": "polyester.rest.QuickSwapBrokerService_CreateAffiliateVault.Response"
@@ -378,6 +390,10 @@
     "TriggersService_BatchCancelTriggers": {
       "requestSchema": "polyester.rest.TriggersService_BatchCancelTriggers.Request",
       "responseSchema": "polyester.rest.TriggersService_BatchCancelTriggers.Response"
+    },
+    "TriggersService_CancelAllTriggers": {
+      "requestSchema": "polyester.rest.TriggersService_CancelAllTriggers.Request",
+      "responseSchema": "polyester.rest.TriggersService_CancelAllTriggers.Response"
     },
     "TriggersService_CancelOco": {
       "requestSchema": "polyester.rest.TriggersService_CancelOco.Request",
@@ -4376,7 +4392,7 @@
                 "type": "string"
               },
               "fundingRevision": {
-                "description": "Opaque monotonic revision for the funding value. Higher means newer; zero means no funding state has been observed.",
+                "description": "Opaque monotonic revision for the funding value. Higher means newer; zero means no funding state has been observed. Trading values have no revision: their position is (trading_epoch, trading_sequence).",
                 "pattern": "^[0-9]+$",
                 "type": "string"
               },
@@ -4393,11 +4409,6 @@
                 "description": "Trading balance as a decimal string in whole units of the asset, for example '1250.5'.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
-              },
-              "tradingRevision": {
-                "description": "Opaque monotonic revision for the atomic trading, reserved, and available values. Higher means newer; zero means no trading state has been observed.",
-                "pattern": "^[0-9]+$",
-                "type": "string"
               }
             },
             "required": [
@@ -4406,16 +4417,33 @@
               "fundingRevision",
               "reserved",
               "symbol",
-              "trading",
-              "tradingRevision"
+              "trading"
             ],
             "type": "object"
           },
           "type": "array"
+        },
+        "tradingAppliedThroughTsNs": {
+          "description": "Every Trading transfer of the account whose tsNs is at or below this value, in Unix nanoseconds as a decimal string, is applied in these balances: a receipt within tradingEpoch.",
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "tradingEpoch": {
+          "description": "Trading numbering the Trading values are in, an unsigned 64-bit integer as a decimal string. It changes when the numbering restarts: then reload. Compare it only for equality. '0' with tradingSequence '0' when the account has no Trading balances yet.",
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "tradingSequence": {
+          "description": "Trading sequence the Trading values are at within tradingEpoch, as a decimal string. Apply the balance stream's Trading updates from tradingSequence + 1 on.",
+          "pattern": "^[0-9]+$",
+          "type": "string"
         }
       },
       "required": [
-        "balances"
+        "balances",
+        "tradingAppliedThroughTsNs",
+        "tradingEpoch",
+        "tradingSequence"
       ],
       "type": "object"
     },
@@ -4862,6 +4890,11 @@
               "transferId": {
                 "description": "Stable transfer identifier, an unsigned 128-bit integer as a decimal string. Both legs of a transfer share it; with account_code and is_debit it identifies this row.",
                 "type": "string"
+              },
+              "tsNs": {
+                "description": "Exact transfer timestamp in Unix nanoseconds, as a decimal string. timestamp is this value divided by 1,000, rounded down.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
               }
             },
             "required": [
@@ -4876,7 +4909,8 @@
               "source",
               "timestamp",
               "transferCode",
-              "transferId"
+              "transferId",
+              "tsNs"
             ],
             "type": "object"
           },
@@ -6082,6 +6116,135 @@
                 "description": "Lowest traded price in the rolling 24h window, as a decimal string in quote asset units.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
+              },
+              "priceBand": {
+                "additionalProperties": false,
+                "description": "The pair's live price band, as GetPriceBand returns it, present only while a band was confirmed current within the last 5 seconds. Absent means no fresh band is known, not that the pair has no band. This is a convenience copy: the market overview stream sends a row again when its band changes, appears or lapses, not on each confirmation, so a copy whose valid_until_ts_ns has passed is unknown. Check order prices against GetPriceBand or the price band stream.",
+                "properties": {
+                  "asOf": {
+                    "description": "When the band was last confirmed current.",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "epoch": {
+                    "description": "The band's epoch, an unsigned 64-bit decimal string. It never decreases, and a band of a greater epoch is newer. Compare updateId only within one epoch.",
+                    "pattern": "^[0-9]+$",
+                    "type": "string"
+                  },
+                  "maxBuyPrice": {
+                    "description": "The highest buy limit price admitted, inclusive, as a decimal string. Present only when state is ACTIVE.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "maxSellPrice": {
+                    "description": "The highest sell limit price admitted, inclusive, as a decimal string. Present only when state is ACTIVE and the band limits passive prices too.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "minBuyPrice": {
+                    "description": "The lowest buy limit price admitted, inclusive, as a decimal string. Present only when state is ACTIVE and the band limits passive prices too.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "minSellPrice": {
+                    "description": "The lowest sell limit price admitted, inclusive, as a decimal string. Present only when state is ACTIVE.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "parameters": {
+                    "additionalProperties": false,
+                    "description": "The band's settings, as GetSpotConfig returns them. Absent when the state is OFF, or when the settings in effect cannot be expressed exactly in basis points and milliseconds; the limits above are authoritative either way.",
+                    "properties": {
+                      "lowerBps": {
+                        "description": "How far below the reference price a sell may be priced or trade, in basis points (1 bp = 0.01%). The lower limit is the reference price times (1 - lower_bps / 10000), rounded up to the tick size.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "referenceWindowMs": {
+                        "description": "How long the reference price stays fixed before it can move to a newer trade, in milliseconds. Zero moves it with every order.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "upperBps": {
+                        "description": "How far above the reference price a buy may be priced or trade, in basis points. The upper limit is the reference price times (1 + upper_bps / 10000), rounded down to the tick size.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "lowerBps",
+                      "referenceWindowMs",
+                      "upperBps"
+                    ],
+                    "type": "object"
+                  },
+                  "reanchorEligibleAt": {
+                    "description": "From when the next order operation on the pair may move the reference price. Nothing moves at that time by itself. Present when state is ACTIVE or EMPTY.",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "reanchorPending": {
+                    "description": "True when a trade newer than the reference price is waiting: once the re-anchor eligibility time has passed, the next order operation moves the reference to it, unless the index price moves it instead. False does not promise that the band stays: a move to the index price needs no trade.",
+                    "type": "boolean"
+                  },
+                  "referencePrice": {
+                    "description": "The band's reference price as a decimal string in quote asset units per base asset unit, for example '61000.25'. Present when state is ACTIVE or EMPTY.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
+                  },
+                  "referenceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.marketdata.v1.PriceBandReferenceSource"
+                      }
+                    ],
+                    "description": "Where the reference price came from. REFERENCE_SOURCE_UNSPECIFIED when the state is OFF or UNKNOWN."
+                  },
+                  "state": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.marketdata.v1.PriceBandState"
+                      }
+                    ],
+                    "description": "The band's state."
+                  },
+                  "symbol": {
+                    "description": "The pair's symbol, for example BTC-USDT.",
+                    "type": "string"
+                  },
+                  "updateId": {
+                    "description": "Increases with each band update within an epoch, and may increase without one, as an unsigned 64-bit decimal string. Compare it only within one epoch: a greater value is newer.",
+                    "pattern": "^[0-9]+$",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "description": "When the band last changed: its first setting, OFF included, a change of its settings, or a move of its reference price, to the same price included.",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "validUntil": {
+                    "description": "asOf plus 5 seconds. After it, treat the band as unknown and read it again.",
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "asOf",
+                  "epoch",
+                  "reanchorPending",
+                  "state",
+                  "symbol",
+                  "updateId",
+                  "updatedAt",
+                  "validUntil"
+                ],
+                "type": "object"
               },
               "sparklines": {
                 "description": "Optional sparklines (requested explicitly).",
@@ -12524,6 +12687,481 @@
       ],
       "type": "object"
     },
+    "polyester.rest.ProfitAndLossService_GetProfitAndLoss.Request": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossProduct"
+            }
+          ],
+          "description": "Optional product filter; UNSPECIFIED means every product."
+        },
+        "subaccountId": {
+          "description": "Optional public subaccount ID. When omitted, a session or main-account API key reads the main account together with every subaccount it owns, and a subaccount API key reads its own subaccount. A main-account API key may name a subaccount its main account owns.",
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+          "type": "string"
+        },
+        "symbolId": {
+          "description": "Optional market filter for markets; 0 means every market. Totals and holdings are not filtered by market.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossWindow"
+            }
+          ],
+          "description": "Period to report."
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.ProfitAndLossService_GetProfitAndLoss.Response": {
+      "additionalProperties": false,
+      "properties": {
+        "asOf": {
+          "description": "When the figures were last published (UTC). Trades and transfers settled shortly before may not be included yet.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "feesUsd": {
+          "description": "Fees paid in the period net of rebates, in USD. Signed base-10 decimal string.",
+          "type": "string"
+        },
+        "holdings": {
+          "description": "Assets held now, ordered by asset_id.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "assetId": {
+                "description": "Asset ID.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "costUsd": {
+                "description": "USD cost of the quantity with a known cost: what it cost when acquired, fees in the asset included. Non-negative base-10 decimal string.",
+                "type": "string"
+              },
+              "entryPriceUsd": {
+                "description": "Average entry price in USD per unit: cost_usd divided by the quantity with a known cost. Omitted when no quantity has a known cost.",
+                "type": "string"
+              },
+              "markPriceUsd": {
+                "description": "Current USD price per unit used for unrealized PnL. Omitted when not available.",
+                "type": "string"
+              },
+              "positionQuantity": {
+                "description": "Quantity held, in whole units of the asset: position_quantity = quantity with a known cost plus untracked_quantity. Non-negative base-10 decimal string.",
+                "type": "string"
+              },
+              "unrealizedPnlUsd": {
+                "description": "Unrealized PnL in USD: the quantity with a known cost valued at mark_price_usd, minus cost_usd. Signed base-10 decimal string. Omitted when mark_price_usd is.",
+                "type": "string"
+              },
+              "untrackedQuantity": {
+                "description": "Quantity whose cost is unknown, such as deposited coins, in whole units of the asset. It never counts toward PnL. Non-negative base-10 decimal string.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "assetId",
+              "costUsd",
+              "positionQuantity",
+              "untrackedQuantity"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markTime": {
+          "description": "Time of the prices that value holdings now (UTC): the close of the latest complete minute.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "markets": {
+          "description": "Realized PnL by market, ordered by symbol_id.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "feesUsd": {
+                "description": "Fees paid in the period, net of rebates received, in USD. Signed base-10 decimal string: negative when rebates exceed fees.",
+                "type": "string"
+              },
+              "product": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossProduct"
+                  }
+                ],
+                "description": "Product of the market."
+              },
+              "realizedPnlUsd": {
+                "description": "Realized PnL in USD of the period's trades, after their fees: each sale realizes its proceeds minus the average cost of what it sold, and each fee is a realized expense. Signed base-10 decimal string.",
+                "type": "string"
+              },
+              "symbolId": {
+                "description": "Market of the trades.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tradeCount": {
+                "description": "Fills of the account in the market in the period.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "volumeUsd": {
+                "description": "Traded volume in USD: execution price times quantity, valued at the execution time. Non-negative base-10 decimal string.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "feesUsd",
+              "product",
+              "realizedPnlUsd",
+              "symbolId",
+              "tradeCount",
+              "volumeUsd"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "notices": {
+          "description": "What the figures leave out, if anything.",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossNotice"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "pnlUsd": {
+          "description": "PnL in USD over the period: realized_pnl_usd plus the change in unrealized PnL from the period's start to now, with deposits, withdrawals and transfers neutral. Signed base-10 decimal string. Omitted when a price it needs is not available.",
+          "type": "string"
+        },
+        "products": {
+          "description": "PnL by product.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "feesUsd": {
+                "description": "Fees paid net of rebates in USD. Signed base-10 decimal string.",
+                "type": "string"
+              },
+              "product": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossProduct"
+                  }
+                ],
+                "description": "Product."
+              },
+              "realizedPnlUsd": {
+                "description": "Realized PnL in USD of the product's trades in the period, after fees. Signed base-10 decimal string.",
+                "type": "string"
+              },
+              "volumeUsd": {
+                "description": "Traded volume in USD. Non-negative base-10 decimal string.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "feesUsd",
+              "product",
+              "realizedPnlUsd",
+              "volumeUsd"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "realizedPnlUsd": {
+          "description": "Realized PnL in USD of the period's trades, after fees. Signed base-10 decimal string.",
+          "type": "string"
+        },
+        "unrealizedPnlChangeUsd": {
+          "description": "Change in unrealized PnL in USD from the period's start to now, net of transfers in and out. Signed base-10 decimal string. Omitted when a price it needs is not available.",
+          "type": "string"
+        },
+        "unrealizedPnlUsd": {
+          "description": "Unrealized PnL in USD of the holdings now. Signed base-10 decimal string. Omitted when a price it needs is not available.",
+          "type": "string"
+        },
+        "volumeUsd": {
+          "description": "Traded volume in the period, in USD. Non-negative base-10 decimal string.",
+          "type": "string"
+        },
+        "windowStart": {
+          "description": "Start of the period (UTC), inclusive.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asOf",
+        "feesUsd",
+        "holdings",
+        "markTime",
+        "markets",
+        "notices",
+        "products",
+        "realizedPnlUsd",
+        "volumeUsd",
+        "windowStart"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.ProfitAndLossService_GetTradingStatistics.Request": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossProduct"
+            }
+          ],
+          "description": "Optional product filter; UNSPECIFIED means every product."
+        },
+        "subaccountId": {
+          "description": "Optional public subaccount ID, selected as for GetProfitAndLossRequest.subaccount_id.",
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+          "type": "string"
+        },
+        "symbolId": {
+          "description": "Optional market filter; 0 means every market.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossWindow"
+            }
+          ],
+          "description": "Period to report."
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.ProfitAndLossService_GetTradingStatistics.Response": {
+      "additionalProperties": false,
+      "properties": {
+        "asOf": {
+          "description": "When the figures were last published (UTC). Trades settled shortly before may not be included yet.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "feesUsd": {
+          "description": "Fees paid net of rebates in USD. Signed base-10 decimal string.",
+          "type": "string"
+        },
+        "maxDrawdownPct": {
+          "description": "Largest fall in percent of the compounded return from a previous peak, at day closes. Non-negative base-10 decimal string. Omitted as return_pct is.",
+          "type": "string"
+        },
+        "notices": {
+          "description": "What the figures leave out, if anything.",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossNotice"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "realizedPnlUsd": {
+          "description": "Realized PnL in USD of the period's trades, after fees. Signed base-10 decimal string.",
+          "type": "string"
+        },
+        "returnDays": {
+          "description": "Daily returns the return figures are based on: the closed days of their period from the account's first deposit on. Today never counts.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "returnPct": {
+          "description": "Time-weighted return in percent over closed days only: for DAYS_7 and DAYS_30, the 7 or 30 closed UTC days ending at the latest 00:00 whose prices are final; every closed day for LIFETIME; none for TODAY. The daily returns are compounded, so deposits and withdrawals do not count as gains or losses. A day's return is (end - start - flow) / (start + flow / 2) of its equity and net flow; a day that starts with no equity starts at its first deposit, with return (end - flow) / flow. Signed base-10 decimal string, such as \"1.25\" for 1.25%. The return figures cover the whole account, whatever symbol_id and product select. Omitted when a day's equity or net flow is not available, or when the period has no closed day.",
+          "type": "string"
+        },
+        "sharpe": {
+          "description": "Annualized Sharpe ratio of the daily returns: their mean divided by their sample standard deviation, times the square root of 365, with no risk-free rate. Signed base-10 decimal string. Omitted with notice SHARPE_INSUFFICIENT_DAYS for fewer than 7 daily returns; omitted also when the returns do not vary, or as return_pct is.",
+          "type": "string"
+        },
+        "tradeCount": {
+          "description": "Fills of the account in the period.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "volumeUsd": {
+          "description": "Traded volume in USD. Non-negative base-10 decimal string.",
+          "type": "string"
+        },
+        "windowStart": {
+          "description": "Start of the period (UTC), inclusive.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asOf",
+        "feesUsd",
+        "notices",
+        "realizedPnlUsd",
+        "returnDays",
+        "tradeCount",
+        "volumeUsd",
+        "windowStart"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.ProfitAndLossService_ListDailyProfitAndLoss.Request": {
+      "additionalProperties": false,
+      "properties": {
+        "endTime": {
+          "description": "Day after the last one (UTC), exclusive: 00:00 UTC of a day, at most 366 days after start_time.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum days to return; 0 means 31. At most 366.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Opaque keyset cursor from a previous response. The cursor is exclusive and bound to the authenticated account, the subaccount selector, start_time and end_time.",
+          "type": "string"
+        },
+        "startTime": {
+          "description": "First day (UTC), inclusive: 00:00 UTC of a day.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "subaccountId": {
+          "description": "Optional public subaccount ID, selected as for GetProfitAndLossRequest.subaccount_id.",
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endTime",
+        "startTime"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.ProfitAndLossService_ListDailyProfitAndLoss.Response": {
+      "additionalProperties": false,
+      "properties": {
+        "asOf": {
+          "description": "When the figures were last published (UTC). Trades and transfers settled shortly before may not be included yet.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "days": {
+          "description": "Days, oldest first.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "day": {
+                "description": "The day, at 00:00 UTC.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "endEquityUsd": {
+                "description": "Equity in USD at 00:00 UTC that ends the day, valued as start_equity_usd. Omitted as start_equity_usd is, and for today until the day closes.",
+                "type": "string"
+              },
+              "feesUsd": {
+                "description": "Fees paid in the day net of rebates, in USD. Signed base-10 decimal string.",
+                "type": "string"
+              },
+              "netFlowUsd": {
+                "description": "Net external flows of the day in USD: deposits and transfers in, minus withdrawals and transfers out, each valued at the USD price when it settled. Transfers between the main account and its own subaccounts count for a single subaccount and cancel out for the main account. Signed base-10 decimal string. Omitted when a price it needs is not available.",
+                "type": "string"
+              },
+              "notices": {
+                "description": "What the day's figures leave out, if anything.",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/polyester.rest.enum.pnl.v1.ProfitAndLossNotice"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "pnlUsd": {
+                "description": "PnL in USD of the day: realized_pnl_usd plus the change in unrealized PnL from the previous day's close to this day's close, with transfers neutral. Signed base-10 decimal string. Omitted when a price it needs is not available.",
+                "type": "string"
+              },
+              "realizedPnlUsd": {
+                "description": "Realized PnL in USD of the day's trades, after fees. Signed base-10 decimal string.",
+                "type": "string"
+              },
+              "startEquityUsd": {
+                "description": "Equity in USD at 00:00 UTC that starts the day: every asset the account owns, funds reserved by open orders and pending withdrawals included, valued at the price at that time. It equals the previous day's end_equity_usd. Non-negative base-10 decimal string. Omitted with notice EQUITY_UNAVAILABLE when a price it needs is not available, or after a day with notice UNCLASSIFIED_TRANSFER or QUANTITY_SHORTFALL.",
+                "type": "string"
+              },
+              "tradeCount": {
+                "description": "Fills of the account in the day.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "unrealizedPnlAtCloseUsd": {
+                "description": "Unrealized PnL in USD of the holdings at the day's close. Signed base-10 decimal string. Omitted when a price it needs is not available, as for today before it closes.",
+                "type": "string"
+              },
+              "volumeUsd": {
+                "description": "Traded volume in the day, in USD. Non-negative base-10 decimal string.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "day",
+              "feesUsd",
+              "notices",
+              "realizedPnlUsd",
+              "tradeCount",
+              "volumeUsd"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextPageToken": {
+          "description": "Opaque cursor for the next page. Empty when no more results exist.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asOf",
+        "days",
+        "nextPageToken"
+      ],
+      "type": "object"
+    },
     "polyester.rest.QuickSwapBrokerService_CreateAffiliateVault.Request": {
       "additionalProperties": false,
       "properties": {
@@ -12783,12 +13421,27 @@
     "polyester.rest.QuickSwapBrokerService_GetBrokerStats.Request": {
       "additionalProperties": false,
       "properties": {
+        "breakdown": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.StatsBreakdown"
+            }
+          ],
+          "description": "The breakdown; unset for the totals series only."
+        },
         "broker": {
           "description": "Broker name. A broker API key may name only its own broker.",
           "type": "string"
         },
+        "destinationZippedAssetId": {
+          "description": "The destination asset and network, for the DESTINATION_ASSET breakdown.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
         "endTime": {
-          "description": "End of the window, exclusive, at most 366 days after start_time.",
+          "description": "End of the window, exclusive.",
           "format": "date-time",
           "type": "string"
         },
@@ -12798,11 +13451,49 @@
               "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.StatsPeriod"
             }
           ],
-          "description": "The period to group by."
+          "description": "The bucket length."
+        },
+        "includeCells": {
+          "description": "Also return the totals series' exact amounts per bucket and asset (BrokerStatsSeries.cell_bucket and the cell lists), for charts of one asset's amounts. They grow with the buckets times the assets, so leave this unset unless they are needed.",
+          "type": "boolean"
+        },
+        "route": {
+          "additionalProperties": false,
+          "description": "The route, for the ROUTE breakdown.",
+          "properties": {
+            "destinationZippedAssetId": {
+              "description": "Destination asset and network.",
+              "format": "int64",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceZippedAssetId": {
+              "description": "Source asset and network.",
+              "format": "int64",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "sourceZippedAssetId": {
+          "description": "The source asset and network, for the SOURCE_ASSET breakdown.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
         },
         "startTime": {
-          "description": "Start of the window, inclusive. A window that starts or ends inside a period counts only the part of that period inside the window.",
+          "description": "Start of the window, inclusive. A window that starts or ends inside a bucket counts only the part of that bucket inside the window.",
           "format": "date-time",
+          "type": "string"
+        },
+        "vaultAccountId": {
+          "description": "Public sub-account ID of the vault, for the VAULT breakdown.",
+          "pattern": "^[0-9]+$",
           "type": "string"
         }
       },
@@ -12817,328 +13508,278 @@
     "polyester.rest.QuickSwapBrokerService_GetBrokerStats.Response": {
       "additionalProperties": false,
       "properties": {
-        "periods": {
-          "description": "The periods.",
+        "asOfTsSec": {
+          "description": "In GetBrokerStats and HQ's broker stats: when the newest change this answer counts was published, in seconds since the epoch. In GetReferralStatsResponse it is rounded up to the minute instead (see there). Zero when the answer counts none. Changes reach the statistics within seconds.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "assetIds": {
+          "description": "Every asset with an amount in the answer, ascending, as AssetConfig.ledger_id values from GET /v1/chain/deposit-withdraw/config.",
+          "items": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "period": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.StatsPeriod"
+            }
+          ],
+          "description": "The bucket length."
+        },
+        "points": {
+          "description": "Number of buckets: every bucket the window touches.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "series": {
+          "description": "The totals series first; then every group of the breakdown with activity in the window, with no limit, by deposited USD from highest, compared exactly before rounding to deposited_usd_q4, and at equal value by the identifier in grouping, ascending (a route by source, then destination); then the drill-down group when it had no activity; then others.",
           "items": {
             "additionalProperties": false,
             "properties": {
+              "affiliateFeeUsd": {
+                "description": "Affiliate fees, credited to the broker's affiliate vaults.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "brokerFeeUsd": {
+                "description": "Broker fees, credited to the broker's default vault.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "cellAffiliateFee": {
+                "description": "Affiliate fees per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "cellAsset": {
+                "description": "Index into GetBrokerStatsResponse.asset_ids of each cell.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "cellBrokerFee": {
+                "description": "Broker fees per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "cellBucket": {
+                "description": "Totals series only, with GetBrokerStatsRequest.include_cells: the exact amounts per bucket and asset, as sparse cells. Cell i is bucket cell_bucket[i] and asset asset_ids[cell_asset[i]]; only cells with an amount are listed, in bucket and then asset order.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "cellDelivered": {
+                "description": "Delivered per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "cellDeposited": {
+                "description": "Deposited per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "cellReferralFee": {
+                "description": "Referral commissions per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "cellServiceFee": {
+                "description": "Service fees per cell.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "completed": {
+                "description": "Those QuickSwaps that are now COMPLETED, per bucket.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "created": {
+                "description": "Per-bucket columns, each GetBrokerStatsResponse.points long: set only on the totals series, the first 10 groups in GetBrokerStatsResponse.series order, the drill-down group and others; empty otherwise. QuickSwaps created per bucket.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
               "createdCount": {
-                "description": "QuickSwaps created in the period, inside the window.",
+                "description": "QuickSwaps created in the window.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "delivered": {
+                "description": "Delivered per asset, parallel to GetBrokerStatsResponse.asset_ids.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hi": {
+                      "description": "Most significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "deliveredUsd": {
+                "description": "USD value delivered per bucket, scaled by 1e4.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "deliveredUsdQ4": {
+                "description": "USD value of delivered, scaled by 1e4.",
                 "pattern": "^[0-9]+$",
                 "type": "string"
               },
-              "delivered": {
-                "description": "Paid to the destination of those QuickSwaps whose DESTINATION withdrawal is FINALIZED, per asset, in asset_id order: after service, broker and affiliate fees, before the destination network fee. Each payout's USD value is fixed when it was requested, as QuickSwap.delivered_value_usd.",
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "amount": {
-                      "additionalProperties": false,
-                      "description": "Total, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "assetId": {
-                      "description": "Asset, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
-                      "format": "int64",
-                      "maximum": 4294967295,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "unvaluedCount": {
-                      "description": "Amounts summed in amount without a USD value (one per QuickSwap for a volume, one per fee for a fee total), and so left out of value_usd: from the last few minutes, not valued by a current price in time, or from before USD values existed. Zero when value_usd covers all of amount.",
-                      "pattern": "^[0-9]+$",
-                      "type": "string"
-                    },
-                    "valueUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of the amounts summed in amount that have one, each valued at the asset's USD price when it happened, as the field holding this entry says, in base units of 18 decimals, rounded down. Each amount is valued once, within minutes of happening, and never repriced, so a past period keeps its value. Unset when none has one; never zero for unknown.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [],
-                  "type": "object"
-                },
-                "type": "array"
-              },
               "deposited": {
-                "description": "Deposits credited to those QuickSwaps and taken in for execution, per asset, in asset_id order: including a deposit later found ineligible and returned, excluding a deposit held for review before credit. Each deposit's USD value is fixed when it was taken in, as QuickSwap.deposited_value_usd.",
+                "description": "Deposited per asset, parallel to GetBrokerStatsResponse.asset_ids.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "amount": {
-                      "additionalProperties": false,
-                      "description": "Total, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "assetId": {
-                      "description": "Asset, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
-                      "format": "int64",
-                      "maximum": 4294967295,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "unvaluedCount": {
-                      "description": "Amounts summed in amount without a USD value (one per QuickSwap for a volume, one per fee for a fee total), and so left out of value_usd: from the last few minutes, not valued by a current price in time, or from before USD values existed. Zero when value_usd covers all of amount.",
+                    "hi": {
+                      "description": "Most significant 64 bits.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
-                    "valueUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of the amounts summed in amount that have one, each valued at the asset's USD price when it happened, as the field holding this entry says, in base units of 18 decimals, rounded down. Each amount is valued once, within minutes of happening, and never repriced, so a past period keeps its value. Unset when none has one; never zero for unknown.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [],
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              "fees": {
-                "description": "Fees charged to the broker's QuickSwaps in the period, per asset, in asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals total of the same window, period and asset.",
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "affiliateFee": {
-                      "additionalProperties": false,
-                      "description": "Affiliate fees, credited to the broker's affiliate vaults, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "affiliateFeeUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of affiliate_fee, as service_fee_usd.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "assetId": {
-                      "description": "Asset charged, as an AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config.",
-                      "format": "int64",
-                      "maximum": 4294967295,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "brokerFee": {
-                      "additionalProperties": false,
-                      "description": "Broker fees, credited to the broker's default vault, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "brokerFeeUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of broker_fee, as service_fee_usd.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "referralFee": {
-                      "additionalProperties": false,
-                      "description": "Referral commissions, credited to referral partners rather than to a vault of the broker, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "referralFeeUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of referral_fee, as service_fee_usd.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "serviceFee": {
-                      "additionalProperties": false,
-                      "description": "Service fees, credited to Polyester, in base units of 18 decimals.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "serviceFeeUsd": {
-                      "additionalProperties": false,
-                      "description": "USD value of service_fee: each fee valued at the asset's USD price when it was charged, once, within minutes, and never repriced, in base units of 18 decimals, rounded down. Zero when service_fee is zero; otherwise the value of its fees that have one, unset when none has; never zero for unknown. unvalued_count counts the fees left out.",
-                      "properties": {
-                        "baseUnits": {
-                          "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
-                          "type": "string"
-                        },
-                        "decimals": {
-                          "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
-                          "format": "int64",
-                          "maximum": 4294967295,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "baseUnits"
-                      ],
-                      "type": "object"
-                    },
-                    "unvaluedCount": {
-                      "description": "Fees of the split without a USD value, and so left out of the USD fields: charged in the last few minutes, not valued by a current price in time, or charged before USD values existed. Zero when the USD fields cover every fee.",
+                    "lo": {
+                      "description": "Least significant 64 bits.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     }
@@ -13148,40 +13789,157 @@
                 },
                 "type": "array"
               },
-              "periodStart": {
-                "description": "Start of the UTC day or month.",
-                "format": "date-time",
+              "depositedUsd": {
+                "description": "USD value deposited per bucket, scaled by 1e4.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "depositedUsdQ4": {
+                "description": "USD value of deposited, scaled by 1e4.",
+                "pattern": "^[0-9]+$",
                 "type": "string"
               },
-              "statuses": {
-                "description": "Those QuickSwaps by current status, in QuickSwapStatus number order; statuses with none are omitted. The counts total created_count.",
+              "destinationZippedAssetId": {
+                "description": "The QuickSwaps of one destination asset and network, for the DESTINATION_ASSET breakdown.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fees": {
+                "description": "Fees per asset, every share together, parallel to GetBrokerStatsResponse.asset_ids.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "count": {
-                      "description": "QuickSwaps in it.",
+                    "hi": {
+                      "description": "Most significant 64 bits.",
                       "pattern": "^[0-9]+$",
                       "type": "string"
                     },
-                    "status": {
-                      "allOf": [
-                        {
-                          "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.QuickSwapStatus"
-                        }
-                      ],
-                      "description": "The status."
+                    "lo": {
+                      "description": "Least significant 64 bits.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
                     }
                   },
                   "required": [],
                   "type": "object"
                 },
                 "type": "array"
+              },
+              "feesUsd": {
+                "description": "USD value of the fees per bucket, scaled by 1e4.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "feesUsdQ4": {
+                "description": "USD value of fees, scaled by 1e4.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "others": {
+                "description": "Every group without per-bucket columns, summed. Absent when every group has them.",
+                "type": "boolean"
+              },
+              "referralFeeUsd": {
+                "description": "Referral commissions, credited to referral partners rather than to a vault of the broker.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "route": {
+                "additionalProperties": false,
+                "description": "The QuickSwaps of one route, for the ROUTE breakdown.",
+                "properties": {
+                  "destinationZippedAssetId": {
+                    "description": "Destination asset and network.",
+                    "format": "int64",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "sourceZippedAssetId": {
+                    "description": "Source asset and network.",
+                    "format": "int64",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "serviceFeeUsd": {
+                "description": "Totals series only: the fees per bucket by who they credit, USD scaled by 1e4. Service fees, credited to Polyester.",
+                "items": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sourceZippedAssetId": {
+                "description": "The QuickSwaps of one source asset and network, for the SOURCE_ASSET breakdown.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "statusCounts": {
+                "description": "Those QuickSwaps by current status, indexed by QuickSwapStatus number; trailing zero counts are omitted. The counts total created_count.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "totals": {
+                "description": "All of the broker's (or referral partner's) QuickSwaps and fees. Always the first series.",
+                "type": "boolean"
+              },
+              "unvalued": {
+                "description": "Values without a USD value per bucket, as unvalued_count.",
+                "items": {
+                  "format": "int64",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "unvaluedCount": {
+                "description": "Deposits, payouts and fees summed above without a USD value, and so left out of the USD totals: from the last few minutes, not valued by a current price in time, or from before USD values existed.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "vaultAccountId": {
+                "description": "Public sub-account ID of a vault, for the VAULT breakdown: the QuickSwaps that credited it a broker or affiliate fee. Its fees are the fees credited to the vault.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
               }
             },
             "required": [],
             "type": "object"
           },
           "type": "array"
+        },
+        "startTsSec": {
+          "description": "Start of the first bucket, in seconds since the epoch (UTC): the UTC hour, day or month start_time falls in.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [],
@@ -13731,7 +14489,7 @@
                   "type": "string"
                 },
                 "addressRetiresAt": {
-                  "description": "After this time the deposit address is retired and funds sent to it may not be recoverable. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
+                  "description": "After this time the deposit address is retired, and a deposit sent to it later never executes. One that Polyester records on this QuickSwap is listed in deposits as RETURN_ONLY (DEPOSIT_ADDRESS_RETIRED): it is returned to return_address when it can be, and its direct_return reports whether it was. One the network refuses before Polyester records it is not listed in deposits, and nothing on any QuickSwap reports it or its return; report its transaction to Polyester broker support with the swap_id. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -13744,7 +14502,7 @@
                   "description": "Current lifecycle state of the address."
                 },
                 "fundingExpiresAt": {
-                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes. A deposit observed on a retired address is MANUAL_RECOVERY and is not returned automatically; other late deposits are RETURN_ONLY. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
+                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes; it is RETURN_ONLY, and so is a deposit observed after the address retired. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -13839,7 +14597,7 @@
                   },
                   "directReturn": {
                     "additionalProperties": false,
-                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit, after its funding window or after the address retired. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
                     "properties": {
                       "state": {
                         "allOf": [
@@ -13850,7 +14608,7 @@
                         "description": "Return progress. Accept state values added later."
                       },
                       "txHash": {
-                        "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                        "description": "Return transaction on the deposit's network, in the network's native text form; set only once RETURN_COMPLETED, and then never changes.",
                         "type": "string"
                       },
                       "updatedAt": {
@@ -13908,7 +14666,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.QuickSwapReason"
                       }
                     ],
-                    "description": "Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
+                    "description": "Why the disposition is RETURN_ONLY or ON_HOLD; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
                   },
                   "requiredConfirmations": {
                     "description": "Source-network confirmations required before credit; zero until known.",
@@ -14317,13 +15075,72 @@
               "type": "string"
             },
             "isTerminal": {
-              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address, before or after it retired, also shows as RETURN_ONLY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
               "type": "boolean"
             },
             "quote": {
               "additionalProperties": false,
               "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
               "properties": {
+                "contingentFees": {
+                  "description": "Estimated network fees charged only if funds are not delivered: RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not part of fees or expected_amount_out. A partly traded two-leg QuickSwap can be charged both. The fee withheld is the network's fee at payout time. Unlike fees, an entry is never omitted: a known fee of zero is listed with amount \"0\".",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "amount": {
+                        "additionalProperties": false,
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "properties": {
+                          "baseUnits": {
+                            "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                            "type": "string"
+                          },
+                          "decimals": {
+                            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "baseUnits"
+                        ],
+                        "type": "object"
+                      },
+                      "bps": {
+                        "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                          }
+                        ],
+                        "description": "Fee component."
+                      },
+                      "zippedAssetId": {
+                        "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a trading fee of the first leg of a two-leg route, which is charged in the intermediate asset (intermediate_asset_id).",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "depositAmount": {
                   "additionalProperties": false,
                   "description": "Source amount the quote was computed for, in source token units. Equals the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
@@ -14383,7 +15200,7 @@
                       },
                       "amount": {
                         "additionalProperties": false,
-                        "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                         "properties": {
                           "baseUnits": {
                             "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -18902,7 +19719,7 @@
                   "type": "string"
                 },
                 "addressRetiresAt": {
-                  "description": "After this time the deposit address is retired and funds sent to it may not be recoverable. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
+                  "description": "After this time the deposit address is retired, and a deposit sent to it later never executes. One that Polyester records on this QuickSwap is listed in deposits as RETURN_ONLY (DEPOSIT_ADDRESS_RETIRED): it is returned to return_address when it can be, and its direct_return reports whether it was. One the network refuses before Polyester records it is not listed in deposits, and nothing on any QuickSwap reports it or its return; report its transaction to Polyester broker support with the swap_id. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -18915,7 +19732,7 @@
                   "description": "Current lifecycle state of the address."
                 },
                 "fundingExpiresAt": {
-                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes. A deposit observed on a retired address is MANUAL_RECOVERY and is not returned automatically; other late deposits are RETURN_ONLY. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
+                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes; it is RETURN_ONLY, and so is a deposit observed after the address retired. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -19010,7 +19827,7 @@
                   },
                   "directReturn": {
                     "additionalProperties": false,
-                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit, after its funding window or after the address retired. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
                     "properties": {
                       "state": {
                         "allOf": [
@@ -19021,7 +19838,7 @@
                         "description": "Return progress. Accept state values added later."
                       },
                       "txHash": {
-                        "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                        "description": "Return transaction on the deposit's network, in the network's native text form; set only once RETURN_COMPLETED, and then never changes.",
                         "type": "string"
                       },
                       "updatedAt": {
@@ -19079,7 +19896,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.QuickSwapReason"
                       }
                     ],
-                    "description": "Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
+                    "description": "Why the disposition is RETURN_ONLY or ON_HOLD; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
                   },
                   "requiredConfirmations": {
                     "description": "Source-network confirmations required before credit; zero until known.",
@@ -19488,13 +20305,72 @@
               "type": "string"
             },
             "isTerminal": {
-              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address, before or after it retired, also shows as RETURN_ONLY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
               "type": "boolean"
             },
             "quote": {
               "additionalProperties": false,
               "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
               "properties": {
+                "contingentFees": {
+                  "description": "Estimated network fees charged only if funds are not delivered: RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not part of fees or expected_amount_out. A partly traded two-leg QuickSwap can be charged both. The fee withheld is the network's fee at payout time. Unlike fees, an entry is never omitted: a known fee of zero is listed with amount \"0\".",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "amount": {
+                        "additionalProperties": false,
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "properties": {
+                          "baseUnits": {
+                            "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                            "type": "string"
+                          },
+                          "decimals": {
+                            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "baseUnits"
+                        ],
+                        "type": "object"
+                      },
+                      "bps": {
+                        "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                          }
+                        ],
+                        "description": "Fee component."
+                      },
+                      "zippedAssetId": {
+                        "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a trading fee of the first leg of a two-leg route, which is charged in the intermediate asset (intermediate_asset_id).",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "depositAmount": {
                   "additionalProperties": false,
                   "description": "Source amount the quote was computed for, in source token units. Equals the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
@@ -19554,7 +20430,7 @@
                       },
                       "amount": {
                         "additionalProperties": false,
-                        "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                         "properties": {
                           "baseUnits": {
                             "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -20190,7 +21066,7 @@
                   "type": "string"
                 },
                 "addressRetiresAt": {
-                  "description": "After this time the deposit address is retired and funds sent to it may not be recoverable. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
+                  "description": "After this time the deposit address is retired, and a deposit sent to it later never executes. One that Polyester records on this QuickSwap is listed in deposits as RETURN_ONLY (DEPOSIT_ADDRESS_RETIRED): it is returned to return_address when it can be, and its direct_return reports whether it was. One the network refuses before Polyester records it is not listed in deposits, and nothing on any QuickSwap reports it or its return; report its transaction to Polyester broker support with the swap_id. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -20203,7 +21079,7 @@
                   "description": "Current lifecycle state of the address."
                 },
                 "fundingExpiresAt": {
-                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes. A deposit observed on a retired address is MANUAL_RECOVERY and is not returned automatically; other late deposits are RETURN_ONLY. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
+                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes; it is RETURN_ONLY, and so is a deposit observed after the address retired. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -20298,7 +21174,7 @@
                   },
                   "directReturn": {
                     "additionalProperties": false,
-                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit, after its funding window or after the address retired. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
                     "properties": {
                       "state": {
                         "allOf": [
@@ -20309,7 +21185,7 @@
                         "description": "Return progress. Accept state values added later."
                       },
                       "txHash": {
-                        "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                        "description": "Return transaction on the deposit's network, in the network's native text form; set only once RETURN_COMPLETED, and then never changes.",
                         "type": "string"
                       },
                       "updatedAt": {
@@ -20367,7 +21243,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.QuickSwapReason"
                       }
                     ],
-                    "description": "Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
+                    "description": "Why the disposition is RETURN_ONLY or ON_HOLD; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
                   },
                   "requiredConfirmations": {
                     "description": "Source-network confirmations required before credit; zero until known.",
@@ -20776,13 +21652,72 @@
               "type": "string"
             },
             "isTerminal": {
-              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address, before or after it retired, also shows as RETURN_ONLY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
               "type": "boolean"
             },
             "quote": {
               "additionalProperties": false,
               "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
               "properties": {
+                "contingentFees": {
+                  "description": "Estimated network fees charged only if funds are not delivered: RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not part of fees or expected_amount_out. A partly traded two-leg QuickSwap can be charged both. The fee withheld is the network's fee at payout time. Unlike fees, an entry is never omitted: a known fee of zero is listed with amount \"0\".",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "amount": {
+                        "additionalProperties": false,
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "properties": {
+                          "baseUnits": {
+                            "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                            "type": "string"
+                          },
+                          "decimals": {
+                            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "baseUnits"
+                        ],
+                        "type": "object"
+                      },
+                      "bps": {
+                        "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                          }
+                        ],
+                        "description": "Fee component."
+                      },
+                      "zippedAssetId": {
+                        "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a trading fee of the first leg of a two-leg route, which is charged in the intermediate asset (intermediate_asset_id).",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "depositAmount": {
                   "additionalProperties": false,
                   "description": "Source amount the quote was computed for, in source token units. Equals the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
@@ -20842,7 +21777,7 @@
                       },
                       "amount": {
                         "additionalProperties": false,
-                        "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                         "properties": {
                           "baseUnits": {
                             "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -21477,7 +22412,7 @@
                   "type": "string"
                 },
                 "addressRetiresAt": {
-                  "description": "After this time the deposit address is retired and funds sent to it may not be recoverable. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
+                  "description": "After this time the deposit address is retired, and a deposit sent to it later never executes. One that Polyester records on this QuickSwap is listed in deposits as RETURN_ONLY (DEPOSIT_ADDRESS_RETIRED): it is returned to return_address when it can be, and its direct_return reports whether it was. One the network refuses before Polyester records it is not listed in deposits, and nothing on any QuickSwap reports it or its return; report its transaction to Polyester broker support with the swap_id. For an unfunded address it equals funding_expires_at. After a deposit is accepted it is provisional, a lower bound, until Polyester releases the deposit address, which can be shortly after the QuickSwap becomes terminal; from then on it is at least 7 days after all payouts finish. It only moves later, never earlier, and never before funding_expires_at.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -21490,7 +22425,7 @@
                   "description": "Current lifecycle state of the address."
                 },
                 "fundingExpiresAt": {
-                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes. A deposit observed on a retired address is MANUAL_RECOVERY and is not returned automatically; other late deposits are RETURN_ONLY. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
+                  "description": "End of the funding window, fixed when the address is issued (currently 7 days after issued_at). A deposit can execute only if Polyester detects it before this time; detection time counts, not block time, and confirmations may finish later. A deposit detected at or after this time never executes; it is RETURN_ONLY, and so is a deposit observed after the address retired. For an unfunded address, address_retires_at equals this time, so there is no separate scheduled return period. Send deposits well before this time. Never changes.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -21585,7 +22520,7 @@
                   },
                   "directReturn": {
                     "additionalProperties": false,
-                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit or after its funding window. On a MANUAL_RECOVERY deposit it reports a direct return once one is recorded. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
+                    "description": "Direct return to return_address of a deposit that was never credited: a RETURN_ONLY deposit that reached the address after its one eligible deposit, after its funding window or after the address retired. Unset until a direct return is recorded, and on every other deposit, which is returned through withdrawals.",
                     "properties": {
                       "state": {
                         "allOf": [
@@ -21596,7 +22531,7 @@
                         "description": "Return progress. Accept state values added later."
                       },
                       "txHash": {
-                        "description": "Return transaction on the deposit's network, in the network's native text form; set once RETURN_COMPLETED.",
+                        "description": "Return transaction on the deposit's network, in the network's native text form; set only once RETURN_COMPLETED, and then never changes.",
                         "type": "string"
                       },
                       "updatedAt": {
@@ -21654,7 +22589,7 @@
                         "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.QuickSwapReason"
                       }
                     ],
-                    "description": "Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
+                    "description": "Why the disposition is RETURN_ONLY or ON_HOLD; REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review without a more specific reason."
                   },
                   "requiredConfirmations": {
                     "description": "Source-network confirmations required before credit; zero until known.",
@@ -22063,13 +22998,72 @@
               "type": "string"
             },
             "isTerminal": {
-              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address also shows as RETURN_ONLY, and another deposit observed on an already retired address shows as MANUAL_RECOVERY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
+              "description": "True when status is terminal; authoritative, including for status values added later. Polling can stop at a terminal status. A terminal status never changes. Shortly after it, address_retires_at can still move later, and withdrawal details can be corrected as documented on Withdrawal; another deposit reaching the address, before or after it retired, also shows as RETURN_ONLY. Such a deposit is returned directly, not through withdrawals: its direct_return reports the return, and RETURN_ONLY alone does not confirm a completed return. An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all becomes HELD (see QuickSwapStatus.EXPIRED). Read again if the end user reports such a deposit or needs the final retirement time.",
               "type": "boolean"
             },
             "quote": {
               "additionalProperties": false,
               "description": "Quote and protection fixed at creation. Not refreshed on retries. Its amounts and fees stay estimates: the QuickSwap is priced when its deposit is credited, and execution, withdrawals and charged_fees report the actual output and fees.",
               "properties": {
+                "contingentFees": {
+                  "description": "Estimated network fees charged only if funds are not delivered: RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not part of fees or expected_amount_out. A partly traded two-leg QuickSwap can be charged both. The fee withheld is the network's fee at payout time. Unlike fees, an entry is never omitted: a known fee of zero is listed with amount \"0\".",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "amount": {
+                        "additionalProperties": false,
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "properties": {
+                          "baseUnits": {
+                            "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                            "type": "string"
+                          },
+                          "decimals": {
+                            "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "baseUnits"
+                        ],
+                        "type": "object"
+                      },
+                      "bps": {
+                        "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                          }
+                        ],
+                        "description": "Fee component."
+                      },
+                      "zippedAssetId": {
+                        "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a trading fee of the first leg of a two-leg route, which is charged in the intermediate asset (intermediate_asset_id).",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "depositAmount": {
                   "additionalProperties": false,
                   "description": "Source amount the quote was computed for, in source token units. Equals the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
@@ -22129,7 +23123,7 @@
                       },
                       "amount": {
                         "additionalProperties": false,
-                        "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                        "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                         "properties": {
                           "baseUnits": {
                             "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -22678,6 +23672,13 @@
           "description": "Optional referral partner code, as CreateQuickSwapRequest.referral_code: at most 64 bytes.",
           "type": "string"
         },
+        "refundZippedAssetId": {
+          "description": "Optional refund route, as CreateQuickSwapRequest.refund_zipped_asset_id and validated the same way. On a two-leg route it fixes the intermediate asset, as create does, and adds REFUND_NETWORK to contingent_fees. It is unused on a direct route or a bridge.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
         "sourceWallet": {
           "description": "Optional source wallet the end user will deposit from, as CreateQuickSwapRequest.source_wallet: a valid address on the source network, at most 256 UTF-8 bytes. When supplied, it is risk screened before the quote is returned, and a wallet that fails screening is refused with SOURCE_WALLET_REJECTED. Source wallets are screened in advance on Bitcoin, Solana and most EVM networks. Wallets on other networks, including the Bitcoin and Solana test networks, and wallets whose screening is unavailable at the time, are quoted without it; their deposits are still screened on arrival.",
           "type": "string"
@@ -22827,6 +23828,65 @@
           "additionalProperties": false,
           "description": "Indicative quote, including whether the route needs a refund address. Its amounts and fees are estimates. Creating a QuickSwap prices the terms again.",
           "properties": {
+            "contingentFees": {
+              "description": "Estimated network fees charged only if funds are not delivered: RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not part of fees or expected_amount_out. A partly traded two-leg QuickSwap can be charged both. The fee withheld is the network's fee at payout time. Unlike fees, an entry is never omitted: a known fee of zero is listed with amount \"0\".",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "accountId": {
+                    "description": "AFFILIATE only: public sub-account ID of the affiliate vault credited with the fee; zero for every other kind, REFERRAL included.",
+                    "pattern": "^[0-9]+$",
+                    "type": "string"
+                  },
+                  "amount": {
+                    "additionalProperties": false,
+                    "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                    "properties": {
+                      "baseUnits": {
+                        "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
+                        "type": "string"
+                      },
+                      "decimals": {
+                        "description": "Token decimals: the display amount is base_units / 10^decimals. Required in requests, where it must equal AssetChainVariant.source_decimals (the token's on-chain decimals) in GET /v1/chain/deposit-withdraw/config of the asset the amount is in: the source asset for a SOURCE_AMOUNT amount; the destination asset for a DESTINATION_AMOUNT amount and for Protection.min_amount_out.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "baseUnits"
+                    ],
+                    "type": "object"
+                  },
+                  "bps": {
+                    "description": "Rate of a trading fee in basis points of what the leg receives; zero for a network fee. The rate, not amount, is what is charged: bps of what the leg actually receives.",
+                    "format": "int64",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/polyester.rest.enum.swap.quickswap.v1.FeeKind"
+                      }
+                    ],
+                    "description": "Fee component."
+                  },
+                  "zippedAssetId": {
+                    "description": "Asset and network the fee is charged in, as a zipped_asset_id. Zero for a trading fee of the first leg of a two-leg route, which is charged in the intermediate asset (intermediate_asset_id).",
+                    "format": "int64",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "depositAmount": {
               "additionalProperties": false,
               "description": "Source amount the quote was computed for, in source token units. Equals the request amount for SOURCE_AMOUNT; computed for DESTINATION_AMOUNT.",
@@ -22886,7 +23946,7 @@
                   },
                   "amount": {
                     "additionalProperties": false,
-                    "description": "Fee in zipped_asset_id's token units; for a fee charged in the intermediate asset, in the intermediate asset at its trading precision (amount.decimals). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
+                    "description": "Fee in zipped_asset_id's token units; for a trading fee of the first leg of a two-leg route, in the intermediate asset at its trading precision (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate asset, is in the refund route's token units and precision (0.72 USDT on a 6-decimal route is 720000 with decimals 6). An estimate for deposit_amount at the quoted prices, with trading fees rounded up; the fee charged can be higher or lower.",
                     "properties": {
                       "baseUnits": {
                         "description": "Unsigned integer amount in the token's smallest unit (for example satoshis or wei), as a decimal string without sign, exponent, separators or leading zeros; at most 78 digits.",
@@ -23121,7 +24181,7 @@
       "additionalProperties": false,
       "properties": {
         "apiKeyRules": {
-          "description": "Placement, cancellation and read rules resolved for the calling API key, ordered placement, cancellation, read. Present only when the caller authenticated with an API key. These rules are informational: trading requests are not limited per API key, and only the account rules in `rules` are enforced.",
+          "description": "Placement, cancellation and read rules resolved for the calling API key, ordered placement, cancellation, read. Present only when the caller authenticated with an API key. The read rule is enforced per API key on top of the account's read limit: a read or preview is refused when either is exhausted. The placement and cancellation rules are informational: orders are limited per account only, by the account rules in `rules`.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -23178,7 +24238,7 @@
           "type": "string"
         },
         "rules": {
-          "description": "Placement, cancellation and read rules enforced for the selected account, ordered placement, cancellation, read. All of the account's API keys and sessions draw on the placement and cancellation limits together; the read rule is the root account's, shared with all of its subaccounts.",
+          "description": "Placement, cancellation and read rules enforced for the selected account, ordered placement, cancellation, read. All of the account's API keys and sessions draw on these limits together.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -23435,6 +24495,91 @@
         "acceptedCount",
         "rejectedCount",
         "results",
+        "tsNs"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.TriggersService_CancelAllTriggers.Request": {
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": {
+          "description": "If true, return the matched count without canceling anything.",
+          "type": "boolean"
+        },
+        "requestId": {
+          "description": "Idempotency key (required). Reuse the same key and criteria for retries. Completed results are retained for at least two minutes. Use a fresh key for a new cancellation; do not reuse a key after its replay window. 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
+          "type": "string"
+        },
+        "side": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.Side"
+            }
+          ],
+          "description": "Side filter. When set, only triggers whose orders trade on this side match: a SELL stop-loss matches SELL."
+        },
+        "subaccountId": {
+          "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use their bound subaccount; other callers use their authenticated root account.",
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+          "type": "string"
+        },
+        "symbols": {
+          "description": "Up to 100 trading pair symbols, e.g. [BTC-USDT, ETH-USDT]. Empty matches all symbols; duplicates are ignored.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "triggerTypes": {
+          "description": "Trigger types to cancel, as ListTriggers' trigger_type reports them. Empty matches every type. At most 5 distinct types. An order's attached take-profit, stop-loss and trailing legs end together, and so do an OCO's two legs: when any of them matches, all of them are canceled and counted. For example, canceling STOP_LOSS also cancels the take-profit or trailing leg attached to the same order as a matching stop-loss, and the take-profit of an OCO whose stop-loss matches.",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.TriggerType"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.TriggersService_CancelAllTriggers.Response": {
+      "additionalProperties": false,
+      "properties": {
+        "matchedTriggers": {
+          "description": "Number of the account's triggers that matched the filters when the request was accepted, each canceled unless `dry_run` is set. A retry with the same request_id and criteria returns the original count.",
+          "format": "int64",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.CancelAllTriggersResponse.Status"
+            }
+          ],
+          "description": "Cancel-all submission outcome."
+        },
+        "ts": {
+          "description": "Server timestamp of the original acceptance.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "tsNs": {
+          "description": "Server timestamp as epoch nanoseconds (for bots).",
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "matchedTriggers",
+        "status",
+        "ts",
         "tsNs"
       ],
       "type": "object"
@@ -26837,7 +27982,9 @@
         "MANAGE_SUBACCOUNT_POLICIES",
         "READ_STRATEGIES",
         "DRAFT_STRATEGIES",
-        "PROPOSE_STRATEGY_DEPLOY"
+        "PROPOSE_STRATEGY_DEPLOY",
+        "READ_PNL",
+        "STOP_STRATEGIES"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -26868,6 +28015,7 @@
         "READ_GUARD_SIGNER_STATUS": "Allow reading the Guard Signer status within the key's scope; a key never reads another main account's Guard Signer. Account permission.",
         "READ_INTERNAL_TRANSFERS": "Allow reading internal transfer history.",
         "READ_NOTIFICATIONS": "Allow listing, reading, and counting the main account's notifications. It does not allow marking them read or unread. Main-account permission.",
+        "READ_PNL": "Allow reading the account's profit and loss: realized and unrealized PnL, holdings with their entry price, trading statistics and the daily series. It grants no balance or trade read. Like READ_BALANCES, it is part of every sub-account's read floor.",
         "READ_PRICE_ALERTS": "Allow listing the main account's price alerts. Main-account permission.",
         "READ_PROFILE": "Allow reading the main account's profile and username history. Main-account permission.",
         "READ_REWARDS": "Allow reading the main account's published reward awards. Main-account permission.",
@@ -26883,6 +28031,7 @@
         "READ_SUBACCOUNT_POLICIES": "Allow listing and reading sub-account policies. A key scoped to the main account sees every sub-account policy of the main account; a key scoped to a sub-account sees only the policy attached to that sub-account. Account permission.",
         "READ_VIP_STATUS": "Allow reading the main account's VIP status. Main-account permission.",
         "READ_WITHDRAW_VALIDATION": "Allow validating an external withdraw destination within the key's scope without creating, signing, or reserving a withdraw. It does not allow withdrawing. Account permission.",
+        "STOP_STRATEGIES": "Allow stopping the main account's bots, keeping or cancelling their orders. Stopping only reduces what a bot does: it never deploys a bot, changes its money rules or moves funds. Main-account permission.",
         "SWAP": "Allow quoting, creating, and reading Swaps: market conversions of the account's own Trading balance from one asset into another. Each Swap places spot orders on the account's behalf, which also remain subject to the sub-account's spot trading policy.",
         "TRADE_SPOT": "Allow all spot order mutations: create, modify, replace, cancel, batch operations, live cancel-all, and arming or disabling cancel-all-after. Includes reading spot orders and trades and placing or modifying triggers. Authorized cancellation remains available when trading activity is disabled; this does not grant mutation access to a read-only API key."
       }
@@ -27765,7 +28914,7 @@
         "CANCEL_SCOPE_TOO_LARGE": "The cancel-all request named more than 100 symbols.",
         "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
         "CHILD_QTY_EXCEEDS_REMAINING": "The new quantity of a TWAP order's slice would leave more than the TWAP's remaining quantity. Nothing changed; a slice can be raised up to what the TWAP still has to execute.",
-        "CHILD_QTY_RAISE_NOT_ALLOWED": "The quantity of a trigger's child order or a ladder order can't be raised above its planned quantity. Nothing changed.",
+        "CHILD_QTY_RAISE_NOT_ALLOWED": "A ladder level or the exit order of a take-profit, stop-loss or trailing leg can't be raised above its cap. Nothing changed. A ladder level's cap is its planned quantity, even after the level was reduced. An exit order's cap is its current quantity: reducing an exit returns the reduced quantity to the legs that protect the position.",
         "CLIENT_LIST_ID_INVALID": "The OCO's client list ID is empty, longer than 36 characters, or has a character other than a letter, digit, period, underscore, colon, slash or hyphen. Answered by CreateOco and by the ListTriggers client_list_id filter. Nothing changed.",
         "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
         "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
@@ -27831,7 +28980,7 @@
         "ORDER_CREATE_OUTCOME_UNKNOWN": "The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or repeat the batch with the same request ID and payload within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice.",
         "ORDER_ID_CONFLICT": "The order identifier is held by a different, earlier order, so the request was not applied. Nothing changed.",
         "ORDER_LIMITS_UNAVAILABLE": "This market's order limits aren't set yet, so it can't take new orders.",
-        "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again.",
+        "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again. A modify that adds or changes an attached take-profit, stop-loss or trailing leg also gets this code while a cancel of triggers is ending the order's attached legs, which end together; retry it once they have ended.",
         "ORDER_MODIFY_OUTCOME_UNKNOWN": "The order modification was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch replacement, every item's outcome is unknown; read them back.",
         "ORDER_PLACEMENT_PENDING": "The placement of the order, or of the replacement an earlier replace created, has not been confirmed yet, so it cannot be modified. It may already rest on the book. An order event may already report the order WORKING before it can be modified; retry after a short backoff. A refresh that names the replacement order ID from a batch whose replace has not been confirmed yet gets this code. Retry as for ORDER_MODIFY_IN_PROGRESS.",
         "ORDER_REPAIRING": "This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.",
@@ -28118,6 +29267,51 @@
         "MARK_PRICE": "Mark price for perpetuals; not supported on spot markets."
       }
     },
+    "polyester.rest.enum.pnl.v1.ProfitAndLossNotice": {
+      "enum": [
+        "PRICE_UNAVAILABLE",
+        "MARK_UNAVAILABLE",
+        "UNCLASSIFIED_TRANSFER",
+        "QUANTITY_SHORTFALL",
+        "EQUITY_UNAVAILABLE",
+        "FLOW_UNVALUED",
+        "SHARPE_INSUFFICIENT_DAYS"
+      ],
+      "type": "string",
+      "x-poly-enum-descriptions": {
+        "EQUITY_UNAVAILABLE": "The account's equity at a day's start or end is not available, so the equity figures and the returns that need them are omitted.",
+        "FLOW_UNVALUED": "No USD price was available for some deposits, withdrawals or transfers, so the day's net flow and the returns that need it are omitted.",
+        "MARK_UNAVAILABLE": "A current or period-start price is not available yet for some holdings: their unrealized PnL, and every figure that includes it, is omitted.",
+        "PRICE_UNAVAILABLE": "No USD price was available at the time of some trades or transfers, so their effect is not in the USD figures. Their quantities still count.",
+        "QUANTITY_SHORTFALL": "Some sales exceeded the quantity PnL knows the account held.",
+        "SHARPE_INSUFFICIENT_DAYS": "Fewer than 7 daily returns are available in the period, so the Sharpe ratio is omitted. return_days says how many there are.",
+        "UNCLASSIFIED_TRANSFER": "Some balance changes have an unrecognized reason and are not counted."
+      }
+    },
+    "polyester.rest.enum.pnl.v1.ProfitAndLossProduct": {
+      "enum": [
+        "SPOT"
+      ],
+      "type": "string",
+      "x-poly-enum-descriptions": {
+        "SPOT": "Spot trading."
+      }
+    },
+    "polyester.rest.enum.pnl.v1.ProfitAndLossWindow": {
+      "enum": [
+        "TODAY",
+        "DAYS_7",
+        "DAYS_30",
+        "LIFETIME"
+      ],
+      "type": "string",
+      "x-poly-enum-descriptions": {
+        "DAYS_30": "Since 00:00 UTC 29 days ago: today and the 29 days before it.",
+        "DAYS_7": "Since 00:00 UTC six days ago: today and the 6 days before it.",
+        "LIFETIME": "Since 00:00 UTC of the day of the account's first trade or transfer.",
+        "TODAY": "Since 00:00 UTC today."
+      }
+    },
     "polyester.rest.enum.polyester.ratelimit.v1.FailureReason": {
       "enum": [
         "QUOTA_EXCEEDED",
@@ -28243,7 +29437,7 @@
       "x-poly-enum-descriptions": {
         "CANCEL": "Order and trigger cancellation.",
         "PLACE": "New-order placement and order modification.",
-        "READ": "Order, fill, trigger, trading-limit and fee reads, and order previews. Every API key, session and subaccount of a root account shares the root account's read limit."
+        "READ": "Order, fill, trigger, trading-limit and fee reads, and order previews. Each account has its own read limit: the root account and each subaccount separately, shared by every API key and session that reads for that account."
       }
     },
     "polyester.rest.enum.swap.quickswap.v1.AllowlistAction": {
@@ -28322,16 +29516,14 @@
         "EVALUATING",
         "ELIGIBLE",
         "RETURN_ONLY",
-        "ON_HOLD",
-        "MANUAL_RECOVERY"
+        "ON_HOLD"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
         "ELIGIBLE": "The eligible deposit that confirmed first. It consumed the QuickSwap and is the only deposit that can execute.",
         "EVALUATING": "Detected; eligibility is being evaluated. A deposit can already be credited (credited_at) while it is evaluated.",
-        "MANUAL_RECOVERY": "Observed on an address that was already retired (DEPOSIT_ADDRESS_RETIRED). It never executes and is not returned automatically. It is handled only through support-assisted recovery, and it is potentially unrecoverable. The broker contacts Polyester broker support with the swap_id.",
         "ON_HOLD": "Held for review; it neither executes nor returns until released. A deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this disposition after Zipper's compliance team transferred its funds out (QuickSwap CLOSED).",
-        "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount but at least the source network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit. One never credited is returned directly, and direct_return reports that return."
+        "RETURN_ONLY": "Not accepted: it is returned to return_address and never executes. A deposit found ineligible after it was credited, such as a late deposit (LATE_DEPOSIT), one below min_deposit_amount but at least the source network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong asset or network (WRONG_ASSET), keeps credited_at and is returned from its credit. One never credited, such as one that reached the address after its one eligible deposit (DEPOSIT_ADDRESS_ALREADY_USED) or after it retired (DEPOSIT_ADDRESS_RETIRED), is returned directly, and direct_return reports that return; RETURN_ONLY alone does not confirm that the return completed."
       }
     },
     "polyester.rest.enum.swap.quickswap.v1.DepositReturnState": {
@@ -28342,9 +29534,9 @@
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
-        "RETURN_COMPLETED": "The return was sent to return_address; tx_hash is its transaction.",
-        "RETURN_HELD": "The return is held for review and is not sent until review releases it. The broker contacts Polyester broker support with the swap_id.",
-        "RETURN_PENDING": "The return is queued or being sent."
+        "RETURN_COMPLETED": "The return reached return_address and is final on its network; tx_hash is its transaction. Terminal: the return never changes state again.",
+        "RETURN_HELD": "The return is held and is not sent automatically: it was not possible (for example no return address, or the funds are no longer at the deposit address), awaits review, or was settled with support's help. Review can release it, and it then becomes RETURN_PENDING. The broker contacts Polyester broker support with the swap_id.",
+        "RETURN_PENDING": "The return is queued or being sent. Its transaction may still be replaced, so none is reported yet."
       }
     },
     "polyester.rest.enum.swap.quickswap.v1.ExecutionProgress.SlicesUnavailableReason": {
@@ -28409,7 +29601,9 @@
         "AFFILIATE",
         "DEPOSIT_NETWORK",
         "WITHDRAWAL_NETWORK",
-        "REFERRAL"
+        "REFERRAL",
+        "RETURN_NETWORK",
+        "REFUND_NETWORK"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -28417,6 +29611,8 @@
         "BROKER": "Broker fee of one trading leg, the request's broker_bps of what the leg receives, credited to the broker's default vault. A two-leg route has one per leg; a bridge has one, on the credited amount, charged at payout.",
         "DEPOSIT_NETWORK": "Network fee withheld from the deposit before it is credited. A quote shows an estimate; the fee withheld is the network's fee when the deposit arrives; Deposit.network_fee reports the fee recorded.",
         "REFERRAL": "Referral commission of one trading leg: the referral partner's commission_bps (ReferralPricing) of what the leg receives, credited to the partner. It comes out of the broker fee and adds nothing to what the end user pays. Only a request with a referral_code has one; it never appears with AFFILIATE fees. On a bridge one, on the credited amount, charged at payout.",
+        "REFUND_NETWORK": "Estimated network fee withheld from a REFUND of unconverted intermediate asset on the refund route (refund_zipped_asset_id). Contingent: charged only if intermediate funds are refunded.",
+        "RETURN_NETWORK": "Estimated network fee withheld from a RETURN of untraded source funds on the source route. Contingent: charged only if funds are returned.",
         "SERVICE": "Service fee of one trading leg, credited to Polyester, in basis points of what the leg receives: the leg's pair fee, capped by any fee ceiling agreed with the broker. A two-leg route has one per leg. On a bridge, the one bridge fee, capped the same way, in basis points of the credited amount, charged at payout.",
         "WITHDRAWAL_NETWORK": "Estimated network fee for a withdrawal. The actual fee is charged at withdrawal time and reported on the withdrawal."
       }
@@ -28534,7 +29730,7 @@
         "DEPOSIT_ADDRESS_ALREADY_USED": "The address already accepted its one eligible deposit; this deposit is returned to return_address and never executes.",
         "DEPOSIT_ADDRESS_CONFLICT": "The QuickSwap could not be issued a deposit address and never gets one: it is EXPIRED without deposit_instructions, and nothing can be deposited to it. Create a new QuickSwap with a new idempotency key, and report the swap_id to Polyester broker support.",
         "DEPOSIT_ADDRESS_NOT_ISSUED": "The address had not been issued when this deposit was observed; it never executes.",
-        "DEPOSIT_ADDRESS_RETIRED": "The address was retired when this deposit was observed. The deposit is MANUAL_RECOVERY: it never executes, is not returned automatically, and is potentially unrecoverable.",
+        "DEPOSIT_ADDRESS_RETIRED": "The address was retired when this deposit was observed. The deposit is RETURN_ONLY: it never executes and is returned directly to return_address when it can be; direct_return reports the return.",
         "DEPOSIT_BELOW_MINIMUM": "The deposit is below the published min_deposit_amount, or its credit after the deposit network fee is below the smallest order the route's market accepts. It is not executed: it is returned to return_address, and the QuickSwap shows RETURNING and RETURNED with this reason. Only a deposit that reaches the source network's minimum deposit (AssetChainVariant.deposit_min_amount) is returned; one below it is not detected and never appears on the QuickSwap. A deposit that cannot be returned on the network it was received on is held (HELD with this reason); the broker contacts Polyester broker support with the swap_id.",
         "EXECUTION_DEADLINE_REACHED": "The execution deadline passed before all input executed; untraded funds are refunded or returned. Shown while EXECUTING once the deadline ended trading, and on the payout statuses that follow.",
         "FUNDING_WINDOW_ENDED": "The funding window ended without an eligible deposit.",
@@ -28635,15 +29831,32 @@
         "SOURCE_AMOUNT": "amount is the source amount the end user intends to deposit, in source token units."
       }
     },
-    "polyester.rest.enum.swap.quickswap.v1.StatsPeriod": {
+    "polyester.rest.enum.swap.quickswap.v1.StatsBreakdown": {
       "enum": [
-        "DAY",
-        "MONTH"
+        "ROUTE",
+        "VAULT",
+        "SOURCE_ASSET",
+        "DESTINATION_ASSET"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
-        "DAY": "A UTC day.",
-        "MONTH": "A UTC month."
+        "DESTINATION_ASSET": "By destination asset and network.",
+        "ROUTE": "By route: source and destination asset and network.",
+        "SOURCE_ASSET": "By source asset and network.",
+        "VAULT": "By the vault the QuickSwaps credited a broker or affiliate fee to. A QuickSwap that credited several vaults counts in each, so vault groups overlap."
+      }
+    },
+    "polyester.rest.enum.swap.quickswap.v1.StatsPeriod": {
+      "enum": [
+        "DAY",
+        "MONTH",
+        "HOUR"
+      ],
+      "type": "string",
+      "x-poly-enum-descriptions": {
+        "DAY": "A UTC day. The window is at most 366 days long.",
+        "HOUR": "A UTC hour. The window is at most 7 days long.",
+        "MONTH": "A UTC calendar month. The window is at most 3660 days long, so one request covers a broker's whole history."
       }
     },
     "polyester.rest.enum.swap.quickswap.v1.VaultLedgerEntryKind": {
@@ -28867,6 +30080,17 @@
         "REJECTED": "The cancellation was rejected; code says why."
       }
     },
+    "polyester.rest.enum.triggers.v1.CancelAllTriggersResponse.Status": {
+      "enum": [
+        "SUBMITTED",
+        "DRY_RUN"
+      ],
+      "type": "string",
+      "x-poly-enum-descriptions": {
+        "DRY_RUN": "The request only counted matching triggers and canceled nothing.",
+        "SUBMITTED": "Every matching trigger was stopped and its cancellation submitted."
+      }
+    },
     "polyester.rest.enum.triggers.v1.LadderDistribution": {
       "enum": [
         "LINEAR",
@@ -29054,7 +30278,7 @@
         "ACCOUNT_UNKNOWN": "The account associated with the trigger was not recognized.",
         "ATTACHED_LEGS_EXCEEDED": "The order carried more attached legs than allowed.",
         "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
-        "CHILD_QTY_RAISE_NOT_ALLOWED": "One of the trigger's child orders went past its planned quantity, so the trigger ended.",
+        "CHILD_QTY_RAISE_NOT_ALLOWED": "A ladder's fills would have gone past its total quantity, so the ladder ended. Each level can be raised up to its planned quantity, never above it.",
         "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserved its maximum number of client order IDs.",
         "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID was not valid.",
         "CONDITION_FLAGS_INVALID": "The trigger's condition flags were not valid.",

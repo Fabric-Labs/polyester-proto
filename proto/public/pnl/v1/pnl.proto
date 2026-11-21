@@ -1,0 +1,401 @@
+syntax = "proto3";
+
+package pnl.v1;
+
+import "buf/validate/validate.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "polyester/api/options.proto";
+
+option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/pnl/v1;pnlv1";
+option (gnostic.openapi.v3.document) = {
+  tags: [
+    {
+      name: "Profit and Loss"
+      description: "Realized and unrealized profit and loss, in USD, of the main account or one subaccount."
+    }
+  ]
+};
+
+// ProfitAndLossWindow is the period a PnL read covers. Every window ends now
+// and starts at 00:00 UTC of a day.
+enum ProfitAndLossWindow {
+  // Never valid in a request.
+  PROFIT_AND_LOSS_WINDOW_UNSPECIFIED = 0;
+  // Since 00:00 UTC today.
+  PROFIT_AND_LOSS_WINDOW_TODAY = 1;
+  // Since 00:00 UTC six days ago: today and the 6 days before it.
+  PROFIT_AND_LOSS_WINDOW_DAYS_7 = 2;
+  // Since 00:00 UTC 29 days ago: today and the 29 days before it.
+  PROFIT_AND_LOSS_WINDOW_DAYS_30 = 3;
+  // Since 00:00 UTC of the day of the account's first trade or transfer.
+  PROFIT_AND_LOSS_WINDOW_LIFETIME = 4;
+}
+
+// ProfitAndLossProduct is the trading product a PnL figure belongs to.
+enum ProfitAndLossProduct {
+  // Every product. In a response, never returned.
+  PROFIT_AND_LOSS_PRODUCT_UNSPECIFIED = 0;
+  // Spot trading.
+  PROFIT_AND_LOSS_PRODUCT_SPOT = 1;
+}
+
+// ProfitAndLossNotice qualifies the figures of a reply. A figure is never
+// reported as zero for want of a price: it is omitted, or a notice says what
+// it leaves out.
+enum ProfitAndLossNotice {
+  // Never returned.
+  PROFIT_AND_LOSS_NOTICE_UNSPECIFIED = 0;
+  // No USD price was available at the time of some trades or transfers, so
+  // their effect is not in the USD figures. Their quantities still count.
+  PROFIT_AND_LOSS_NOTICE_PRICE_UNAVAILABLE = 1;
+  // A current or period-start price is not available yet for some holdings:
+  // their unrealized PnL, and every figure that includes it, is omitted.
+  PROFIT_AND_LOSS_NOTICE_MARK_UNAVAILABLE = 2;
+  // Some balance changes have an unrecognized reason and are not counted.
+  PROFIT_AND_LOSS_NOTICE_UNCLASSIFIED_TRANSFER = 3;
+  // Some sales exceeded the quantity PnL knows the account held.
+  PROFIT_AND_LOSS_NOTICE_QUANTITY_SHORTFALL = 4;
+  // The account's equity at a day's start or end is not available, so the
+  // equity figures and the returns that need them are omitted.
+  PROFIT_AND_LOSS_NOTICE_EQUITY_UNAVAILABLE = 5;
+  // No USD price was available for some deposits, withdrawals or transfers,
+  // so the day's net flow and the returns that need it are omitted.
+  PROFIT_AND_LOSS_NOTICE_FLOW_UNVALUED = 6;
+  // Fewer than 7 daily returns are available in the period, so the Sharpe
+  // ratio is omitted. return_days says how many there are.
+  PROFIT_AND_LOSS_NOTICE_SHARPE_INSUFFICIENT_DAYS = 7;
+}
+
+// MarketProfitAndLoss is the realized side of one spot market in a period.
+message MarketProfitAndLoss {
+  // Market of the trades.
+  uint32 symbol_id = 1;
+  // Product of the market.
+  ProfitAndLossProduct product = 2;
+  // Realized PnL in USD of the period's trades, after their fees: each sale
+  // realizes its proceeds minus the average cost of what it sold, and each
+  // fee is a realized expense. Signed base-10 decimal string.
+  string realized_pnl_usd = 3;
+  // Fees paid in the period, net of rebates received, in USD. Signed base-10
+  // decimal string: negative when rebates exceed fees.
+  string fees_usd = 4;
+  // Traded volume in USD: execution price times quantity, valued at the
+  // execution time. Non-negative base-10 decimal string.
+  string volume_usd = 5;
+  // Fills of the account in the market in the period.
+  uint64 trade_count = 6;
+}
+
+// HoldingProfitAndLoss is one asset the account holds now.
+message HoldingProfitAndLoss {
+  // Asset ID.
+  uint32 asset_id = 1;
+  // Quantity held, in whole units of the asset: position_quantity =
+  // quantity with a known cost plus untracked_quantity. Non-negative base-10
+  // decimal string.
+  string position_quantity = 2;
+  // Quantity whose cost is unknown, such as deposited coins, in whole units
+  // of the asset. It never counts toward PnL. Non-negative base-10 decimal
+  // string.
+  string untracked_quantity = 3;
+  // USD cost of the quantity with a known cost: what it cost when acquired,
+  // fees in the asset included. Non-negative base-10 decimal string.
+  string cost_usd = 4;
+  // Average entry price in USD per unit: cost_usd divided by the quantity with
+  // a known cost. Omitted when no quantity has a known cost.
+  optional string entry_price_usd = 5;
+  // Current USD price per unit used for unrealized PnL. Omitted when not
+  // available.
+  optional string mark_price_usd = 6;
+  // Unrealized PnL in USD: the quantity with a known cost valued at
+  // mark_price_usd, minus cost_usd. Signed base-10 decimal string. Omitted
+  // when mark_price_usd is.
+  optional string unrealized_pnl_usd = 7;
+}
+
+// ProductProfitAndLoss is the PnL of one product in the period.
+message ProductProfitAndLoss {
+  // Product.
+  ProfitAndLossProduct product = 1;
+  // Realized PnL in USD of the product's trades in the period, after fees.
+  // Signed base-10 decimal string.
+  string realized_pnl_usd = 2;
+  // Fees paid net of rebates in USD. Signed base-10 decimal string.
+  string fees_usd = 3;
+  // Traded volume in USD. Non-negative base-10 decimal string.
+  string volume_usd = 4;
+}
+
+// GetProfitAndLossRequest selects the account and period.
+message GetProfitAndLossRequest {
+  // Optional public subaccount ID. When omitted, a session or main-account
+  // API key reads the main account together with every subaccount it owns,
+  // and a subaccount API key reads its own subaccount. A main-account API key
+  // may name a subaccount its main account owns.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Period to report.
+  ProfitAndLossWindow window = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // Optional product filter; PROFIT_AND_LOSS_PRODUCT_UNSPECIFIED means every
+  // product.
+  ProfitAndLossProduct product = 3 [(buf.validate.field).enum.defined_only = true];
+  // Optional market filter for markets; 0 means every market. Totals and
+  // holdings are not filtered by market.
+  uint32 symbol_id = 4;
+}
+
+// GetProfitAndLossResponse is the account's PnL over the period.
+message GetProfitAndLossResponse {
+  // Start of the period (UTC), inclusive.
+  google.protobuf.Timestamp window_start = 1;
+  // When the figures were last published (UTC). Trades and transfers settled
+  // shortly before may not be included yet.
+  google.protobuf.Timestamp as_of = 2;
+  // Time of the prices that value holdings now (UTC): the close of the latest
+  // complete minute.
+  google.protobuf.Timestamp mark_time = 3;
+  // PnL in USD over the period: realized_pnl_usd plus the change in
+  // unrealized PnL from the period's start to now, with deposits,
+  // withdrawals and transfers neutral. Signed base-10 decimal string.
+  // Omitted when a price it needs is not available.
+  optional string pnl_usd = 4;
+  // Realized PnL in USD of the period's trades, after fees. Signed base-10
+  // decimal string.
+  string realized_pnl_usd = 5;
+  // Change in unrealized PnL in USD from the period's start to now, net of
+  // transfers in and out. Signed base-10 decimal string. Omitted when a
+  // price it needs is not available.
+  optional string unrealized_pnl_change_usd = 6;
+  // Unrealized PnL in USD of the holdings now. Signed base-10 decimal
+  // string. Omitted when a price it needs is not available.
+  optional string unrealized_pnl_usd = 7;
+  // Fees paid in the period net of rebates, in USD. Signed base-10 decimal
+  // string.
+  string fees_usd = 8;
+  // Traded volume in the period, in USD. Non-negative base-10 decimal
+  // string.
+  string volume_usd = 9;
+  // PnL by product.
+  repeated ProductProfitAndLoss products = 10;
+  // Realized PnL by market, ordered by symbol_id.
+  repeated MarketProfitAndLoss markets = 11;
+  // Assets held now, ordered by asset_id.
+  repeated HoldingProfitAndLoss holdings = 12;
+  // What the figures leave out, if anything.
+  repeated ProfitAndLossNotice notices = 13;
+}
+
+// DailyProfitAndLoss is one UTC day of an account.
+message DailyProfitAndLoss {
+  // The day, at 00:00 UTC.
+  google.protobuf.Timestamp day = 1;
+  // PnL in USD of the day: realized_pnl_usd plus the change in unrealized
+  // PnL from the previous day's close to this day's close, with transfers
+  // neutral. Signed base-10 decimal string. Omitted when a price it needs is
+  // not available.
+  optional string pnl_usd = 2;
+  // Realized PnL in USD of the day's trades, after fees. Signed base-10
+  // decimal string.
+  string realized_pnl_usd = 3;
+  // Unrealized PnL in USD of the holdings at the day's close. Signed base-10
+  // decimal string. Omitted when a price it needs is not available, as for
+  // today before it closes.
+  optional string unrealized_pnl_at_close_usd = 4;
+  // Fees paid in the day net of rebates, in USD. Signed base-10 decimal
+  // string.
+  string fees_usd = 5;
+  // Traded volume in the day, in USD. Non-negative base-10 decimal string.
+  string volume_usd = 6;
+  // Fills of the account in the day.
+  uint64 trade_count = 7;
+  // What the day's figures leave out, if anything.
+  repeated ProfitAndLossNotice notices = 8;
+  // Equity in USD at 00:00 UTC that starts the day: every asset the account
+  // owns, funds reserved by open orders and pending withdrawals included,
+  // valued at the price at that time. It equals the previous day's
+  // end_equity_usd. Non-negative base-10 decimal string. Omitted with notice
+  // EQUITY_UNAVAILABLE when a price it needs is not available, or after a
+  // day with notice UNCLASSIFIED_TRANSFER or QUANTITY_SHORTFALL.
+  optional string start_equity_usd = 9;
+  // Equity in USD at 00:00 UTC that ends the day, valued as
+  // start_equity_usd. Omitted as start_equity_usd is, and for today until
+  // the day closes.
+  optional string end_equity_usd = 10;
+  // Net external flows of the day in USD: deposits and transfers in, minus
+  // withdrawals and transfers out, each valued at the USD price when it
+  // settled. Transfers between the main account and its own subaccounts
+  // count for a single subaccount and cancel out for the main account.
+  // Signed base-10 decimal string. Omitted when a price it needs is not
+  // available.
+  optional string net_flow_usd = 11;
+}
+
+// ListDailyProfitAndLossRequest selects the account and days.
+message ListDailyProfitAndLossRequest {
+  // Optional public subaccount ID, selected as for
+  // GetProfitAndLossRequest.subaccount_id.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // First day (UTC), inclusive: 00:00 UTC of a day.
+  google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
+  // Day after the last one (UTC), exclusive: 00:00 UTC of a day, at most 366
+  // days after start_time.
+  google.protobuf.Timestamp end_time = 3 [(buf.validate.field).required = true];
+  // Maximum days to return; 0 means 31. At most 366.
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 366];
+  // Opaque keyset cursor from a previous response. The cursor is exclusive and
+  // bound to the authenticated account, the subaccount selector, start_time
+  // and end_time.
+  string page_token = 5 [(buf.validate.field).string.max_len = 512];
+}
+
+// ListDailyProfitAndLossResponse is a page of days, oldest first. Every day
+// of the range is listed, days without activity included.
+message ListDailyProfitAndLossResponse {
+  // Days, oldest first.
+  repeated DailyProfitAndLoss days = 1;
+  // Opaque cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2 [(buf.validate.field).string.max_len = 512];
+  // When the figures were last published (UTC). Trades and transfers settled
+  // shortly before may not be included yet.
+  google.protobuf.Timestamp as_of = 3;
+}
+
+// GetTradingStatisticsRequest selects the account and period.
+message GetTradingStatisticsRequest {
+  // Optional public subaccount ID, selected as for
+  // GetProfitAndLossRequest.subaccount_id.
+  optional fixed64 subaccount_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Period to report.
+  ProfitAndLossWindow window = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // Optional product filter; PROFIT_AND_LOSS_PRODUCT_UNSPECIFIED means every
+  // product.
+  ProfitAndLossProduct product = 3 [(buf.validate.field).enum.defined_only = true];
+  // Optional market filter; 0 means every market.
+  uint32 symbol_id = 4;
+}
+
+// GetTradingStatisticsResponse summarizes the account's trading in the
+// period.
+message GetTradingStatisticsResponse {
+  // Start of the period (UTC), inclusive.
+  google.protobuf.Timestamp window_start = 1;
+  // When the figures were last published (UTC). Trades settled shortly
+  // before may not be included yet.
+  google.protobuf.Timestamp as_of = 2;
+  // Fills of the account in the period.
+  uint64 trade_count = 3;
+  // Traded volume in USD. Non-negative base-10 decimal string.
+  string volume_usd = 4;
+  // Fees paid net of rebates in USD. Signed base-10 decimal string.
+  string fees_usd = 5;
+  // Realized PnL in USD of the period's trades, after fees. Signed base-10
+  // decimal string.
+  string realized_pnl_usd = 6;
+  // What the figures leave out, if anything.
+  repeated ProfitAndLossNotice notices = 7;
+  // Time-weighted return in percent over closed days only: for DAYS_7 and
+  // DAYS_30, the 7 or 30 closed UTC days ending at the latest 00:00 whose
+  // prices are final; every closed day for LIFETIME; none for TODAY. The daily returns are compounded, so
+  // deposits and withdrawals do not count as gains or losses. A day's return is (end - start - flow) / (start + flow / 2)
+  // of its equity and net flow; a day that starts with no equity starts at
+  // its first deposit, with return (end - flow) / flow. Signed base-10
+  // decimal string, such as "1.25" for 1.25%. The return figures cover the
+  // whole account, whatever symbol_id and product select. Omitted when a
+  // day's equity or net flow is not available, or when the period has no
+  // closed day.
+  optional string return_pct = 8;
+  // Largest fall in percent of the compounded return from a previous peak,
+  // at day closes. Non-negative base-10 decimal string. Omitted as
+  // return_pct is.
+  optional string max_drawdown_pct = 9;
+  // Annualized Sharpe ratio of the daily returns: their mean divided by
+  // their sample standard deviation, times the square root of 365, with no
+  // risk-free rate. Signed base-10 decimal string. Omitted with notice
+  // SHARPE_INSUFFICIENT_DAYS for fewer than 7 daily returns; omitted also
+  // when the returns do not vary, or as return_pct is.
+  optional string sharpe = 10;
+  // Daily returns the return figures are based on: the closed days of their
+  // period from the account's first deposit on. Today never counts.
+  uint32 return_days = 11;
+}
+
+// ProfitAndLossService reports the profit and loss of the main account or one
+// subaccount, in USD. Spot PnL uses the weighted average cost of each asset:
+// buying raises the cost of the holding, selling realizes the proceeds minus
+// the average cost of what was sold, and every fee is a realized expense.
+// Every trade is valued with the USD price at its execution time. Deposits,
+// withdrawals and transfers are never PnL: deposited coins have no known
+// cost, and a transfer between the main account and its subaccounts carries
+// its cost along.
+//
+// Figures follow settled trades and transfers within seconds; as_of says when
+// they were last published. Every read needs the READ_PNL action, which every subaccount role and
+// every subaccount's read floor include; an API key needs it in its policy.
+service ProfitAndLossService {
+  option (polyester.api.docs_group) = "account";
+
+  // Get the account's PnL over a period, by product and market, and its
+  // current holdings with their entry price and unrealized PnL.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: the window or subaccount is invalid.
+  // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
+  // - UNAVAILABLE: retry the same request.
+  rpc GetProfitAndLoss(GetProfitAndLossRequest) returns (GetProfitAndLossResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/pnl"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Profit and Loss"
+      description: "Get realized and unrealized PnL in USD over a period, by product and market, with current holdings."
+      tags: "Profit and Loss"
+    };
+  }
+
+  // List the account's PnL per UTC day, oldest first, with its equity at the
+  // day's start and end and its net external flows.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: the days, limit, page token or subaccount are invalid.
+  // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
+  // - UNAVAILABLE: retry the same request.
+  rpc ListDailyProfitAndLoss(ListDailyProfitAndLossRequest) returns (ListDailyProfitAndLossResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/pnl/daily"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Daily Profit and Loss"
+      description: "List realized PnL, closing unrealized PnL, fees, volume, equity and net external flows per UTC day, oldest first."
+      tags: "Profit and Loss"
+    };
+  }
+
+  // Get the account's trading statistics over a period: trades, volume,
+  // fees and realized PnL, with the return, maximum drawdown and Sharpe
+  // ratio of its closed days.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: the window or subaccount is invalid.
+  // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
+  // - UNAVAILABLE: retry the same request.
+  rpc GetTradingStatistics(GetTradingStatisticsRequest) returns (GetTradingStatisticsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {get: "/v1/pnl/statistics"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Trading Statistics"
+      description: "Get trade count, volume, fees and realized PnL in USD over a period, with its time-weighted return, maximum drawdown and Sharpe ratio."
+      tags: "Profit and Loss"
+    };
+  }
+}

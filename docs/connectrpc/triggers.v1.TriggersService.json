@@ -71,6 +71,46 @@
           }
         },
         {
+          "name": "CancelAllTriggers",
+          "path": "triggers.v1.TriggersService/CancelAllTriggers",
+          "requestType": "triggers.v1.CancelAllTriggersRequest",
+          "responseType": "triggers.v1.CancelAllTriggersResponse",
+          "summary": "Cancel All Triggers",
+          "doc": "Cancel all of the account's triggers that match the filters (symbols,\n side and trigger types) in one request, without canceling any order.\n Unless dry_run is set, what it cancels is fixed when its request_id is\n first accepted: every matching trigger created before that, and none\n created after it. Each ends canceled with reason\n TRIGGER_CANCEL_REASON_CANCEL_ALL and releases its reserved funds, and\n none places an order after the response. Its open orders are canceled\n with it, as CancelTrigger cancels them: a TWAP's working slice, a\n ladder's open levels, and the working exit of an attached take-profit,\n stop-loss or trailing leg. An order that a stop already placed when it\n fired is a plain order and stays open; so does the parent order of\n canceled attached legs, which then has no protection left. Use\n OrdersService.CancelAllOrders for orders; its `include_triggers` cancels\n orders and triggers in one request.\n\n Every request counts 10 against the account's cancel rate limit, as a\n CancelAllOrders does, however many triggers it cancels: a dry run and a\n retry with the same request_id count the same. A retry with the same\n request_id and criteria\n within two minutes returns the original outcome and cancels nothing\n again; the same request_id with other criteria is rejected with\n ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE. A rejected request, or one\n whose outcome is unknown, is no barrier: retry it with the same\n request_id, or list the triggers before relying on it.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token",
+            "api_key"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "triggers.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "dryRun": false,
+              "requestId": "request_01J0EXAMPLE",
+              "side": "BUY",
+              "subaccountId": "6789012345678",
+              "symbolIds": [
+                1
+              ],
+              "triggerTypes": [
+                "STOP_LOSS"
+              ]
+            },
+            "response": {
+              "matchedTriggers": 1,
+              "status": "SUBMITTED",
+              "ts": "2025-01-01T00:00:00Z",
+              "tsNs": "1735689600000000000"
+            }
+          }
+        },
+        {
           "name": "CancelOco",
           "path": "triggers.v1.TriggersService/CancelOco",
           "requestType": "triggers.v1.CancelOcoRequest",
@@ -108,7 +148,7 @@
           "requestType": "triggers.v1.CancelTriggerRequest",
           "responseType": "triggers.v1.CancelTriggerResponse",
           "summary": "Cancel Trigger",
-          "doc": "Cancel a trigger: a standalone stop-loss, take-profit, trailing stop,\n TWAP or ladder, or an order's attached leg. Canceling a TWAP or a ladder\n also cancels its open child orders.\n OrdersService.CancelAllOrders and the dead-man switch\n (OrdersService.CancelAllAfter) cancel open orders only, never triggers:\n after either, armed stops and running TWAPs can still place orders. To\n stop them, cancel each live trigger with this method; ListTriggers lists\n them.\n A trigger that has ended (completed, canceled or failed) answers a\n cancel with ERROR_CODE_TRIGGER_STATUS_INVALID for at least 60 s after it\n ends, including a repeat of a cancel that succeeded and a cancel retried\n after a timeout: treat it as already done, and read the trigger to see\n how it ended. After that it may answer ERROR_CODE_TRIGGER_NOT_FOUND\n instead, which then means the same. Pausing, resuming or modifying an\n ended trigger answers the same way. A trigger ID that names none of the\n caller's triggers returns ERROR_CODE_TRIGGER_NOT_FOUND. Cancelling\n either leg of an OCO created with CreateOco, a trigger with an\n order_list_id, cancels both. Cancelling one attached take-profit or stop\n leg of an order, a trigger with a parent_order_id, ends only that leg,\n whether or not the order's legs are oco: the other leg stays active and\n keeps protecting the position.",
+          "doc": "Cancel a trigger: a standalone stop-loss, take-profit, trailing stop,\n TWAP or ladder, or an order's attached leg. Canceling a TWAP or a ladder\n also cancels its open child orders.\n To cancel many triggers in one request, use CancelAllTriggers, which\n cancels every trigger matching symbols, side and trigger types and no\n order. OrdersService.CancelAllOrders and the dead-man switch\n (OrdersService.CancelAllAfter) cancel triggers only with\n `include_triggers`; without it, armed stops and running TWAPs can still\n place orders after either.\n A trigger that has ended (completed, canceled or failed) answers a\n cancel with ERROR_CODE_TRIGGER_STATUS_INVALID for at least 60 s after it\n ends, including a repeat of a cancel that succeeded and a cancel retried\n after a timeout: treat it as already done, and read the trigger to see\n how it ended. After that it may answer ERROR_CODE_TRIGGER_NOT_FOUND\n instead, which then means the same. Pausing, resuming or modifying an\n ended trigger answers the same way. A trigger ID that names none of the\n caller's triggers returns ERROR_CODE_TRIGGER_NOT_FOUND. Cancelling\n either leg of an OCO created with CreateOco, a trigger with an\n order_list_id, cancels both. Cancelling one attached take-profit or stop\n leg of an order, a trigger with a parent_order_id, ends only that leg,\n whether or not the order's legs are oco: the other leg stays active and\n keeps protecting the position.",
           "tags": [
             "trading"
           ],
@@ -244,7 +284,7 @@
           "requestType": "triggers.v1.GetTriggerRequest",
           "responseType": "triggers.v1.GetTriggerResponse",
           "summary": "Get Trigger",
-          "doc": "Get a trigger by ID. Costs one unit of the root account's trading read\n limit.",
+          "doc": "Get a trigger by ID. Costs one unit of the account's trading read limit.",
           "tags": [
             "trading"
           ],
@@ -306,7 +346,7 @@
           "requestType": "triggers.v1.ListTriggerEventsRequest",
           "responseType": "triggers.v1.ListTriggerEventsResponse",
           "summary": "List Trigger Events",
-          "doc": "List trigger events (append-only history). A trigger the caller cannot\n read (no such trigger, another account's, or one outside the selected\n sub-account) answers NOT_FOUND, as GetTrigger does. A trigger the caller\n can read that has no event yet answers an empty list. Costs two units of\n the root account's trading read limit per 100 rows the limit asks for,\n rounded up.",
+          "doc": "List trigger events (append-only history). A trigger the caller cannot\n read (no such trigger, another account's, or one outside the selected\n sub-account) answers NOT_FOUND, as GetTrigger does. A trigger the caller\n can read that has no event yet answers an empty list. Costs two units of\n the account's trading read limit per 100 rows the limit asks for,\n rounded up.",
           "tags": [
             "trading"
           ],
@@ -353,7 +393,7 @@
           "requestType": "triggers.v1.ListTriggersRequest",
           "responseType": "triggers.v1.ListTriggersResponse",
           "summary": "List Triggers",
-          "doc": "List triggers for a sub-account with optional filters. Costs one unit of\n the root account's trading read limit per 100 rows the limit asks for,\n rounded up.",
+          "doc": "List triggers for a sub-account with optional filters. Costs one unit of\n the account's trading read limit per 100 rows the limit asks for,\n rounded up.",
           "tags": [
             "trading"
           ],

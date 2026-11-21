@@ -98,7 +98,7 @@
                   "type": "string"
                 },
                 "fundingRevision": {
-                  "description": "Opaque monotonic revision for the funding value. Higher means newer; zero means no funding state has been observed.",
+                  "description": "Opaque monotonic revision for the funding value. Higher means newer; zero means no funding state has been observed. Trading values have no revision: their position is (trading_epoch, trading_sequence).",
                   "pattern": "^[0-9]+$",
                   "type": "string"
                 },
@@ -115,11 +115,6 @@
                   "description": "Trading balance as a decimal string in whole units of the asset, for example '1250.5'.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
-                },
-                "tradingRevision": {
-                  "description": "Opaque monotonic revision for the atomic trading, reserved, and available values. Higher means newer; zero means no trading state has been observed.",
-                  "pattern": "^[0-9]+$",
-                  "type": "string"
                 }
               },
               "required": [
@@ -128,16 +123,33 @@
                 "fundingRevision",
                 "reserved",
                 "symbol",
-                "trading",
-                "tradingRevision"
+                "trading"
               ],
               "type": "object"
             },
             "type": "array"
+          },
+          "tradingAppliedThroughTsNs": {
+            "description": "Every Trading transfer of the account whose tsNs is at or below this value, in Unix nanoseconds as a decimal string, is applied in these balances: a receipt within tradingEpoch.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "tradingEpoch": {
+            "description": "Trading numbering the Trading values are in, an unsigned 64-bit integer as a decimal string. It changes when the numbering restarts: then reload. Compare it only for equality. '0' with tradingSequence '0' when the account has no Trading balances yet.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "tradingSequence": {
+            "description": "Trading sequence the Trading values are at within tradingEpoch, as a decimal string. Apply the balance stream's Trading updates from tradingSequence + 1 on.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
           }
         },
         "required": [
-          "balances"
+          "balances",
+          "tradingAppliedThroughTsNs",
+          "tradingEpoch",
+          "tradingSequence"
         ],
         "type": "object"
       },
@@ -584,6 +596,11 @@
                 "transferId": {
                   "description": "Stable transfer identifier, an unsigned 128-bit integer as a decimal string. Both legs of a transfer share it; with account_code and is_debit it identifies this row.",
                   "type": "string"
+                },
+                "tsNs": {
+                  "description": "Exact transfer timestamp in Unix nanoseconds, as a decimal string. timestamp is this value divided by 1,000, rounded down.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
                 }
               },
               "required": [
@@ -598,7 +615,8 @@
                 "source",
                 "timestamp",
                 "transferCode",
-                "transferId"
+                "transferId",
+                "tsNs"
               ],
               "type": "object"
             },
@@ -674,6 +692,7 @@
           "trading_to_funding",
           "trading_withdraw_reserve",
           "funding_user_transfer",
+          "funding_opening_balance",
           "trading_withdraw_request_fee",
           "trading_withdraw_fee_leg",
           "quickswap_polyester_fee",
@@ -690,6 +709,7 @@
           "deposit": "External deposit into a funding account.",
           "fee_refill": "Funds transferred from the fee treasury's trading account to replenish fee funds.",
           "fee_sweep": "Collected fees transferred to the fee treasury's trading account.",
+          "funding_opening_balance": "Opening balance of a funding account: the balance it held on Polyester Chain when the account's transfer history starts, credited from a system account.",
           "funding_to_trading": "Funding-to-trading user bucket transfer.",
           "funding_user_transfer": "Funding user-to-user transfer.",
           "internal_batch": "One leg of an all-or-nothing batch of internal transfers between Trading accounts: credited together with the batch's other legs. Legs of one batch share its batch reference.",
@@ -752,7 +772,7 @@
   "paths": {
     "/v1/balances": {
       "get": {
-        "description": "Retrieve the latest balances for an account. Supports optional subaccount scoping and returns asset symbols with decimal amounts.",
+        "description": "Retrieve the latest balances for an account. Supports optional subaccount scoping and returns asset symbols with decimal amounts. The answer reflects every balance update published before the call began, and its Trading values are one atomic cut at the position it returns (tradingEpoch, tradingSequence); when it cannot answer so yet, the call answers 503 and can be retried with a short backoff. Each call costs 1 unit of the trading_read rate-limit class.",
         "operationId": "LedgerReadService_GetBalances",
         "parameters": [
           {
@@ -779,10 +799,12 @@
                       "fundingRevision": "1",
                       "reserved": "18.446744073709551617",
                       "symbol": "USDT",
-                      "trading": "18.446744073709551617",
-                      "tradingRevision": "1"
+                      "trading": "18.446744073709551617"
                     }
-                  ]
+                  ],
+                  "tradingAppliedThroughTsNs": "1735689600000000000",
+                  "tradingEpoch": "1",
+                  "tradingSequence": "1"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/polyester.rest.LedgerReadService_GetBalances.Response"
@@ -1305,7 +1327,8 @@
                       },
                       "timestamp": "1",
                       "transferCode": "DEPOSIT",
-                      "transferId": "9155001234569"
+                      "transferId": "9155001234569",
+                      "tsNs": "1735689600000000000"
                     }
                   ]
                 },

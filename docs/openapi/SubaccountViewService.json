@@ -191,7 +191,7 @@
           },
           "purpose": {
             "$ref": "#/components/schemas/auth.v1.ApiKeyPurpose",
-            "description": "What the key is for. ASSISTANT keys are managed with SetAssistantKeys and\n are otherwise listed, updated and revoked like any key.",
+            "description": "What the key is for. ASSISTANT keys are managed with SetAssistantKeys and\n are otherwise listed, updated and revoked like any key. STRATEGY_BOT keys\n are managed only with SetStrategyBotAccess and EndStrategyBotAccess.",
             "title": "purpose"
           },
           "revision": {
@@ -207,6 +207,13 @@
             "$ref": "#/components/schemas/auth.v1.ApiKeyStatus",
             "description": "Current key status.",
             "title": "status"
+          },
+          "strategyBotId": {
+            "description": "Strategy bot the key trades for: the bot's public ID (opaque ID), the\n same bot_id strategies.v1 GetBot takes. Present only on a STRATEGY_BOT\n key.\n\nPublic ID, as a base58 string.",
+            "nullable": true,
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "title": "strategy_bot_id",
+            "type": "string"
           },
           "subaccountId": {
             "description": "Optional sub-account this key is scoped to (opaque ID; empty = root-level).\n\nPublic ID, as a base58 string.",
@@ -230,7 +237,8 @@
           "PURPOSE_UNSPECIFIED",
           "STANDARD",
           "ASSISTANT",
-          "ADMIN_KEY"
+          "ADMIN_KEY",
+          "STRATEGY_BOT"
         ],
         "title": "ApiKeyPurpose",
         "type": "string"
@@ -372,7 +380,9 @@
           "MANAGE_SUBACCOUNT_POLICIES",
           "READ_STRATEGIES",
           "DRAFT_STRATEGIES",
-          "PROPOSE_STRATEGY_DEPLOY"
+          "PROPOSE_STRATEGY_DEPLOY",
+          "READ_PNL",
+          "STOP_STRATEGIES"
         ],
         "title": "PolicyAction",
         "type": "string"
@@ -810,7 +820,7 @@
             "title": "funding"
           },
           "fundingRevision": {
-            "description": "Opaque monotonic revision for the funding value. Higher means newer; zero\n means no funding state has been observed.",
+            "description": "Opaque monotonic revision for the funding value. Higher means newer; zero\n means no funding state has been observed. Trading values have no\n revision: their position is (trading_epoch, trading_sequence).",
             "format": "int64",
             "title": "funding_revision",
             "type": [
@@ -827,15 +837,6 @@
             "$ref": "#/components/schemas/polyester.type.v1.U128",
             "description": "Trading balance at fixed 18-decimal ledger scale.",
             "title": "trading"
-          },
-          "tradingRevision": {
-            "description": "Opaque monotonic revision for the atomic trading, reserved, and available\n values. Higher means newer; zero means no trading state has been observed.",
-            "format": "int64",
-            "title": "trading_revision",
-            "type": [
-              "integer",
-              "string"
-            ]
           }
         },
         "title": "AssetBalance",
@@ -843,6 +844,7 @@
       },
       "ledger.read.v1.GetBalancesResponse": {
         "additionalProperties": false,
+        "description": "GetBalancesResponse is the account's balances with the position of its\n Trading values.\n\n The Trading values of every asset are one atomic cut: all are taken at the\n single position (trading_epoch, trading_sequence) the response names, never\n a mix of two positions, and never at a position older than one the balance\n stream already published. The Funding values carry their own\n funding_revision and are not part of that position.",
         "properties": {
           "balances": {
             "description": "One entry for every supported unified asset, including assets with zero\n balances. Sorted by available trading amount (highest first), then by\n asset symbol alphabetically.",
@@ -851,6 +853,33 @@
             },
             "title": "balances",
             "type": "array"
+          },
+          "tradingAppliedThroughTsNs": {
+            "description": "Every Trading transfer of the account whose ts_ns is at or below this\n value is applied in these balances, a receipt within trading_epoch.\n While a transfer of the account could not be applied, this value stays\n below it, until a later balance of that asset includes it; it never\n passes a transfer that is not applied. Nanoseconds since epoch (UTC).",
+            "format": "int64",
+            "title": "trading_applied_through_ts_ns",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "tradingEpoch": {
+            "description": "The Trading numbering the balances' Trading values are in. It changes\n when the numbering restarts: then reload. Compare it only for equality;\n its value has no order. Zero, with trading_sequence zero, when the\n account has no Trading balances yet.",
+            "format": "int64",
+            "title": "trading_epoch",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "tradingSequence": {
+            "description": "The Trading sequence the balances' Trading values are at, within\n trading_epoch: apply the balance stream's Trading updates from\n trading_sequence + 1 on (see BalanceUpdate).",
+            "format": "int64",
+            "title": "trading_sequence",
+            "type": [
+              "integer",
+              "string"
+            ]
           }
         },
         "title": "GetBalancesResponse",
@@ -1029,6 +1058,7 @@
                       "purpose": "STANDARD",
                       "revision": "1",
                       "status": "ACTIVE",
+                      "strategyBotId": "DPNi75PTZJd",
                       "subaccountId": "37E2o5r2qHk",
                       "updatedAt": "2025-01-01T00:00:00Z"
                     }
@@ -1053,10 +1083,12 @@
                         "trading": {
                           "hi": "1",
                           "lo": "1"
-                        },
-                        "tradingRevision": "1"
+                        }
                       }
-                    ]
+                    ],
+                    "tradingAppliedThroughTsNs": "1735689600000000000",
+                    "tradingEpoch": "1",
+                    "tradingSequence": "1"
                   },
                   "invites": [
                     {

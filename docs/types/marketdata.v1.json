@@ -720,7 +720,7 @@
             "name": "reference_ts_sec",
             "jsonName": "referenceTsSec",
             "number": 9,
-            "doc": "Reference candle series in columnar form (same ordering as ts_sec: oldest-first).\n Only populated when request.include_reference=true.",
+            "doc": "Reference candle series in columnar form (same ordering as ts_sec: oldest-first).\n Only populated when request.include_reference=true. Reference rows are\n always closed buckets, also with include_incomplete=true.",
             "repeated": true,
             "protoScalar": "uint64",
             "jsonType": "string",
@@ -797,6 +797,15 @@
             "repeated": true,
             "protoScalar": "string",
             "jsonType": "string"
+          },
+          {
+            "name": "is_closed",
+            "jsonName": "isClosed",
+            "number": 17,
+            "doc": "Closed-bucket flags, oldest-first and aligned with ts_sec: true when the\n bucket is closed; with include_incomplete=false every row is closed. With\n include_incomplete=true, only the current open candle, appended last, is\n false.",
+            "repeated": true,
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
@@ -1008,7 +1017,7 @@
             "name": "depth",
             "jsonName": "depth",
             "number": 3,
-            "doc": "Top-N levels per side included in each bucket. Every tier except\n DEPTH_5000, which is refused with INVALID_ARGUMENT.",
+            "doc": "Top-N levels per side that the returned chain replays. Every tier except\n DEPTH_5000, which is refused with INVALID_ARGUMENT.",
             "protoRef": "polyester.type.v1.DepthTier",
             "validate": {
               "required": true,
@@ -1427,7 +1436,7 @@
     {
       "name": "marketdata.v1.HeatmapDeltaBucket",
       "kind": "message",
-      "doc": "HeatmapDeltaBucket is one sparse update bucket containing both sides.",
+      "doc": "HeatmapDeltaBucket is one bucket's changes to the top-N view of both sides.\n A level that enters the top N during the bucket appears with its quantity,\n even when the bucket did not change it, for example after a better level\n was deleted. A level that leaves the top N appears with quantity zero, even\n when it still rests deeper in the book. Changes deeper than the top N are\n omitted.",
       "message": {
         "fields": [
           {
@@ -1443,14 +1452,14 @@
             "name": "bids",
             "jsonName": "bids",
             "number": 2,
-            "doc": "Sparse bid-side level changes in this bucket.",
+            "doc": "Changes to the top-N bid levels in this bucket.",
             "protoRef": "marketdata.v1.HeatmapDeltaLevels"
           },
           {
             "name": "asks",
             "jsonName": "asks",
             "number": 3,
-            "doc": "Sparse ask-side level changes in this bucket.",
+            "doc": "Changes to the top-N ask levels in this bucket.",
             "protoRef": "marketdata.v1.HeatmapDeltaLevels"
           },
           {
@@ -1486,14 +1495,14 @@
     {
       "name": "marketdata.v1.HeatmapDeltaChain",
       "kind": "message",
-      "doc": "HeatmapDeltaChain is the historical payload for all intervals.\n Reconstruct by applying deltas over base_keyframe.\n Deltas are ordered oldest-first by ts_sec.",
+      "doc": "HeatmapDeltaChain is the historical payload for all intervals.\n Reconstruct by applying deltas over base_keyframe, oldest first: set each\n listed level's quantity, and delete it when the quantity is zero. After each\n bucket the result is exactly the top-N levels per side of the requested\n depth and quantity mode, the same at every page limit. No further clipping\n is needed.\n - CLOSE: the order book at the bucket's close. It equals the base_keyframe\n   of a chain anchored at that bucket.\n - PEAK: each price's highest quantity during the bucket, among the prices\n   that held liquidity during it.",
       "message": {
         "fields": [
           {
             "name": "base_keyframe",
             "jsonName": "baseKeyframe",
             "number": 1,
-            "doc": "Full-book snapshot from which to apply the returned deltas.",
+            "doc": "Top-N order book from which to apply the returned deltas, from strictly\n before the first of them. In CLOSE mode it holds closing quantities. In\n PEAK mode it is only the starting point of the replay, not a bucket view:\n its quantities may differ between page limits, so do not render it as a\n bucket. A base advanced through stored buckets holds the peaks of its last\n bucket, and a base taken from a stored keyframe holds that keyframe's\n recorded peaks.",
             "protoRef": "marketdata.v1.HeatmapKeyframe"
           },
           {
@@ -1571,7 +1580,7 @@
     {
       "name": "marketdata.v1.HeatmapKeyframe",
       "kind": "message",
-      "doc": "HeatmapKeyframe is a full-book snapshot anchor.\n Best bid, best ask and mid preserve the raw prices where available. For older\n historical buckets without recorded raw prices, they use the reconstructed\n price bins instead.",
+      "doc": "HeatmapKeyframe is the order book at one time, limited to the requested\n depth: the top-N levels per side.\n Best bid, best ask and mid preserve the raw prices where available. For older\n historical buckets without recorded raw prices, they use the reconstructed\n price bins instead.",
       "message": {
         "fields": [
           {
@@ -1614,14 +1623,14 @@
             "name": "bids",
             "jsonName": "bids",
             "number": 5,
-            "doc": "Complete bid-side levels at the snapshot.",
+            "doc": "Top-N bid levels at the keyframe time.",
             "protoRef": "marketdata.v1.HeatmapLevels"
           },
           {
             "name": "asks",
             "jsonName": "asks",
             "number": 6,
-            "doc": "Complete ask-side levels at the snapshot.",
+            "doc": "Top-N ask levels at the keyframe time.",
             "protoRef": "marketdata.v1.HeatmapLevels"
           },
           {
@@ -1675,7 +1684,7 @@
     {
       "name": "marketdata.v1.HeatmapLiveBucket",
       "kind": "message",
-      "doc": "HeatmapLiveBucket is the canonical live payload for real-time heatmap updates.\n It represents the latest state of one bucket (open or finalized).",
+      "doc": "HeatmapLiveBucket is the canonical live payload for real-time heatmap updates.\n It represents the latest state of one bucket (open or finalized). A bucket\n can be published again after it was finalized, when later updates for it\n arrive: the new payload holds every update of the bucket and a higher\n book_seq_end. Keep the payload with the highest book_seq_end per ts_sec.\n Finalized buckets are delivered at least once: the same finalized payload\n can arrive more than once, for example after a service restart; keep the\n highest book_seq_end per ts_sec. Updates of a bucket still open are best\n effort; a later update or the final payload supersedes them. A market's\n buckets are published here only once the service projects the market\n live: a bucket that holds only earlier updates is history, available\n through GetOrderbookHeatmap and never published live.",
       "message": {
         "fields": [
           {
@@ -1713,7 +1722,7 @@
             "name": "is_final",
             "jsonName": "isFinal",
             "number": 4,
-            "doc": "True when this bucket is finalized; false for provisional updates to an\n open bucket.",
+            "doc": "True when this bucket is finalized; false for provisional updates to an\n open bucket. A finalized bucket can still be republished with a higher\n book_seq_end.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
