@@ -2487,7 +2487,7 @@
           "CANCEL_SCOPE_TOO_LARGE": "The cancel-all request named more than 100 symbols.",
           "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
           "CHILD_QTY_EXCEEDS_REMAINING": "The new quantity of a TWAP order's slice would leave more than the TWAP's remaining quantity. Nothing changed; a slice can be raised up to what the TWAP still has to execute.",
-          "CHILD_QTY_RAISE_NOT_ALLOWED": "The quantity of a trigger's child order or a ladder order can't be raised above its planned quantity. Nothing changed.",
+          "CHILD_QTY_RAISE_NOT_ALLOWED": "A ladder level or the exit order of a take-profit, stop-loss or trailing leg can't be raised above its cap. Nothing changed. A ladder level's cap is its planned quantity, even after the level was reduced. An exit order's cap is its current quantity: reducing an exit returns the reduced quantity to the legs that protect the position.",
           "CLIENT_LIST_ID_INVALID": "The OCO's client list ID is empty, longer than 36 characters, or has a character other than a letter, digit, period, underscore, colon, slash or hyphen. Answered by CreateOco and by the ListTriggers client_list_id filter. Nothing changed.",
           "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
           "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
@@ -2553,7 +2553,7 @@
           "ORDER_CREATE_OUTCOME_UNKNOWN": "The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or repeat the batch with the same request ID and payload within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice.",
           "ORDER_ID_CONFLICT": "The order identifier is held by a different, earlier order, so the request was not applied. Nothing changed.",
           "ORDER_LIMITS_UNAVAILABLE": "This market's order limits aren't set yet, so it can't take new orders.",
-          "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again.",
+          "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again. A modify that adds or changes an attached take-profit, stop-loss or trailing leg also gets this code while a cancel of triggers is ending the order's attached legs, which end together; retry it once they have ended.",
           "ORDER_MODIFY_OUTCOME_UNKNOWN": "The order modification was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch replacement, every item's outcome is unknown; read them back.",
           "ORDER_PLACEMENT_PENDING": "The placement of the order, or of the replacement an earlier replace created, has not been confirmed yet, so it cannot be modified. It may already rest on the book. An order event may already report the order WORKING before it can be modified; retry after a short backoff. A refresh that names the replacement order ID from a batch whose replace has not been confirmed yet gets this code. Retry as for ORDER_MODIFY_IN_PROGRESS.",
           "ORDER_REPAIRING": "This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.",
@@ -2835,7 +2835,7 @@
   "paths": {
     "/v1/orders/history": {
       "get": {
-        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination. While the current state of an order on the page is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than returning a stale state; retry the same request. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
+        "description": "Retrieve terminal order history for an account. Supports optional subaccount, trigger, symbol, side, status, and time-range filters with cursor pagination. While the current state of an order on the page is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than returning a stale state; retry the same request. Costs two units of the account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetOrderHistory",
         "parameters": [
           {
@@ -3110,7 +3110,7 @@
     },
     "/v1/orders/open": {
       "get": {
-        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination. While the current state of an order in scope is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than omitting the order or returning a stale state; retry the same request. Costs one unit of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
+        "description": "Retrieve non-terminal orders for an account. Supports optional subaccount, trigger, symbol, and side filters with cursor pagination. While the current state of an order in scope is temporarily unavailable, the call fails with a retryable 503 UNAVAILABLE rather than omitting the order or returning a stale state; retry the same request. Costs one unit of the account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetOpenOrders",
         "parameters": [
           {
@@ -3344,7 +3344,7 @@
     },
     "/v1/spot/orders/{order_id}": {
       "get": {
-        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. The order shows a fill as soon as it executes and its trades are recorded shortly after: executionsComplete is true once the trades through this generation, across every page, add up to the order's cumulative quantity, and false while a recent execution is still being recorded. Transfers are eventually consistent. Costs one unit of the root account's trading read limit.",
+        "description": "Retrieve order details with a bounded page of lineage trades through this generation and their transfers. Execution history defaults to enabled; use limit and pageToken to paginate, or includeExecutionHistory=false for state-only polling. The order shows a fill as soon as it executes and its trades are recorded shortly after: executionsComplete is true once the trades through this generation, across every page, add up to the order's cumulative quantity, and false while a recent execution is still being recorded. Transfers are eventually consistent. Costs one unit of the account's trading read limit.",
         "operationId": "OrdersReadService_GetOrder",
         "parameters": [
           {
@@ -3599,7 +3599,7 @@
     },
     "/v1/spot/trades": {
       "get": {
-        "description": "Retrieve per-user fills with account-bound keyset pagination. Omit optional filters to list the authenticated account's fills. orderId selects one physical order; lineageId selects the logical order across replacements. These filters are mutually exclusive. throughGeneration requires lineageId. Execution and order-state projections are eventually consistent. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
+        "description": "Retrieve per-user fills with account-bound keyset pagination. Omit optional filters to list the authenticated account's fills. orderId selects one physical order; lineageId selects the logical order across replacements. These filters are mutually exclusive. throughGeneration requires lineageId. Execution and order-state projections are eventually consistent. Costs two units of the account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "OrdersReadService_GetUserTrades",
         "parameters": [
           {

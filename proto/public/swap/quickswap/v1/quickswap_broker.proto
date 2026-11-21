@@ -7,6 +7,7 @@ import "chain/withdraw/v1/auto_withdraw.proto";
 import "gnostic/openapi/v3/annotations.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
+import "polyester/type/v1/u128.proto";
 import "swap/quickswap/v1/quickswap.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
@@ -654,45 +655,96 @@ message GetFeeTotalsResponse {
   repeated FeeTotal totals = 1;
 }
 
-// StatsPeriod is the UTC calendar period GetBrokerStats groups by.
+// StatsPeriod is the length of one GetBrokerStats bucket. Buckets are UTC
+// hours, days or calendar months.
 enum StatsPeriod {
   // No period; rejected.
   PERIOD_UNSPECIFIED = 0;
-  // A UTC day.
+  // A UTC day. The window is at most 366 days long.
   DAY = 1;
-  // A UTC month.
+  // A UTC calendar month. The window is at most 3660 days long, so one
+  // request covers a broker's whole history.
   MONTH = 2;
+  // A UTC hour. The window is at most 7 days long.
+  HOUR = 3;
+}
+
+// StatsBreakdown is what GetBrokerStats groups a broker's QuickSwaps by,
+// beside their totals.
+enum StatsBreakdown {
+  // No breakdown: the totals series only.
+  BREAKDOWN_UNSPECIFIED = 0;
+  // By route: source and destination asset and network.
+  ROUTE = 1;
+  // By the vault the QuickSwaps credited a broker or affiliate fee to. A
+  // QuickSwap that credited several vaults counts in each, so vault groups
+  // overlap.
+  VAULT = 2;
+  // By source asset and network.
+  SOURCE_ASSET = 3;
+  // By destination asset and network.
+  DESTINATION_ASSET = 4;
+}
+
+// StatsRoute is a route: the source and destination asset and network, as
+// AssetChainVariant.zipped_asset_id values from
+// GET /v1/chain/deposit-withdraw/config.
+message StatsRoute {
+  // Source asset and network.
+  uint32 source_zipped_asset_id = 1;
+  // Destination asset and network.
+  uint32 destination_zipped_asset_id = 2;
 }
 
 // GetBrokerStatsRequest reads the broker's QuickSwap activity in a time
-// window, per UTC day or month.
+// window, in buckets of one UTC hour, day or month, with an optional
+// breakdown.
 message GetBrokerStatsRequest {
   option (buf.validate.message).cel = {
     id: "get_broker_stats_request.window"
-    message: "end_time must be after start_time and at most 366 days later"
-    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= duration('8784h')"
+    message: "end_time must be after start_time, at most 7 days later for HOUR, 366 days for DAY and 3660 days for MONTH"
+    expression: "this.end_time > this.start_time && this.end_time - this.start_time <= (this.group_by == 3 ? duration('168h') : this.group_by == 1 ? duration('8784h') : duration('87840h'))"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_broker_stats_request.drill_down"
+    message: "a drill-down must name a group of the breakdown"
+    expression: "(!has(this.route) || this.breakdown == 1) && (!has(this.vault_account_id) || this.breakdown == 2) && (!has(this.source_zipped_asset_id) || this.breakdown == 3) && (!has(this.destination_zipped_asset_id) || this.breakdown == 4)"
   };
 
   // Broker name. A broker API key may name only its own broker.
   string broker = 1 [(buf.validate.field).string.pattern = "^[a-z0-9][a-z0-9_-]{0,62}$"];
-  // The period to group by.
+  // The bucket length.
   StatsPeriod group_by = 2 [
     (buf.validate.field).required = true,
     (buf.validate.field).enum.defined_only = true
   ];
   // Start of the window, inclusive. A window that starts or ends inside a
-  // period counts only the part of that period inside the window.
+  // bucket counts only the part of that bucket inside the window.
   google.protobuf.Timestamp start_time = 3 [(buf.validate.field).required = true];
-  // End of the window, exclusive, at most 366 days after start_time.
+  // End of the window, exclusive.
   google.protobuf.Timestamp end_time = 4 [(buf.validate.field).required = true];
-}
-
-// StatusCount is how many QuickSwaps are in one status.
-message StatusCount {
-  // The status.
-  QuickSwapStatus status = 1;
-  // QuickSwaps in it.
-  uint64 count = 2;
+  // The breakdown; unset for the totals series only.
+  StatsBreakdown breakdown = 5 [(buf.validate.field).enum.defined_only = true];
+  // One group of the breakdown to return with its per-bucket columns even
+  // when it is not among the 10 groups that get them, for a drill-down.
+  // A group with no activity in the window is returned at zero, after the
+  // groups with activity; it never takes one of the 10.
+  oneof drill_down {
+    // The route, for the ROUTE breakdown.
+    StatsRoute route = 6;
+    // Public sub-account ID of the vault, for the VAULT breakdown.
+    fixed64 vault_account_id = 7;
+    // The source asset and network, for the SOURCE_ASSET breakdown.
+    uint32 source_zipped_asset_id = 8;
+    // The destination asset and network, for the DESTINATION_ASSET
+    // breakdown.
+    uint32 destination_zipped_asset_id = 9;
+  }
+  // Also return the totals series' exact amounts per bucket and asset
+  // (BrokerStatsSeries.cell_bucket and the cell lists), for charts of one
+  // asset's amounts. They grow with the buckets times the assets, so leave
+  // this unset unless they are needed.
+  bool include_cells = 10;
 }
 
 // AssetVolume is a total amount in one asset.
@@ -752,44 +804,154 @@ message FeeSplit {
   uint64 unvalued_count = 10;
 }
 
-// BrokerStatsPeriod is a broker's QuickSwap activity in one UTC day or
-// month. A QuickSwap counts in the period it was created in, with its
-// current status, its credited deposit and its destination payout, so a
-// period's numbers keep moving until its QuickSwaps end. A fee counts in the
-// period it was charged in, as in GetFeeTotals, which can be later than the
-// period its QuickSwap was created in.
-message BrokerStatsPeriod {
-  // Start of the UTC day or month.
-  google.protobuf.Timestamp period_start = 1;
-  // QuickSwaps created in the period, inside the window.
-  uint64 created_count = 2;
-  // Those QuickSwaps by current status, in QuickSwapStatus number order;
-  // statuses with none are omitted. The counts total created_count.
-  repeated StatusCount statuses = 3;
-  // Deposits credited to those QuickSwaps and taken in for execution, per
-  // asset, in asset_id order: including a deposit later found ineligible
-  // and returned, excluding a deposit held for review before credit. Each
-  // deposit's USD value is fixed when it was taken in, as
-  // QuickSwap.deposited_value_usd.
-  repeated AssetVolume deposited = 4;
-  // Paid to the destination of those QuickSwaps whose DESTINATION
-  // withdrawal is FINALIZED, per asset, in asset_id order: after service,
-  // broker and affiliate fees, before the destination network fee. Each
-  // payout's USD value is fixed when it was requested, as
-  // QuickSwap.delivered_value_usd.
-  repeated AssetVolume delivered = 5;
-  // Fees charged to the broker's QuickSwaps in the period, per asset, in
-  // asset_id order. broker_fee plus affiliate_fee equals the GetFeeTotals
-  // total of the same window, period and asset.
-  repeated FeeSplit fees = 6;
+// BrokerStatsSeries is the activity of the broker's QuickSwaps, or of the
+// QuickSwaps a referral partner referred (GetReferralStats), or of one
+// group of them, in columns.
+//
+// A QuickSwap counts in the bucket it was created in, with its current
+// status, its credited deposit and its destination payout, so a bucket's
+// numbers keep moving until its QuickSwaps end. On the totals series a fee
+// counts in the bucket it was charged in, as in GetFeeTotals. On a group
+// series the fees charged to the group's QuickSwaps count in the bucket the
+// QuickSwap was created in.
+//
+// Deposited counts the deposits credited to the QuickSwaps and taken in for
+// execution: including a deposit later found ineligible and returned,
+// excluding a deposit held for review before credit, each valued in USD
+// when it was taken in, as QuickSwap.deposited_value_usd. Delivered counts
+// what was paid to the destination of the QuickSwaps whose DESTINATION
+// withdrawal is FINALIZED: after service, broker and affiliate fees, before
+// the destination network fee, each valued in USD when it was requested, as
+// QuickSwap.delivered_value_usd. A fee is valued in USD when it was charged.
+// Each value is fixed once, within minutes, and never repriced, so a past
+// bucket keeps its value.
+//
+// Amounts are exact, in base units of 18 decimals, each list parallel to
+// GetBrokerStatsResponse.asset_ids. USD values are scaled by 1e4 (4
+// decimals), summed exactly and then rounded down. A value without a USD
+// value counts in unvalued_count and is left out of the USD totals.
+message BrokerStatsSeries {
+  // What the series counts.
+  oneof grouping {
+    // All of the broker's (or referral partner's) QuickSwaps and fees.
+    // Always the first series.
+    bool totals = 1;
+    // The QuickSwaps of one route, for the ROUTE breakdown.
+    StatsRoute route = 2;
+    // Public sub-account ID of a vault, for the VAULT breakdown: the
+    // QuickSwaps that credited it a broker or affiliate fee. Its fees are
+    // the fees credited to the vault.
+    fixed64 vault_account_id = 3;
+    // The QuickSwaps of one source asset and network, for the SOURCE_ASSET
+    // breakdown.
+    uint32 source_zipped_asset_id = 4;
+    // The QuickSwaps of one destination asset and network, for the
+    // DESTINATION_ASSET breakdown.
+    uint32 destination_zipped_asset_id = 5;
+    // Every group without per-bucket columns, summed. Absent when every
+    // group has them.
+    bool others = 6;
+  }
+
+  // QuickSwaps created in the window.
+  uint32 created_count = 7;
+  // Those QuickSwaps by current status, indexed by QuickSwapStatus number;
+  // trailing zero counts are omitted. The counts total created_count.
+  repeated uint32 status_counts = 8;
+  // Deposited per asset, parallel to GetBrokerStatsResponse.asset_ids.
+  repeated polyester.type.v1.U128 deposited = 9;
+  // Delivered per asset, parallel to GetBrokerStatsResponse.asset_ids.
+  repeated polyester.type.v1.U128 delivered = 10;
+  // Fees per asset, every share together, parallel to
+  // GetBrokerStatsResponse.asset_ids.
+  repeated polyester.type.v1.U128 fees = 11;
+  // USD value of deposited, scaled by 1e4.
+  uint64 deposited_usd_q4 = 12;
+  // USD value of delivered, scaled by 1e4.
+  uint64 delivered_usd_q4 = 13;
+  // USD value of fees, scaled by 1e4.
+  uint64 fees_usd_q4 = 14;
+  // Deposits, payouts and fees summed above without a USD value, and so
+  // left out of the USD totals: from the last few minutes, not valued by a
+  // current price in time, or from before USD values existed.
+  uint32 unvalued_count = 15;
+
+  // Per-bucket columns, each GetBrokerStatsResponse.points long: set only on
+  // the totals series, the first 10 groups in GetBrokerStatsResponse.series
+  // order, the drill-down group and others; empty otherwise.
+  // QuickSwaps created per bucket.
+  repeated uint32 created = 16;
+  // Those QuickSwaps that are now COMPLETED, per bucket.
+  repeated uint32 completed = 17;
+  // USD value deposited per bucket, scaled by 1e4.
+  repeated uint64 deposited_usd = 18;
+  // USD value delivered per bucket, scaled by 1e4.
+  repeated uint64 delivered_usd = 19;
+  // USD value of the fees per bucket, scaled by 1e4.
+  repeated uint64 fees_usd = 20;
+  // Values without a USD value per bucket, as unvalued_count.
+  repeated uint32 unvalued = 21;
+
+  // Totals series only: the fees per bucket by who they credit, USD scaled
+  // by 1e4. Service fees, credited to Polyester.
+  repeated uint64 service_fee_usd = 22;
+  // Broker fees, credited to the broker's default vault.
+  repeated uint64 broker_fee_usd = 23;
+  // Affiliate fees, credited to the broker's affiliate vaults.
+  repeated uint64 affiliate_fee_usd = 24;
+  // Referral commissions, credited to referral partners rather than to a
+  // vault of the broker.
+  repeated uint64 referral_fee_usd = 25;
+
+  // Totals series only, with GetBrokerStatsRequest.include_cells: the exact
+  // amounts per bucket and asset, as sparse cells. Cell i is bucket
+  // cell_bucket[i] and asset asset_ids[cell_asset[i]]; only cells with an
+  // amount are listed, in bucket and then asset order.
+  repeated uint32 cell_bucket = 26;
+  // Index into GetBrokerStatsResponse.asset_ids of each cell.
+  repeated uint32 cell_asset = 27;
+  // Deposited per cell.
+  repeated polyester.type.v1.U128 cell_deposited = 28;
+  // Delivered per cell.
+  repeated polyester.type.v1.U128 cell_delivered = 29;
+  // Service fees per cell.
+  repeated polyester.type.v1.U128 cell_service_fee = 30;
+  // Broker fees per cell.
+  repeated polyester.type.v1.U128 cell_broker_fee = 31;
+  // Affiliate fees per cell.
+  repeated polyester.type.v1.U128 cell_affiliate_fee = 32;
+  // Referral commissions per cell.
+  repeated polyester.type.v1.U128 cell_referral_fee = 33;
 }
 
-// GetBrokerStatsResponse lists every period of the window with a QuickSwap
-// created or a fee charged, oldest first, complete (the window is bounded).
-// Periods with neither are omitted.
+// GetBrokerStatsResponse is the broker's (or, in GetReferralStatsResponse,
+// the referral partner's) QuickSwap activity in the window,
+// in columns aligned to implicit bucket timestamps: bucket i starts i hours
+// or days after start_ts_sec, or i calendar months after it for MONTH.
 message GetBrokerStatsResponse {
-  // The periods.
-  repeated BrokerStatsPeriod periods = 1;
+  // The bucket length.
+  StatsPeriod period = 1;
+  // Start of the first bucket, in seconds since the epoch (UTC): the UTC
+  // hour, day or month start_time falls in.
+  fixed32 start_ts_sec = 2;
+  // Number of buckets: every bucket the window touches.
+  uint32 points = 3;
+  // In GetBrokerStats and HQ's broker stats: when the newest change this
+  // answer counts was published, in seconds since the epoch. In
+  // GetReferralStatsResponse it is rounded up to the minute instead (see
+  // there). Zero when the answer counts none. Changes reach the statistics
+  // within seconds.
+  fixed32 as_of_ts_sec = 4;
+  // Every asset with an amount in the answer, ascending, as AssetConfig.ledger_id
+  // values from GET /v1/chain/deposit-withdraw/config.
+  repeated uint32 asset_ids = 5;
+  // The totals series first; then every group of the breakdown with
+  // activity in the window, with no limit, by deposited USD from highest,
+  // compared exactly before rounding to deposited_usd_q4, and at equal value
+  // by the identifier in grouping, ascending (a route by source, then
+  // destination); then the drill-down group when it had no activity; then
+  // others.
+  repeated BrokerStatsSeries series = 6;
 }
 
 // ListVaultBalancesRequest selects a broker's default and affiliate vaults.
@@ -2146,25 +2308,30 @@ service QuickSwapBrokerService {
     };
   }
 
-  // GetBrokerStats reads the broker's QuickSwap activity in a window.
+  // GetBrokerStats reads the broker's QuickSwap activity in a window, in
+  // columns per UTC hour, day or month.
   //
-  // Per UTC day or month: QuickSwaps created by status, deposits credited
-  // and payouts delivered per asset, and the service, broker, affiliate and
-  // referral fees charged per asset.
+  // QuickSwaps created by status, deposits credited, payouts delivered and
+  // fees charged, as exact amounts per asset and USD values, for the broker
+  // as a whole and, with a breakdown, for every route, vault, source asset
+  // or destination asset with activity in the window. Per-bucket columns go
+  // to the totals, the 10 groups with the most deposited USD, an optional
+  // drill-down group and the rest summed as others.
   //
   // Errors:
+  // - INVALID_ARGUMENT: a malformed request, a window too long for its
+  //   period, a drill-down that is not a group of the breakdown, or a
+  //   vault_account_id that is not a public sub-account ID.
   // - NOT_FOUND: BROKER_NOT_FOUND.
-  // - INTERNAL: STATS_INCOMPLETE, with the swap_id of a QuickSwap whose
-  //   records the stats cannot read.
+  // - UNAVAILABLE: the statistics are temporarily unavailable; retry.
   rpc GetBrokerStats(GetBrokerStatsRequest) returns (GetBrokerStatsResponse) {
     option (polyester.api.authentication_methods) = BROKER_API_KEY;
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.error_codes) = "BROKER_LIMIT";
     option (polyester.api.error_codes) = "BROKER_NOT_FOUND";
-    option (polyester.api.error_codes) = "STATS_INCOMPLETE";
     option (gnostic.openapi.v3.operation) = {
       summary: "Get broker stats"
-      description: "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per day or month."
+      description: "Read the broker's QuickSwaps by status, deposits, payouts and fees in a window, per hour, day or month, with an optional breakdown by route, vault or asset."
       tags: "QuickSwap Broker"
     };
   }

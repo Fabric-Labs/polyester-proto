@@ -197,6 +197,13 @@ enum FeeKind {
   // appears with AFFILIATE fees. On a bridge one, on the credited amount,
   // charged at payout.
   REFERRAL = 6;
+  // Estimated network fee withheld from a RETURN of untraded source funds
+  // on the source route. Contingent: charged only if funds are returned.
+  RETURN_NETWORK = 7;
+  // Estimated network fee withheld from a REFUND of unconverted intermediate
+  // asset on the refund route (refund_zipped_asset_id). Contingent: charged
+  // only if intermediate funds are refunded.
+  REFUND_NETWORK = 8;
 }
 
 // QuoteFee is one fee component of a quote. Trading fees (SERVICE, BROKER,
@@ -219,10 +226,13 @@ message QuoteFee {
   // trading fee of the first leg of a two-leg route, which is charged in the
   // intermediate asset (intermediate_asset_id).
   uint32 zipped_asset_id = 2;
-  // Fee in zipped_asset_id's token units; for a fee charged in the
-  // intermediate asset, in the intermediate asset at its trading precision
-  // (amount.decimals). An estimate for deposit_amount at the quoted prices,
-  // with trading fees rounded up; the fee charged can be higher or lower.
+  // Fee in zipped_asset_id's token units; for a trading fee of the first leg
+  // of a two-leg route, in the intermediate asset at its trading precision
+  // (amount.decimals). A REFUND_NETWORK fee, though paid in the intermediate
+  // asset, is in the refund route's token units and precision (0.72 USDT on
+  // a 6-decimal route is 720000 with decimals 6). An estimate for
+  // deposit_amount at the quoted prices, with trading fees rounded up; the
+  // fee charged can be higher or lower.
   TokenAmount amount = 3;
   // Rate of a trading fee in basis points of what the leg receives; zero for
   // a network fee. The rate, not amount, is what is charged: bps of what the
@@ -340,6 +350,13 @@ message QuickSwapQuote {
   // referral_code. A QuickSwap's quote keeps the referral fixed at creation:
   // later changes to the referral program or partner never change it.
   ReferralPricing referral = 11;
+  // Estimated network fees charged only if funds are not delivered:
+  // RETURN_NETWORK, then REFUND_NETWORK when the refund route is known. Not
+  // part of fees or expected_amount_out. A partly traded two-leg QuickSwap can
+  // be charged both. The fee withheld is the network's fee at payout time.
+  // Unlike fees, an entry is never omitted: a known fee of zero is listed
+  // with amount "0".
+  repeated QuoteFee contingent_fees = 12;
 }
 
 // Screening is the risk screening of a QuickSwap. A source wallet supplied
@@ -385,14 +402,20 @@ message DepositInstructions {
   // days after issued_at). A deposit can execute only if Polyester detects it
   // before this time; detection time counts, not block time, and
   // confirmations may finish later. A deposit detected at or after this time
-  // never executes. A deposit observed on a retired address is
-  // MANUAL_RECOVERY and is not returned automatically; other late deposits
-  // are RETURN_ONLY. For an unfunded address, address_retires_at equals this
-  // time, so there is no separate scheduled return period. Send deposits well
-  // before this time. Never changes.
+  // never executes; it is RETURN_ONLY, and so is a deposit observed after
+  // the address retired. For an unfunded address, address_retires_at equals
+  // this time, so there is no separate scheduled return period. Send
+  // deposits well before this time. Never changes.
   google.protobuf.Timestamp funding_expires_at = 5;
-  // After this time the deposit address is retired and funds sent to it may
-  // not be recoverable. For an unfunded address it equals funding_expires_at.
+  // After this time the deposit address is retired, and a deposit sent to
+  // it later never executes. One that Polyester records on this QuickSwap
+  // is listed in deposits as RETURN_ONLY (DEPOSIT_ADDRESS_RETIRED): it is
+  // returned to return_address when it can be, and its direct_return
+  // reports whether it was. One the network refuses before Polyester
+  // records it is not listed in deposits, and nothing on any QuickSwap
+  // reports it or its return; report its transaction to Polyester broker
+  // support with the swap_id. For an unfunded address it equals
+  // funding_expires_at.
   // After a deposit is accepted it is provisional, a lower bound, until
   // Polyester releases the deposit address, which can be shortly after the
   // QuickSwap becomes terminal; from then on it is at least 7 days after all
@@ -428,19 +451,17 @@ enum DepositDisposition {
   // network's minimum deposit (DEPOSIT_BELOW_MINIMUM) or above
   // max_deposit_amount (DEPOSIT_ABOVE_MAXIMUM), or one of the wrong
   // asset or network (WRONG_ASSET), keeps credited_at and is returned from its
-  // credit. One never credited is returned directly, and direct_return
-  // reports that return.
+  // credit. One never credited, such as one that reached the address after
+  // its one eligible deposit (DEPOSIT_ADDRESS_ALREADY_USED) or after it
+  // retired (DEPOSIT_ADDRESS_RETIRED), is returned directly, and
+  // direct_return reports that return; RETURN_ONLY alone does not confirm
+  // that the return completed.
   RETURN_ONLY = 3;
   // Held for review; it neither executes nor returns until released. A
   // deposit blocked by its risk screen (SOURCE_SCREENING_BLOCKED) keeps this
   // disposition after Zipper's compliance team transferred its funds out
   // (QuickSwap CLOSED).
   ON_HOLD = 4;
-  // Observed on an address that was already retired (DEPOSIT_ADDRESS_RETIRED).
-  // It never executes and is not returned automatically. It is handled only
-  // through support-assisted recovery, and it is potentially unrecoverable.
-  // The broker contacts Polyester broker support with the swap_id.
-  MANUAL_RECOVERY = 5;
 }
 
 // QuickSwapReason explains a notable status or deposit disposition.
@@ -520,8 +541,8 @@ enum QuickSwapReason {
   // returned to return_address and never executes.
   DEPOSIT_ADDRESS_ALREADY_USED = 23;
   // The address was retired when this deposit was observed. The deposit is
-  // MANUAL_RECOVERY: it never executes, is not returned automatically, and is
-  // potentially unrecoverable.
+  // RETURN_ONLY: it never executes and is returned directly to
+  // return_address when it can be; direct_return reports the return.
   DEPOSIT_ADDRESS_RETIRED = 24;
   // The address had not been issued when this deposit was observed; it never executes.
   DEPOSIT_ADDRESS_NOT_ISSUED = 25;
@@ -577,9 +598,9 @@ message Deposit {
   TokenAmount amount = 5;
   // What this deposit may do.
   DepositDisposition disposition = 8;
-  // Why the disposition is RETURN_ONLY, ON_HOLD or MANUAL_RECOVERY;
-  // REASON_UNSPECIFIED otherwise, and for a deposit ON_HOLD for review
-  // without a more specific reason.
+  // Why the disposition is RETURN_ONLY or ON_HOLD; REASON_UNSPECIFIED
+  // otherwise, and for a deposit ON_HOLD for review without a more specific
+  // reason.
   QuickSwapReason reason = 9;
   // Current source-network confirmations; zero until the source network
   // reports any. Never decreases.
@@ -600,10 +621,9 @@ message Deposit {
   string flow_id = 14;
   // Direct return to return_address of a deposit that was never credited: a
   // RETURN_ONLY deposit that reached the address after its one eligible
-  // deposit or after its funding window. On a MANUAL_RECOVERY deposit it
-  // reports a direct return once one is recorded. Unset until a direct return
-  // is recorded, and on every other deposit, which is returned through
-  // withdrawals.
+  // deposit, after its funding window or after the address retired. Unset
+  // until a direct return is recorded, and on every other deposit, which is
+  // returned through withdrawals.
   DepositReturn direct_return = 15;
   // Deposit network fee that Zipper withheld from this deposit when it
   // took the deposit in, in zipped_asset_id's token units; zero when it
@@ -617,12 +637,17 @@ message Deposit {
 enum DepositReturnState {
   // No state; never returned.
   RETURN_UNSPECIFIED = 0;
-  // The return is queued or being sent.
+  // The return is queued or being sent. Its transaction may still be
+  // replaced, so none is reported yet.
   RETURN_PENDING = 1;
-  // The return was sent to return_address; tx_hash is its transaction.
+  // The return reached return_address and is final on its network; tx_hash
+  // is its transaction. Terminal: the return never changes state again.
   RETURN_COMPLETED = 2;
-  // The return is held for review and is not sent until review releases it.
-  // The broker contacts Polyester broker support with the swap_id.
+  // The return is held and is not sent automatically: it was not possible
+  // (for example no return address, or the funds are no longer at the
+  // deposit address), awaits review, or was settled with support's help.
+  // Review can release it, and it then becomes RETURN_PENDING. The broker
+  // contacts Polyester broker support with the swap_id.
   RETURN_HELD = 3;
 }
 
@@ -633,7 +658,7 @@ message DepositReturn {
   // Return progress. Accept state values added later.
   DepositReturnState state = 1;
   // Return transaction on the deposit's network, in the network's native
-  // text form; set once RETURN_COMPLETED.
+  // text form; set only once RETURN_COMPLETED, and then never changes.
   string tx_hash = 2;
   // When the return last changed state.
   google.protobuf.Timestamp updated_at = 3;
@@ -1013,9 +1038,8 @@ message QuickSwap {
   // added later. Polling can stop at a terminal status. A terminal status
   // never changes. Shortly after it, address_retires_at can still move later,
   // and withdrawal details can be corrected as documented on Withdrawal;
-  // another deposit reaching the address also shows as RETURN_ONLY, and
-  // another deposit observed on an already retired address shows as
-  // MANUAL_RECOVERY. Such a deposit is returned directly, not through
+  // another deposit reaching the address, before or after it retired, also
+  // shows as RETURN_ONLY. Such a deposit is returned directly, not through
   // withdrawals: its direct_return reports the return, and RETURN_ONLY alone
   // does not confirm a completed return.
   // An EXPIRED QuickSwap whose dropped or replaced deposit confirms after all
@@ -1188,6 +1212,11 @@ message QuoteQuickSwapRequest {
   // whose screening is unavailable at the time, are quoted without it; their
   // deposits are still screened on arrival.
   string source_wallet = 5 [(buf.validate.field).string.max_bytes = 256];
+  // Optional refund route, as CreateQuickSwapRequest.refund_zipped_asset_id
+  // and validated the same way. On a two-leg route it fixes the intermediate
+  // asset, as create does, and adds REFUND_NETWORK to contingent_fees. It is
+  // unused on a direct route or a bridge.
+  uint32 refund_zipped_asset_id = 6;
 }
 
 // QuoteQuickSwapResponse is an indicative quote.

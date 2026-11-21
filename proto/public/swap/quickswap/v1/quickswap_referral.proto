@@ -14,7 +14,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "QuickSwap Referral"
-      description: "A referral partner's own record: enrollment, status, rates, referral code, the QuickSwaps it referred and its commission ledger."
+      description: "A referral partner's own record: enrollment, status, rates, referral code, the QuickSwaps it referred, its commission ledger and its stats."
     }
   ]
 };
@@ -391,6 +391,82 @@ message ListReferralLedgerResponse {
   string next_page_token = 2;
 }
 
+// GetReferralStatsRequest reads the activity of the QuickSwaps the caller
+// referred, and the commission they credited it, in a time window, in
+// buckets of one UTC hour, day or month, with an optional breakdown.
+//
+// Both bounds are rounded down to the minute before the read. Every time a
+// referral partner sees is minute-granular, as in ListReferredQuickSwaps:
+// a referred QuickSwap's exact time could be matched to its on-chain
+// deposit or payout, and so to the person who swapped, and second-precise
+// bounds would reveal it by narrowing the window. So a QuickSwap created in
+// the window's last partial minute, the current minute when end_time is
+// now, counts from the first request whose end_time is in the next minute
+// or later. Changes to QuickSwaps already counted show within seconds.
+message GetReferralStatsRequest {
+  option (buf.validate.message).cel = {
+    id: "get_referral_stats_request.drill_down"
+    message: "a drill-down must name a group of the breakdown"
+    expression: "(!has(this.route) || this.breakdown == 1) && (!has(this.source_zipped_asset_id) || this.breakdown == 3) && (!has(this.destination_zipped_asset_id) || this.breakdown == 4)"
+  };
+
+  // The bucket length.
+  StatsPeriod group_by = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // Start of the window, inclusive, rounded down to the minute. For "All",
+  // ReferralPartner.created_at with MONTH.
+  google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
+  // End of the window, exclusive, rounded down to the minute. The window is
+  // checked once rounded: it must end after it starts and be at most 7 days
+  // long for HOUR, 366 days for DAY and 3660 days for MONTH, else
+  // INVALID_ARGUMENT.
+  google.protobuf.Timestamp end_time = 3 [(buf.validate.field).required = true];
+  // ROUTE, SOURCE_ASSET or DESTINATION_ASSET; unset for the totals series
+  // only. VAULT is refused.
+  StatsBreakdown breakdown = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [2]
+  }];
+  // One group of the breakdown to return with its per-bucket columns even
+  // when it is not among the 10 that get them. A group with no activity in
+  // the window is returned at zero, after the groups with activity; it
+  // never takes one of the 10.
+  oneof drill_down {
+    // The route, for the ROUTE breakdown.
+    StatsRoute route = 5;
+    // The source asset and network, for the SOURCE_ASSET breakdown.
+    uint32 source_zipped_asset_id = 6;
+    // The destination asset and network, for the DESTINATION_ASSET
+    // breakdown.
+    uint32 destination_zipped_asset_id = 7;
+  }
+  // Also return the totals series' exact amounts per bucket and asset:
+  // cell_deposited, cell_delivered and cell_referral_fee (the commission).
+  // They grow with the buckets times the assets, so leave this unset
+  // unless they are needed.
+  bool include_cells = 8;
+}
+
+// GetReferralStatsResponse is the activity of the QuickSwaps the caller
+// referred, in GetBrokerStats' columns.
+//
+// Every fee in it is the caller's commission: fees, fees_usd_q4 and
+// fees_usd count only the commission, referral_fee_usd and
+// cell_referral_fee carry it, and the service, broker and affiliate fee
+// columns are empty.
+//
+// as_of_ts_sec is minute-granular for the same reason as the window
+// bounds, and rounded up so the answer holds nothing newer: the end of the
+// minute the newest change counted was published in, or the time of the
+// read while that minute is the current one. The newest change counted was
+// published in the 60 seconds before it; zero when the answer counts none.
+message GetReferralStatsResponse {
+  // The stats.
+  GetBrokerStatsResponse stats = 1;
+}
+
 // QuickSwapReferralService is a referral partner's own record, over
 // ConnectRPC. A referral partner shares a link with their code; QuickSwaps
 // made through it on Polyester's own QuickSwap app give the user a discount
@@ -420,8 +496,16 @@ message ListReferralLedgerResponse {
 // ListReferralLedger lists each commission credit with its QuickSwap and
 // each auto-withdraw payout from that sub-account.
 //
+// GetReferralStats reads the activity of the QuickSwaps the partner
+// referred and its commission over time, in GetBrokerStats' columns, with
+// a breakdown by route, source or destination asset. It shows the
+// partner's commission only, never the other fees of those QuickSwaps.
+//
 // Every RPC is rate limited per account: over the limit it fails with
 // RESOURCE_EXHAUSTED, a RateLimitDetail and a Retry-After header.
+// GetReferralStats instead shares GetBrokerStats' budget, the caller's read
+// rate: over it the call fails with RESOURCE_EXHAUSTED / BROKER_LIMIT and a
+// Retry-After header.
 service QuickSwapReferralService {
   option (polyester.api.docs_group) = "quickswap";
 
@@ -562,6 +646,35 @@ service QuickSwapReferralService {
     option (gnostic.openapi.v3.operation) = {
       summary: "List referral ledger"
       description: "List the commission credits and payouts of the caller's earnings sub-account, newest first."
+      tags: "QuickSwap Referral"
+    };
+  }
+
+  // GetReferralStats reads the activity of the QuickSwaps the caller
+  // referred and the commission they credited it, over time, with an
+  // optional breakdown by route, source asset or destination asset.
+  //
+  // A QuickSwap counts in the bucket it was created in, with its current
+  // status. A commission counts in the bucket it was credited in on the
+  // totals series, and in its QuickSwap's bucket on a group. The window's
+  // totals over ReferralPartner.created_at to now are the lifetime totals.
+  // Times are minute-granular (see GetReferralStatsRequest). A disabled
+  // partner still reads its stats.
+  //
+  // Errors:
+  // - NOT_FOUND: REFERRAL_PARTNER_NOT_FOUND.
+  // - INVALID_ARGUMENT: the window, breakdown or drill-down.
+  // - RESOURCE_EXHAUSTED: BROKER_LIMIT, with a Retry-After header: the
+  //   caller's read rate, shared with GetBrokerStats, is spent.
+  // - UNAVAILABLE: the stats cannot be read; retry the same request.
+  rpc GetReferralStats(GetReferralStatsRequest) returns (GetReferralStatsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.error_codes) = "ACTION_DENIED";
+    option (polyester.api.error_codes) = "BROKER_LIMIT";
+    option (polyester.api.error_codes) = "REFERRAL_PARTNER_NOT_FOUND";
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get referral stats"
+      description: "Get the activity and commission of the QuickSwaps the caller referred, over time, with an optional breakdown."
       tags: "QuickSwap Referral"
     };
   }

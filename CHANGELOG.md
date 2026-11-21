@@ -3,6 +3,43 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-21 — develop-20261121T092627Z
+
+Exact Trading balance updates with epoch and sequence positions, profit and loss and trading statistics, cancel-all for triggers, rate-limit and order book heatmap updates, strategy bot access for API keys, and QuickSwap service changes..
+
+- [2026-11-18T2247Z-marketdata-v1](changes/2026-11-18T2247Z-marketdata-v1.md): changed `marketdata.v1.HeatmapService`.
+- [2026-11-19T1047Z-ratelimit-v1](changes/2026-11-19T1047Z-ratelimit-v1.md): changed `ratelimit.v1.RateLimitService`, `orders.v1.OrdersReadService`, `triggers.v1.TriggersService`, `fees.v1.FeeService`. **Breaking.**
+- [2026-11-19T1253Z-strategies-v1](changes/2026-11-19T1253Z-strategies-v1.md): changed `strategies.v1.StrategiesService`, `auth.v1.PolicyService`, `auth.v1.SubaccountRoleService`.
+- [2026-11-19T1504Z-ledger-read-v1](changes/2026-11-19T1504Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`. **Breaking.**
+- [2026-11-19T1821Z-swap-quickswap-v1](changes/2026-11-19T1821Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapBrokerService`. **Breaking.**
+- [2026-11-19T1828Z-strategies-v1](changes/2026-11-19T1828Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-19T2027Z-orders-v1](changes/2026-11-19T2027Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`.
+- [2026-11-19T2028Z-marketoverview-v1](changes/2026-11-19T2028Z-marketoverview-v1.md): added `marketoverview.v1.MarketOverviewService`.
+- [2026-11-19T2033Z-marketdata-v1](changes/2026-11-19T2033Z-marketdata-v1.md): added `marketdata.v1.MarketDataService`.
+- [2026-11-19T2109Z-strategies-v1](changes/2026-11-19T2109Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-19T2144Z-strategies-v1](changes/2026-11-19T2144Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-19T2207Z-auth-v1](changes/2026-11-19T2207Z-auth-v1.md): changed `auth.v1.SubaccountService`, `auth.v1.PolicyService`, `auth.v1.AddressBookService`. **Breaking.**
+- [2026-11-20T0018Z-swap-quickswap-v1](changes/2026-11-20T0018Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-20T0029Z-swap-quickswap-v1](changes/2026-11-20T0029Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapReferralService`.
+- [2026-11-20T0422Z-auth-v1](changes/2026-11-20T0422Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-20T0523Z-strategies-v1](changes/2026-11-20T0523Z-strategies-v1.md): added `strategies.v1.StrategiesService`.
+- [2026-11-20T0604Z-swap-quickswap-v1](changes/2026-11-20T0604Z-swap-quickswap-v1.md): removed `swap.quickswap.v1.QuickSwapService`, `swap.quickswap.v1.QuickSwapBrokerService`. **Breaking.**
+- [2026-11-20T0609Z-auth-v1](changes/2026-11-20T0609Z-auth-v1.md): changed `auth.v1.ConnectedAppService`.
+- [2026-11-20T0700Z-triggers-v1](changes/2026-11-20T0700Z-triggers-v1.md): added `triggers.v1.TriggersService`, `orders.v1.OrdersService`.
+- [2026-11-20T1030Z-pnl-v1](changes/2026-11-20T1030Z-pnl-v1.md): added `pnl.v1.ProfitAndLossService`, `auth.v1.PolicyService`.
+- [2026-11-20T1137Z-strategies-v1](changes/2026-11-20T1137Z-strategies-v1.md): removed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-20T1424Z-strategies-v1](changes/2026-11-20T1424Z-strategies-v1.md): removed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-20T1626Z-strategies-v1](changes/2026-11-20T1626Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-20T1634Z-ai-v1](changes/2026-11-20T1634Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-20T1640Z-strategies-v1](changes/2026-11-20T1640Z-strategies-v1.md): changed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-20T1700Z-auth-v1](changes/2026-11-20T1700Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-20T1805Z-ledger-v1](changes/2026-11-20T1805Z-ledger-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-20T1812Z-strategies-v1](changes/2026-11-20T1812Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-20T1900Z-pnl-v1](changes/2026-11-20T1900Z-pnl-v1.md): changed `pnl.v1.ProfitAndLossService`.
+- [2026-11-20T2020Z-ledger-read-v1](changes/2026-11-20T2020Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-20T2126Z-strategies-v1](changes/2026-11-20T2126Z-strategies-v1.md): removed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-20T2231Z-strategies-v1](changes/2026-11-20T2231Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+
 ## 2026-11-20 — develop-20261120T010241Z
 
 Release 0.93.7 public contract.

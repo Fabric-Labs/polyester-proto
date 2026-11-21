@@ -422,6 +422,91 @@
         ],
         "type": "object"
       },
+      "polyester.rest.TriggersService_CancelAllTriggers.Request": {
+        "additionalProperties": false,
+        "properties": {
+          "dryRun": {
+            "description": "If true, return the matched count without canceling anything.",
+            "type": "boolean"
+          },
+          "requestId": {
+            "description": "Idempotency key (required). Reuse the same key and criteria for retries. Completed results are retained for at least two minutes. Use a fresh key for a new cancellation; do not reuse a key after its replay window. 1 to 64 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
+            "type": "string"
+          },
+          "side": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.orders.v1.Side"
+              }
+            ],
+            "description": "Side filter. When set, only triggers whose orders trade on this side match: a SELL stop-loss matches SELL."
+          },
+          "subaccountId": {
+            "description": "Optional public subaccount ID. When omitted, subaccount-scoped API keys use their bound subaccount; other callers use their authenticated root account.\n\nPublic ID, as a base58 string.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "type": "string"
+          },
+          "symbols": {
+            "description": "Up to 100 trading pair symbols, e.g. [BTC-USDT, ETH-USDT]. Empty matches all symbols; duplicates are ignored.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "triggerTypes": {
+            "description": "Trigger types to cancel, as ListTriggers' trigger_type reports them. Empty matches every type. At most 5 distinct types. An order's attached take-profit, stop-loss and trailing legs end together, and so do an OCO's two legs: when any of them matches, all of them are canceled and counted. For example, canceling STOP_LOSS also cancels the take-profit or trailing leg attached to the same order as a matching stop-loss, and the take-profit of an OCO whose stop-loss matches.",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.TriggerType"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "polyester.rest.TriggersService_CancelAllTriggers.Response": {
+        "additionalProperties": false,
+        "properties": {
+          "matchedTriggers": {
+            "description": "Number of the account's triggers that matched the filters when the request was accepted, each canceled unless `dry_run` is set. A retry with the same request_id and criteria returns the original count.",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/polyester.rest.enum.triggers.v1.CancelAllTriggersResponse.Status"
+              }
+            ],
+            "description": "Cancel-all submission outcome."
+          },
+          "ts": {
+            "description": "Server timestamp of the original acceptance.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tsNs": {
+            "description": "Server timestamp as epoch nanoseconds (for bots).",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "matchedTriggers",
+          "status",
+          "ts",
+          "tsNs"
+        ],
+        "type": "object"
+      },
       "polyester.rest.TriggersService_CancelOco.Response": {
         "additionalProperties": false,
         "properties": {
@@ -3164,7 +3249,7 @@
           "CANCEL_SCOPE_TOO_LARGE": "The cancel-all request named more than 100 symbols.",
           "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
           "CHILD_QTY_EXCEEDS_REMAINING": "The new quantity of a TWAP order's slice would leave more than the TWAP's remaining quantity. Nothing changed; a slice can be raised up to what the TWAP still has to execute.",
-          "CHILD_QTY_RAISE_NOT_ALLOWED": "The quantity of a trigger's child order or a ladder order can't be raised above its planned quantity. Nothing changed.",
+          "CHILD_QTY_RAISE_NOT_ALLOWED": "A ladder level or the exit order of a take-profit, stop-loss or trailing leg can't be raised above its cap. Nothing changed. A ladder level's cap is its planned quantity, even after the level was reduced. An exit order's cap is its current quantity: reducing an exit returns the reduced quantity to the legs that protect the position.",
           "CLIENT_LIST_ID_INVALID": "The OCO's client list ID is empty, longer than 36 characters, or has a character other than a letter, digit, period, underscore, colon, slash or hyphen. Answered by CreateOco and by the ListTriggers client_list_id filter. Nothing changed.",
           "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
           "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
@@ -3230,7 +3315,7 @@
           "ORDER_CREATE_OUTCOME_UNKNOWN": "The order was sent but not confirmed in time. Its outcome is unknown and it may have been accepted; read the order by its client order ID, or read open orders, before retrying. For a batch create, every item's outcome is unknown; read them back, or repeat the batch with the same request ID and payload within 15 minutes, which returns decided items' original results and retries the rest without admitting any item twice.",
           "ORDER_ID_CONFLICT": "The order identifier is held by a different, earlier order, so the request was not applied. Nothing changed.",
           "ORDER_LIMITS_UNAVAILABLE": "This market's order limits aren't set yet, so it can't take new orders.",
-          "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again.",
+          "ORDER_MODIFY_IN_PROGRESS": "An earlier amend or replace of the order has not completed yet. A batch replace answer means its items were admitted, not completed, so the next refresh of the same order can get this code. Retry after a short backoff. For a batch item, resend only that item in a new batch under a fresh request ID, because the rejected batch's request ID returns this rejection again. A modify that adds or changes an attached take-profit, stop-loss or trailing leg also gets this code while a cancel of triggers is ending the order's attached legs, which end together; retry it once they have ended.",
           "ORDER_MODIFY_OUTCOME_UNKNOWN": "The order modification was sent but not confirmed in time. Its outcome is unknown and it may still apply; read the order before retrying. For a batch replacement, every item's outcome is unknown; read them back.",
           "ORDER_PLACEMENT_PENDING": "The placement of the order, or of the replacement an earlier replace created, has not been confirmed yet, so it cannot be modified. It may already rest on the book. An order event may already report the order WORKING before it can be modified; retry after a short backoff. A refresh that names the replacement order ID from a batch whose replace has not been confirmed yet gets this code. Retry as for ORDER_MODIFY_IN_PROGRESS.",
           "ORDER_REPAIRING": "This order is being canceled while the account's balances are brought back in line, so it can't be changed. Nothing changed; cancels still work, and the account's other orders can still be changed.",
@@ -3504,6 +3589,17 @@
           "REJECTED": "The cancellation was rejected; code says why."
         }
       },
+      "polyester.rest.enum.triggers.v1.CancelAllTriggersResponse.Status": {
+        "enum": [
+          "SUBMITTED",
+          "DRY_RUN"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "DRY_RUN": "The request only counted matching triggers and canceled nothing.",
+          "SUBMITTED": "Every matching trigger was stopped and its cancellation submitted."
+        }
+      },
       "polyester.rest.enum.triggers.v1.LadderDistribution": {
         "enum": [
           "LINEAR",
@@ -3691,7 +3787,7 @@
           "ACCOUNT_UNKNOWN": "The account associated with the trigger was not recognized.",
           "ATTACHED_LEGS_EXCEEDED": "The order carried more attached legs than allowed.",
           "CHILD_ORDER_INCONSISTENT": "The trigger's child order did not match the order the trigger requested, so the trigger failed and the child order was canceled.",
-          "CHILD_QTY_RAISE_NOT_ALLOWED": "One of the trigger's child orders went past its planned quantity, so the trigger ended.",
+          "CHILD_QTY_RAISE_NOT_ALLOWED": "A ladder's fills would have gone past its total quantity, so the ladder ended. Each level can be raised up to its planned quantity, never above it.",
           "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserved its maximum number of client order IDs.",
           "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID was not valid.",
           "CONDITION_FLAGS_INVALID": "The trigger's condition flags were not valid.",
@@ -3864,7 +3960,7 @@
   "paths": {
     "/v1/triggers": {
       "get": {
-        "description": "List triggers for an account with optional symbol, status, and trigger-type filters. Costs one unit of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
+        "description": "List triggers for an account with optional symbol, status, and trigger-type filters. Costs one unit of the account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "TriggersService_ListTriggers",
         "parameters": [
           {
@@ -4140,6 +4236,97 @@
         "x-poly-mfa-requirement": "none",
         "x-poly-request-type": "triggers.v1.CreateTriggerRequest",
         "x-poly-response-type": "triggers.v1.CreateTriggerResponse",
+        "x-poly-rest": true,
+        "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
+      }
+    },
+    "/v1/triggers/cancel-all": {
+      "post": {
+        "description": "Cancel all of the account's triggers that match an optional list of symbols, a side and a list of trigger types in one request, with a dry-run count. It cancels no order of its own: every matching trigger created before the requestId was first accepted ends canceled with reason CANCEL_ALL, releases its reserved funds and places no order after the response, and its open orders are canceled with it as Cancel Trigger cancels them (a TWAP's working slice, a ladder's open levels, an attached leg's working exit). An order a stop already placed stays open, and a trigger created later keeps running. An order's attached take-profit, stop-loss and trailing legs end together, and so do an OCO's two legs, when any of them matches. Every request counts 10 against the cancel rate limit, however many triggers match, a dry run and a retry included. A retry with the same requestId and criteria within 2 minutes returns the original count and cancels nothing again.",
+        "operationId": "TriggersService_CancelAllTriggers",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "dryRun": false,
+                "requestId": "request_01J0EXAMPLE",
+                "side": "BUY",
+                "subaccountId": "45LUmqjT",
+                "symbols": [
+                  "BTC-USDT"
+                ],
+                "triggerTypes": [
+                  "STOP_LOSS"
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/polyester.rest.TriggersService_CancelAllTriggers.Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "matchedTriggers": 1,
+                  "status": "SUBMITTED",
+                  "ts": "2025-01-01T00:00:00Z",
+                  "tsNs": "1735689600000000000"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.TriggersService_CancelAllTriggers.Response"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.TriggersService.Problem"
+                }
+              }
+            },
+            "description": "An invalid or refused request: a malformed body (BAD_REQUEST) or a refused field or trigger; code names the reason, and violations name the refused field."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/polyester.rest.TriggersService.Problem"
+                }
+              }
+            },
+            "description": "REQUEST_TOO_LARGE: the request body is over the 256 KiB limit; nothing was done."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyIdAuth": [],
+            "ApiKeySignatureAuth": [],
+            "ApiKeyTimestampAuth": []
+          }
+        ],
+        "summary": "Cancel All Triggers",
+        "tags": [
+          "Triggers Service"
+        ],
+        "x-poly-authentication-methods": [
+          "session_token",
+          "api_key"
+        ],
+        "x-poly-error-catalog": "core:generic",
+        "x-poly-error-proto-pkg": "polyester.rest.TriggersService_CancelAllTriggers",
+        "x-poly-mfa-requirement": "none",
+        "x-poly-request-type": "triggers.v1.CancelAllTriggersRequest",
+        "x-poly-response-type": "triggers.v1.CancelAllTriggersResponse",
         "x-poly-rest": true,
         "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
       }
@@ -4508,7 +4695,7 @@
         "x-poly-rest-note": "This operation uses REST-friendly types: decimal strings for quantities/prices, base58 strings for IDs."
       },
       "get": {
-        "description": "Retrieve a single trigger by trigger ID, including lifecycle state and strategy-specific fields. Costs one unit of the root account's trading read limit.",
+        "description": "Retrieve a single trigger by trigger ID, including lifecycle state and strategy-specific fields. Costs one unit of the account's trading read limit.",
         "operationId": "TriggersService_GetTrigger",
         "parameters": [
           {
@@ -4726,7 +4913,7 @@
     },
     "/v1/triggers/{trigger_id}/events": {
       "get": {
-        "description": "List append-only trigger events for a trigger, including child-order actions, with optional event-category filtering and reverse-time pagination. A trigger the caller can read that has no event yet answers an empty list. Costs two units of the root account's trading read limit per 100 rows the limit asks for, rounded up.",
+        "description": "List append-only trigger events for a trigger, including child-order actions, with optional event-category filtering and reverse-time pagination. A trigger the caller can read that has no event yet answers an empty list. Costs two units of the account's trading read limit per 100 rows the limit asks for, rounded up.",
         "operationId": "TriggersService_ListTriggerEvents",
         "parameters": [
           {

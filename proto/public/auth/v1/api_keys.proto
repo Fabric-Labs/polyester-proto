@@ -7,6 +7,7 @@ import "gnostic/openapi/v3/annotations.proto";
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/field_mask.proto";
+import "auth/v1/policies.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "polyester/api/validation/v1/predefined_string_rules.proto";
@@ -49,6 +50,14 @@ enum ApiKeyPurpose {
   // API key can create, promote, change or delete an admin key, including the
   // key itself; only its owner's session with a fresh step-up proof can.
   ADMIN_KEY = 3;
+  // A strategy bot's trade key, created with SetStrategyBotAccess on the
+  // bot's own sub-account and linked to the bot (strategy_bot_id). Its policy
+  // allows spot trading only, within the sub-account's trading limits, and
+  // never an action that moves value out of the account. No other call
+  // changes, revokes or re-binds it until EndStrategyBotAccess revokes it:
+  // FailedPrecondition with AUTH_STRATEGY_BOT_MANAGED. Disabling its
+  // sub-account disables it.
+  STRATEGY_BOT = 4;
 }
 
 // ApiKey is public API key metadata. It never includes the private key or seed.
@@ -101,8 +110,13 @@ message ApiKey {
   // Monotonic resource revision used for conditional updates.
   uint64 revision = 26;
   // What the key is for. ASSISTANT keys are managed with SetAssistantKeys and
-  // are otherwise listed, updated and revoked like any key.
+  // are otherwise listed, updated and revoked like any key. STRATEGY_BOT keys
+  // are managed only with SetStrategyBotAccess and EndStrategyBotAccess.
   ApiKeyPurpose purpose = 27;
+  // Strategy bot the key trades for: the bot's public ID (opaque ID), the
+  // same bot_id strategies.v1 GetBot takes. Present only on a STRATEGY_BOT
+  // key.
+  optional fixed64 strategy_bot_id = 28;
 }
 
 // CreateApiKeyRequest creates a new API key. Clients generate the Ed25519 key
@@ -142,10 +156,14 @@ message CreateApiKeyRequest {
   // ADMIN_KEY creates an admin key: only the main account's owner may, in a
   // signed-in session with a fresh step-up proof, for the main account
   // (subaccount_id unset), with an ip_whitelist that admin keys accept.
-  // ASSISTANT keys are created with SetAssistantKeys.
+  // ASSISTANT keys are created with SetAssistantKeys, STRATEGY_BOT keys with
+  // SetStrategyBotAccess.
   ApiKeyPurpose purpose = 8 [(buf.validate.field).enum = {
     defined_only: true
-    not_in: [2]
+    not_in: [
+      2,
+      4
+    ]
   }];
 }
 
@@ -241,10 +259,14 @@ message ApiKeyUpdateSpec {
   // standard key. Only the main account's owner may select it, in a signed-in session
   // with a fresh step-up proof. A promoted key must act for the main account,
   // have an IP allowlist that admin keys accept, and have no policy that
-  // allows a money-out action. An assistant key's purpose never changes.
+  // allows a money-out action. An assistant key's purpose never changes, and
+  // no key becomes or stops being a STRATEGY_BOT key.
   ApiKeyPurpose purpose = 7 [(buf.validate.field).enum = {
     defined_only: true
-    not_in: [2]
+    not_in: [
+      2,
+      4
+    ]
   }];
 }
 
@@ -389,6 +411,106 @@ message DeleteAssistantKeysResponse {
   // Opaque identifiers of the keys revoked by this request. Empty when the set
   // was already empty.
   repeated string revoked_key_ids = 1;
+}
+
+// StrategyBotLimits are the trading limits of a strategy bot's sub-account.
+// They become the sub-account's policy, which also bounds every member and
+// key of the sub-account. The bot's key policy allows the same markets.
+message StrategyBotLimits {
+  option (buf.validate.message).cel = {
+    id: "spot_allowlist_requires_markets"
+    message: "spot_markets must be non-empty when spot_market_scope is ALLOWLIST"
+    expression: "this.spot_market_scope != 2 ? true : size(this.spot_markets) > 0"
+  };
+  option (buf.validate.message).cel = {
+    id: "spot_markets_unique"
+    message: "spot_markets must not contain duplicate symbol IDs"
+    expression: "this.spot_markets.map(m, m.symbol_id).unique()"
+  };
+
+  // Spot markets the bot may trade, enforced when spot_market_scope is
+  // ALLOWLIST.
+  repeated SpotMarketSelector spot_markets = 1;
+  // Market-level scope for spot markets. When unspecified, defaults to ALL.
+  MarketScope.Value spot_market_scope = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Maximum notional size for any single order, in canonical quote
+  // microunits (one unit is 0.000001 USDT). A value of 0 means no explicit
+  // cap.
+  uint64 max_order_notional = 3;
+  // Maximum number of resting orders at any time. A value of 0 means no
+  // explicit cap.
+  uint32 max_open_orders = 4;
+}
+
+// SetStrategyBotAccessRequest gives a strategy bot its trade key on its own
+// sub-account.
+message SetStrategyBotAccessRequest {
+  // Identifier of the deploy operation, chosen by the caller and unique
+  // within the main account: 1 to 128 characters of letters, digits, '.',
+  // '_', ':' and '-'. Repeating a request under it changes nothing.
+  string deploy_operation_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+      pattern: "^[A-Za-z0-9._:-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Sub-account the bot trades on (opaque ID).
+  fixed64 subaccount_id = 2 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Ed25519 public key bytes of the bot's trade key. Must be exactly 32
+  // bytes. The private key or seed must never be sent to the API.
+  bytes public_key_ed25519 = 3 [
+    (buf.validate.field).bytes.len = 32,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Strategy bot the key trades for: the bot's public ID (opaque ID), the
+  // same bot_id strategies.v1 GetBot takes.
+  fixed64 strategy_bot_id = 4 [
+    (buf.validate.field).fixed64.gt = 0,
+    (google.api.field_behavior) = REQUIRED
+  ];
+  // Trading limits of the sub-account.
+  StrategyBotLimits limits = 5 [
+    (buf.validate.field).required = true,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// SetStrategyBotAccessResponse names the bot's key and the policies that
+// bound it.
+message SetStrategyBotAccessResponse {
+  // The bot's STRATEGY_BOT key, formatted as "ak_" followed by 32 lowercase
+  // hex characters.
+  string key_id = 1;
+  // API policy bound to the key (opaque ID).
+  fixed64 api_policy_id = 2;
+  // Sub-account policy bound to the bot's sub-account (opaque ID).
+  fixed64 subaccount_policy_id = 3;
+}
+
+// EndStrategyBotAccessRequest ends a strategy bot's access.
+message EndStrategyBotAccessRequest {
+  // Identifier of the deploy operation SetStrategyBotAccess was called with,
+  // or would be.
+  string deploy_operation_id = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 128
+      pattern: "^[A-Za-z0-9._:-]+$"
+    },
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// EndStrategyBotAccessResponse names the key the request revoked.
+message EndStrategyBotAccessResponse {
+  // The bot's key this request revoked. Empty when the operation had no
+  // access to end: none was set under it, or it already ended.
+  string revoked_key_id = 1;
 }
 
 // ApiKeyService manages API keys for authenticated callers.
@@ -549,6 +671,11 @@ service ApiKeyService {
   // removes access, so it needs no step-up proof. Revocation is permanent. As
   // for DeleteApiKey, key management sees it at once, and requests signed with
   // a revoked key are refused within a few seconds of the response.
+  //
+  // It revokes ASSISTANT keys only. A strategy bot is not the assistant: its
+  // STRATEGY_BOT key stays as it is. To cut a bot off, stop the bot, or
+  // disable its sub-account with UpdateSubaccount, which disables the bot's
+  // key at once; a strategy bot's sub-account cannot be enabled again.
   rpc DeleteAssistantKeys(DeleteAssistantKeysRequest) returns (DeleteAssistantKeysResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (google.api.http) = {delete: "/v1/auth/assistant-keys"};
@@ -557,5 +684,75 @@ service ApiKeyService {
       description: "Revoke every Polyester AI assistant key the caller set up. Needs no step-up proof."
       tags: "Auth Service"
     };
+  }
+
+  // Give a strategy bot its trade key on its own sub-account, in one
+  // all-or-nothing change: a sub-account policy that allows spot trading
+  // only, within limits, bound to the sub-account; an API policy that allows
+  // spot trading over the same markets and reading the sub-account's orders,
+  // balances and profit and loss; and a STRATEGY_BOT key with
+  // public_key_ed25519, bound to that API policy and linked to
+  // strategy_bot_id. Neither policy allows an action that moves value out of
+  // the account.
+  //
+  // An MFA-elevated session (one that completed an MFA challenge in the last
+  // 30 minutes) needs no proof; any other session sends a fresh step-up proof
+  // in the X-Auth-Step-Up header, which the change consumes. Without either,
+  // PermissionDenied with AUTH_STEP_UP_REQUIRED. API keys and connected apps
+  // are refused.
+  //
+  // The sub-account must belong to the caller's main account, else
+  // PermissionDenied with AUTH_SUBACCOUNT_ACCESS_DENIED. It must be active
+  // and not a QuickSwap broker vault, with no policy, no API key that is not
+  // revoked, no member and no pending invite; else FailedPrecondition with
+  // AUTH_STRATEGY_BOT_SUBACCOUNT_INELIGIBLE. It may hold deposit addresses:
+  // deposits raise the bot's balance.
+  //
+  // deploy_operation_id makes the call idempotent within the main account:
+  // repeating the same request returns the same key and policies and changes
+  // nothing. A different request under the same identifier, or any request
+  // under one EndStrategyBotAccess ended, returns AlreadyExists with
+  // AUTH_STRATEGY_BOT_OPERATION_CONFLICT.
+  //
+  // Until EndStrategyBotAccess, other calls refuse to change the key, its
+  // policy, or the sub-account's policy, keys, members or invites, or to
+  // enable it again: FailedPrecondition with AUTH_STRATEGY_BOT_MANAGED.
+  // Disabling the sub-account, which disables the key, renaming it and
+  // removing its members stay available.
+  rpc SetStrategyBotAccess(SetStrategyBotAccessRequest) returns (SetStrategyBotAccessResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (polyester.api.hidden) = true;
+    option (polyester.api.error_codes) = "AUTH_INVALID_REQUEST";
+    option (polyester.api.error_codes) = "AUTH_POLICY_INVALID";
+    option (polyester.api.error_codes) = "AUTH_SESSION_KIND_NOT_ALLOWED";
+    option (polyester.api.error_codes) = "AUTH_TERMS_NOT_ACCEPTED";
+    option (polyester.api.error_codes) = "AUTH_MFA_NOT_ENROLLED";
+    option (polyester.api.error_codes) = "AUTH_STEP_UP_REQUIRED";
+    option (polyester.api.error_codes) = "AUTH_RESOURCE_NOT_FOUND";
+    option (polyester.api.error_codes) = "AUTH_SUBACCOUNT_ACCESS_DENIED";
+    option (polyester.api.error_codes) = "AUTH_STRATEGY_BOT_SUBACCOUNT_INELIGIBLE";
+    option (polyester.api.error_codes) = "AUTH_STRATEGY_BOT_OPERATION_CONFLICT";
+  }
+
+  // End the strategy bot access SetStrategyBotAccess gave under
+  // deploy_operation_id, in one change: revoke the bot's key and release its
+  // sub-account to the account's own management. The revoked key is no
+  // longer a STRATEGY_BOT key, and the sub-account is released whatever state
+  // the key is in: a disabled sub-account stays disabled, and the account
+  // manages it like any other. The sub-account keeps its policy until the
+  // account changes it. The operation stays ended:
+  // SetStrategyBotAccess under it afterwards, even a delayed original
+  // request, returns AlreadyExists with AUTH_STRATEGY_BOT_OPERATION_CONFLICT.
+  // Ending an operation that set no access, or one already ended, succeeds
+  // and revokes nothing. Ending only removes access, so it needs no step-up
+  // proof. API keys and connected apps are refused.
+  rpc EndStrategyBotAccess(EndStrategyBotAccessRequest) returns (EndStrategyBotAccessResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.hidden) = true;
+    option (polyester.api.error_codes) = "AUTH_INVALID_REQUEST";
+    option (polyester.api.error_codes) = "AUTH_SESSION_KIND_NOT_ALLOWED";
   }
 }

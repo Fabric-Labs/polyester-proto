@@ -51,19 +51,129 @@ message AssetBalance {
   // Amount currently available for new trading activity at fixed 18-decimal
   // ledger scale. This value already accounts for active reservations.
   polyester.type.v1.U128 available = 5;
-  // Opaque monotonic revision for the atomic trading, reserved, and available
-  // values. Higher means newer; zero means no trading state has been observed.
-  uint64 trading_revision = 6;
   // Opaque monotonic revision for the funding value. Higher means newer; zero
-  // means no funding state has been observed.
+  // means no funding state has been observed. Trading values have no
+  // revision: their position is (trading_epoch, trading_sequence).
   uint64 funding_revision = 7;
 }
 
+// GetBalancesResponse is the account's balances with the position of its
+// Trading values.
+//
+// The Trading values of every asset are one atomic cut: all are taken at the
+// single position (trading_epoch, trading_sequence) the response names, never
+// a mix of two positions, and never at a position older than one the balance
+// stream already published. The Funding values carry their own
+// funding_revision and are not part of that position.
 message GetBalancesResponse {
   // One entry for every supported unified asset, including assets with zero
   // balances. Sorted by available trading amount (highest first), then by
   // asset symbol alphabetically.
   repeated AssetBalance balances = 1;
+  // The Trading numbering the balances' Trading values are in. It changes
+  // when the numbering restarts: then reload. Compare it only for equality;
+  // its value has no order. Zero, with trading_sequence zero, when the
+  // account has no Trading balances yet.
+  uint64 trading_epoch = 2;
+  // The Trading sequence the balances' Trading values are at, within
+  // trading_epoch: apply the balance stream's Trading updates from
+  // trading_sequence + 1 on (see BalanceUpdate).
+  uint64 trading_sequence = 3;
+  // Every Trading transfer of the account whose ts_ns is at or below this
+  // value is applied in these balances, a receipt within trading_epoch.
+  // While a transfer of the account could not be applied, this value stays
+  // below it, until a later balance of that asset includes it; it never
+  // passes a transfer that is not applied. Nanoseconds since epoch (UTC).
+  uint64 trading_applied_through_ts_ns = 4;
+}
+
+// BalanceUpdate is one publication on an account's balance stream.
+//
+// A TRADING update is one step of the account's Trading balances, at a
+// position (trading_epoch, trading_sequence). Within an epoch the sequence
+// runs 1, 2, 3 with no gap. A new epoch starts again at 1, and its updates
+// up to its first complete one carry every asset the account holds in
+// Trading.
+//
+// A FUNDING update carries one asset's Funding balance. It is not sequenced:
+// a higher funding_revision is newer. Its trading_epoch and trading_sequence
+// are unset: tell the two kinds apart by account, never by a zero epoch.
+//
+// Keep the balances exact as follows:
+//
+// 1. Subscribe to the stream and buffer its updates.
+// 2. Call GetBalances and apply its balances. Its position (E, Q) is
+//    (trading_epoch, trading_sequence). If it answers unavailable, retry it
+//    with a backoff.
+// 3. Drop buffered and later TRADING updates of epoch E with a sequence at or
+//    below Q; a reconnect can repeat one. Apply E's sequences Q + 1, Q + 2,
+//    and so on, in order.
+// 4. Keep a dropped set of epochs: every epoch you held before E, and every
+//    epoch other than E of an update received before the GetBalances call
+//    that answered E began. GetBalances never answers a dropped epoch again,
+//    so drop a TRADING update of a dropped epoch without reloading: after a
+//    move, the earlier epoch's late updates can still arrive. Reload, from
+//    step 2, when:
+//    - a TRADING update's epoch is neither E nor dropped, including one
+//      buffered while the call ran: the numbering restarted;
+//    - its sequence skips a number: an update was missed;
+//    - after an incomplete update of E, E's next sequence does not arrive
+//      within 2 seconds. FUNDING updates, repeats and updates of dropped
+//      epochs do not stop the timer;
+//    - the subscription reports that missed publications could not be
+//      recovered.
+// 5. Apply a FUNDING update when its funding_revision is higher than the one
+//    held for its asset.
+//
+// GetBalances reflects every balance update published before the call began,
+// so a reload covers anything the subscription missed in the answer's epoch,
+// even a final update of an idle account, and an earlier epoch's Trading
+// transfers as below. Show Trading values after an update with complete set:
+// in between, the same step continues in the next update.
+//
+// After a move, a new epoch's Trading values can be older than the previous
+// epoch's last ones: its owner may not have applied the latest transfers yet.
+// Until its trading_applied_through_ts_ns reaches the last one you saw, the
+// epoch is catching up, and its later updates apply those transfers.
+// GetBalances waits, or fails with UNAVAILABLE, rather than answer such a
+// cut below a Trading transfer the stream published in an earlier epoch,
+// including one you never received. Right after a server restart it may not
+// know every such transfer, so still count a transfer as applied only by a
+// receipt in the current epoch: its leg, or a trading_applied_through_ts_ns
+// at or past its ts_ns.
+message BalanceUpdate {
+  // TRADING or FUNDING: which balances this update carries.
+  ledger.v1.AccountCode account = 1;
+  // TRADING only. The Trading numbering this update is in, as GetBalances
+  // returns it. It changes when the numbering restarts: drop an update of a
+  // dropped epoch, and reload on any other epoch than the current one
+  // (step 4). Compare it only for equality; its value has no order.
+  uint64 trading_epoch = 2;
+  // TRADING only. This update's place in its epoch, from 1, with no gap.
+  uint64 trading_sequence = 3;
+  // TRADING only. True when the account's Trading values are a consistent
+  // snapshot after this update; false while the same step continues in the
+  // next update.
+  bool complete = 4;
+  // The assets this update changed, each at most once. A TRADING update sets
+  // trading, reserved and available; a FUNDING update sets funding and
+  // funding_revision. The other kind's fields are unset.
+  repeated AssetBalance balances = 5;
+  // TRADING only. The Trading transfer legs this update applied, oldest
+  // first. Each sets asset_id, amount_e18, transfer_code, account_code,
+  // ts_us, ts_ns, balance_after_e18, is_debit and transfer_id; link_id,
+  // flow_id, source and destination are unset here and are published on the
+  // transfer stream and by ListTransfers. After a move, a transfer's legs
+  // can arrive again in the new epoch: (transfer_id, is_debit) identifies a
+  // leg.
+  repeated TransferRow transfers = 6;
+  // TRADING only. Every Trading transfer of the account whose ts_ns is at or
+  // below this value is applied in this update's balances, whether or not its
+  // leg was received. It is a receipt within trading_epoch. While a transfer
+  // of the account could not be applied, this value stays below it, until a
+  // later balance of that asset includes it; it never passes a transfer that
+  // is not applied. Nanoseconds since epoch (UTC).
+  uint64 trading_applied_through_ts_ns = 7;
 }
 
 // Supported history windows for balance charts.
@@ -370,6 +480,10 @@ message TransferRow {
   // string. Both legs of a transfer share it; with account_code and is_debit
   // it identifies this row.
   string transfer_id = 15;
+  // Exact transfer timestamp in nanoseconds since epoch (UTC); ts_us is this
+  // value divided by 1,000, rounded down. Compare it with a balance update's
+  // trading_applied_through_ts_ns.
+  uint64 ts_ns = 16;
 }
 
 // TransferRowBatch is one realtime publication on an account's transfer
@@ -442,6 +556,12 @@ service LedgerReadService {
 
   // Retrieve the latest balances for an account.
   // Supports optional subaccount scoping and returns asset symbols with decimal amounts on REST.
+  // The answer reflects every balance update published before the call
+  // began (across an ownership move, its earlier Trading transfers: see
+  // BalanceUpdate), and its Trading values are one atomic cut at the
+  // position it returns. When it cannot answer so yet, the call fails with UNAVAILABLE
+  // (503); retry it with a short backoff. Each call costs 1 unit of the
+  // trading_read rate-limit class, whatever the number of assets.
   rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;

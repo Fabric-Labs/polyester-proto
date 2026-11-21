@@ -328,8 +328,9 @@ enum TriggerFailureReason {
   // the most a price level can hold, even if some quantity still fits; it was
   // not placed.
   TRIGGER_FAILURE_REASON_PRICE_LEVEL_QUANTITY_LIMIT = 121;
-  // One of the trigger's child orders went past its planned quantity, so the
-  // trigger ended.
+  // A ladder's fills would have gone past its total quantity, so the ladder
+  // ended. Each level can be raised up to its planned quantity, never above
+  // it.
   TRIGGER_FAILURE_REASON_CHILD_QTY_RAISE_NOT_ALLOWED = 122;
   // The market held its maximum number of triggers.
   TRIGGER_FAILURE_REASON_TRIGGERS_EXHAUSTED = 140;
@@ -1233,6 +1234,83 @@ message BatchCancelTriggersResponse {
 }
 
 // =============================================================================
+// Cancel All Triggers
+// =============================================================================
+
+// CancelAllTriggersRequest cancels every matching trigger of an account in one
+// request and cancels no order: see CancelAllTriggers.
+message CancelAllTriggersRequest {
+  // Optional public subaccount ID. When omitted, subaccount-scoped API keys
+  // use their bound subaccount; other callers use their authenticated root
+  // account.
+  optional fixed64 subaccount_id = 1;
+  // Optional trading-pair IDs from GetSpotConfig. Empty matches all symbols.
+  // At most 100 positive IDs; duplicates are ignored and ordering is immaterial.
+  repeated uint32 symbol_ids = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    items: {uint32: {gt: 0}}
+  }];
+  // Side filter. When set, only triggers whose orders trade on this side
+  // match: a SELL stop-loss matches SELL.
+  orders.v1.Side side = 3 [(buf.validate.field).enum.defined_only = true];
+  // If true, return the matched count without canceling anything.
+  bool dry_run = 4;
+  // Idempotency key (required). Reuse the same key and criteria for retries.
+  // Completed results are retained for at least two minutes. Use a fresh key
+  // for a new cancellation; do not reuse a key after its replay window.
+  // 1 to 64 ASCII characters using letters, digits, period, underscore, colon,
+  // slash, or hyphen.
+  string request_id = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 64,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:/-]+$"
+  ];
+  // Trigger types to cancel, as ListTriggers' trigger_type reports them.
+  // Empty matches every type. At most 5 distinct types. An order's attached
+  // take-profit, stop-loss and trailing legs end together, and so do an
+  // OCO's two legs: when any of them matches, all of them are canceled and
+  // counted. For example, canceling STOP_LOSS also cancels the take-profit or
+  // trailing leg attached to the same order as a matching stop-loss, and the
+  // take-profit of an OCO whose stop-loss matches.
+  repeated TriggerType trigger_types = 6 [(buf.validate.field).repeated = {
+    max_items: 5
+    unique: true
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+}
+
+// CancelAllTriggersResponse returns the result of a cancel-all of triggers.
+// Each canceled trigger's final state is reported on its trigger events and
+// read paths.
+message CancelAllTriggersResponse {
+  // Cancel-all submission outcome.
+  enum Status {
+    // Cancel-all status was not provided.
+    STATUS_UNSPECIFIED = 0;
+    // Every matching trigger was stopped and its cancellation submitted.
+    SUBMITTED = 1;
+    // The request only counted matching triggers and canceled nothing.
+    DRY_RUN = 2;
+  }
+
+  // Cancel-all submission outcome.
+  Status status = 1 [(buf.validate.field).enum.defined_only = true];
+  // Number of the account's triggers that matched the filters when the
+  // request was accepted, each canceled unless `dry_run` is set. A retry with
+  // the same request_id and criteria returns the original count.
+  uint32 matched_triggers = 2;
+  // Server timestamp of the original acceptance.
+  google.protobuf.Timestamp ts = 3;
+  // Server timestamp as epoch nanoseconds (for bots).
+  uint64 ts_ns = 4;
+}
+
+// =============================================================================
 // Modify / Pause / Resume Trigger
 // =============================================================================
 
@@ -1626,9 +1704,10 @@ service TriggersService {
         "stop-loss over a quantity the account already holds. The quantity "
         "is reserved once for both legs. When one leg's order trades the "
         "whole quantity, the other is canceled; a partly filled order's "
-        "rest stays protected by the other leg. Cancel All Orders and the "
-        "dead-man switch do not cancel OCOs; an OCO leg's working order "
-        "they cancel cancels the OCO."
+        "rest stays protected by the other leg. Cancel All Triggers cancels "
+        "OCOs, and so do Cancel All Orders and the dead-man switch with "
+        "include_triggers; without it they cancel no OCO, but an OCO leg's "
+        "working order they cancel cancels the OCO."
       tags: "Triggers Service"
     };
   }
@@ -1649,8 +1728,7 @@ service TriggersService {
     };
   }
 
-  // Get a trigger by ID. Costs one unit of the root account's trading read
-  // limit.
+  // Get a trigger by ID. Costs one unit of the account's trading read limit.
   rpc GetTrigger(GetTriggerRequest) returns (GetTriggerResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
     option (polyester.api.authentication_methods) = API_KEY;
@@ -1660,13 +1738,13 @@ service TriggersService {
       description:
         "Retrieve a single trigger by trigger ID, including "
         "lifecycle state and strategy-specific fields. Costs one unit of "
-        "the root account's trading read limit."
+        "the account's trading read limit."
       tags: "Triggers Service"
     };
   }
 
   // List triggers for a sub-account with optional filters. Costs one unit of
-  // the root account's trading read limit per 100 rows the limit asks for,
+  // the account's trading read limit per 100 rows the limit asks for,
   // rounded up.
   rpc ListTriggers(ListTriggersRequest) returns (ListTriggersResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1676,7 +1754,7 @@ service TriggersService {
       summary: "List Triggers"
       description:
         "List triggers for an account with optional symbol, status, "
-        "and trigger-type filters. Costs one unit of the root account's "
+        "and trigger-type filters. Costs one unit of the account's "
         "trading read limit per 100 rows the limit asks for, rounded up."
       tags: "Triggers Service"
     };
@@ -1686,7 +1764,7 @@ service TriggersService {
   // read (no such trigger, another account's, or one outside the selected
   // sub-account) answers NOT_FOUND, as GetTrigger does. A trigger the caller
   // can read that has no event yet answers an empty list. Costs two units of
-  // the root account's trading read limit per 100 rows the limit asks for,
+  // the account's trading read limit per 100 rows the limit asks for,
   // rounded up.
   rpc ListTriggerEvents(ListTriggerEventsRequest) returns (ListTriggerEventsResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -1697,7 +1775,7 @@ service TriggersService {
       description:
         "List append-only trigger events for a trigger, including "
         "child-order actions, with optional event-category filtering "
-        "and reverse-time pagination. Costs two units of the root "
+        "and reverse-time pagination. Costs two units of the "
         "account's trading read limit per 100 rows the limit asks for, "
         "rounded up."
       tags: "Triggers Service"
@@ -1707,11 +1785,12 @@ service TriggersService {
   // Cancel a trigger: a standalone stop-loss, take-profit, trailing stop,
   // TWAP or ladder, or an order's attached leg. Canceling a TWAP or a ladder
   // also cancels its open child orders.
-  // OrdersService.CancelAllOrders and the dead-man switch
-  // (OrdersService.CancelAllAfter) cancel open orders only, never triggers:
-  // after either, armed stops and running TWAPs can still place orders. To
-  // stop them, cancel each live trigger with this method; ListTriggers lists
-  // them.
+  // To cancel many triggers in one request, use CancelAllTriggers, which
+  // cancels every trigger matching symbols, side and trigger types and no
+  // order. OrdersService.CancelAllOrders and the dead-man switch
+  // (OrdersService.CancelAllAfter) cancel triggers only with
+  // `include_triggers`; without it, armed stops and running TWAPs can still
+  // place orders after either.
   // A trigger that has ended (completed, canceled or failed) answers a
   // cancel with ERROR_CODE_TRIGGER_STATUS_INVALID for at least 60 s after it
   // ends, including a repeat of a cancel that succeeded and a cancel retried
@@ -1733,9 +1812,10 @@ service TriggersService {
       summary: "Cancel Trigger"
       description:
         "Cancel a trigger by trigger ID and release its reserved "
-        "quantity. Cancel All Orders and the dead-man switch cancel "
-        "open orders only, never triggers; use this method to stop "
-        "each trigger too. A trigger that has ended answers "
+        "quantity. Use Cancel All Triggers to cancel every trigger "
+        "matching symbols, side and trigger types in one request; "
+        "Cancel All Orders and the dead-man switch cancel triggers "
+        "only with include_triggers. A trigger that has ended answers "
         "TRIGGER_STATUS_INVALID for at least 60 s after it ends; after "
         "that it may answer TRIGGER_NOT_FOUND. Treat either as already "
         "done."
@@ -1767,6 +1847,55 @@ service TriggersService {
         "aggregate counts. Each trigger counts one against the cancel "
         "rate limit; a retry with the same request_id and trigger IDs "
         "within 2 minutes returns the original results."
+      tags: "Triggers Service"
+    };
+  }
+
+  // Cancel all of the account's triggers that match the filters (symbols,
+  // side and trigger types) in one request, without canceling any order.
+  // Unless dry_run is set, what it cancels is fixed when its request_id is
+  // first accepted: every matching trigger created before that, and none
+  // created after it. Each ends canceled with reason
+  // TRIGGER_CANCEL_REASON_CANCEL_ALL and releases its reserved funds, and
+  // none places an order after the response. Its open orders are canceled
+  // with it, as CancelTrigger cancels them: a TWAP's working slice, a
+  // ladder's open levels, and the working exit of an attached take-profit,
+  // stop-loss or trailing leg. An order that a stop already placed when it
+  // fired is a plain order and stays open; so does the parent order of
+  // canceled attached legs, which then has no protection left. Use
+  // OrdersService.CancelAllOrders for orders; its `include_triggers` cancels
+  // orders and triggers in one request.
+  //
+  // Every request counts 10 against the account's cancel rate limit, as a
+  // CancelAllOrders does, however many triggers it cancels: a dry run and a
+  // retry with the same request_id count the same. A retry with the same
+  // request_id and criteria
+  // within two minutes returns the original outcome and cancels nothing
+  // again; the same request_id with other criteria is rejected with
+  // ERROR_CODE_CONFLICT_IDEMPOTENCY_KEY_REUSE. A rejected request, or one
+  // whose outcome is unknown, is no barrier: retry it with the same
+  // request_id, or list the triggers before relying on it.
+  rpc CancelAllTriggers(CancelAllTriggersRequest) returns (CancelAllTriggersResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {
+      post: "/v1/triggers/cancel-all"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel All Triggers"
+      description:
+        "Cancel all of the account's triggers that match an optional list of "
+        "symbols, a side and a list of trigger types in one request, with a "
+        "dry-run count. It cancels no order. Every matching trigger created "
+        "before the requestId was first accepted ends canceled with reason "
+        "TRIGGER_CANCEL_REASON_CANCEL_ALL, releases its reserved funds and "
+        "places no order after the response; a trigger created later keeps "
+        "running. An order's attached legs and an OCO's two legs end together "
+        "when any of them matches. Every request counts 10 against the cancel "
+        "rate limit, however many triggers match, a dry run and a retry "
+        "included. A retry with the same requestId and criteria within 2 "
+        "minutes returns the original count and cancels nothing again."
       tags: "Triggers Service"
     };
   }
