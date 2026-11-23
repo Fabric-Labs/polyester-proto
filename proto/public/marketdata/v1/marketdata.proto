@@ -244,13 +244,25 @@ message GetCandlesRequest {
   bool include_incomplete = 6;
   // Include the composite reference market candle series for the same market,
   // timeframe, and time range.
+  // Reference candles cover only the time before the pair's listing: each one's
+  // bucket starts before the bucket that contains listing_at, as GetSpotConfig
+  // reports it. From that bucket on, the pair's own candles cover the market.
+  // Without listing_at no listing cutoff applies; availability, the requested
+  // range and pagination still do.
   // The reference series can be empty when no reference series is available for
-  // the requested timeframe.
+  // the requested timeframe, or when the requested range starts after listing.
   bool include_reference = 7;
-  // Opaque keyset cursor from a previous response. The cursor is exclusive and
-  // bound to symbol, timeframe, time bounds, and newest-first candle ordering.
-  // Inclusion flags affect response enrichment and may change between pages.
-  string page_token = 8 [(buf.validate.field).string.max_len = 512];
+  // Opaque exclusive keyset cursor from a previous GetCandles or
+  // GetCandlesColumns response; a cursor from either pages the other. It is
+  // bound to symbol_id, timeframe, and start_time and end_time exactly as
+  // sent: an absent bound and an explicit one, the Unix epoch included, are
+  // different requests. Inclusion flags affect response enrichment and may
+  // change between pages. At most 512 characters. For a known symbol_id, a
+  // cursor that is longer, malformed, from GetIndexPriceCandles, or sent with a
+  // different symbol_id, timeframe, start_time or end_time fails with
+  // invalid_argument (PAGE_TOKEN_INVALID); an unknown symbol_id fails with
+  // not_found (UNKNOWN_SYMBOL) first.
+  string page_token = 8;
 }
 
 // GetCandlesColumnsRequest selects a spot market candle series for columnar output.
@@ -293,13 +305,26 @@ message GetCandlesColumnsRequest {
   bool include_incomplete = 6;
   // Include the composite reference market candle series for the same market,
   // timeframe, and time range.
+  // Reference candles cover only the time before the pair's listing: each one's
+  // bucket starts before the bucket that contains listing_at, as GetSpotConfig
+  // reports it. From that bucket on, the pair's own candles cover the market.
+  // Without listing_at no listing cutoff applies; availability, the requested
+  // range and pagination still do.
   // The reference series can be empty when no reference series is available for
-  // the requested timeframe.
+  // the requested timeframe, or when the requested range starts after listing.
   bool include_reference = 7;
-  // Opaque exclusive keyset cursor for older closed candles, bound to symbol,
-  // timeframe, and time bounds. Columns within each page are ordered oldest-first.
-  // Inclusion flags and response shape may change between pages.
-  string page_token = 8 [(buf.validate.field).string.max_len = 512];
+  // Opaque exclusive keyset cursor for older closed candles, from a previous
+  // GetCandlesColumns or GetCandles response; a cursor from either pages the
+  // other. It is bound to symbol_id, timeframe, and start_time and end_time
+  // exactly as sent: an absent bound and an explicit one, the Unix epoch
+  // included, are different requests. Columns within each page are ordered
+  // oldest-first. Inclusion flags and response shape may change between
+  // pages. At most 512 characters. For a known symbol_id, a cursor that is
+  // longer, malformed, from GetIndexPriceCandles, or sent with a different
+  // symbol_id, timeframe, start_time or end_time fails with invalid_argument
+  // (PAGE_TOKEN_INVALID); an unknown symbol_id fails with not_found
+  // (UNKNOWN_SYMBOL) first.
+  string page_token = 8;
 }
 
 // CandlePoint is one OHLCV bucket represented with scaled integers.
@@ -413,6 +438,117 @@ message GetCandlesColumnsResponse {
   // include_incomplete=true, only the current open candle, appended last, is
   // false.
   repeated bool is_closed = 17;
+}
+
+// ---------------------------------------------------------------------------
+// GetIndexPriceCandles: one continuous price series per spot market, its
+// composite reference candles before listing and its index price after.
+// ---------------------------------------------------------------------------
+
+// IndexPriceCandleSource names the series a GetIndexPriceCandles candle comes
+// from.
+enum IndexPriceCandleSource {
+  INDEX_PRICE_CANDLE_SOURCE_UNSPECIFIED = 0;
+  // A composite reference candle: the median of external venues' candles,
+  // from a bucket that starts before the bucket containing the pair's
+  // listing_at.
+  INDEX_PRICE_CANDLE_SOURCE_REFERENCE = 1;
+  // An index price candle: the open, high, low and close of the pair's index
+  // price within the bucket, from the bucket containing listing_at on.
+  INDEX_PRICE_CANDLE_SOURCE_INDEX = 2;
+}
+
+// GetIndexPriceCandlesRequest selects one page of a spot market's index price
+// candles.
+//
+// The series is continuous across the listing: buckets that start before the
+// bucket containing the pair's listing_at (as GetSpotConfig reports it) are
+// reference candles, and from that bucket on they are index price candles. A
+// bucket is never both. Without listing_at, or with a listing_at in the future,
+// the series is reference candles only. Only closed candles are returned,
+// newest-first by bucket start time, with the same bucket alignment as
+// GetCandles. When both start_time and end_time are set, both bounds are
+// inclusive.
+message GetIndexPriceCandlesRequest {
+  option (buf.validate.message).cel = {
+    id: "get_index_price_candles.time_range_valid"
+    message: "end_time must be >= start_time when both are set"
+    expression: "!has(this.start_time) || !has(this.end_time) || this.end_time >= this.start_time"
+  };
+  option (buf.validate.message).cel = {
+    id: "get_index_price_candles.time_not_future"
+    message: "start_time and end_time must not be more than 5 minutes in the future"
+    expression: "(!has(this.start_time) || this.start_time <= now + duration('300s')) && (!has(this.end_time) || this.end_time <= now + duration('300s'))"
+  };
+
+  // Numeric spot market identifier.
+  uint32 symbol_id = 1 [(buf.validate.field).uint32.gt = 0];
+  // Candle bucket size. Required. Every candle timeframe except SEC_1, which
+  // has no index price candles and fails with invalid_argument (BAD_REQUEST).
+  Timeframe timeframe = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // Maximum number of candles to return. Defaults to 500 when unset; max
+  // 10000.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 10000];
+  // Inclusive lower bound for candle bucket start time, as a UTC timestamp.
+  // Must not be more than 5 minutes in the future.
+  google.protobuf.Timestamp start_time = 4;
+  // Inclusive upper bound for candle bucket start time, as a UTC timestamp.
+  // Must be greater than or equal to start_time when both are set, and must not
+  // be more than 5 minutes in the future.
+  google.protobuf.Timestamp end_time = 5;
+  // Opaque exclusive keyset cursor from a previous GetIndexPriceCandles
+  // response, bound to symbol_id, timeframe, and start_time and end_time as
+  // sent, an absent bound included. It continues toward older candles. At
+  // most 512 characters. For a known symbol_id, a cursor that is longer,
+  // malformed, from GetCandles or GetCandlesColumns, or bound to another
+  // request fails with invalid_argument (PAGE_TOKEN_INVALID); an unknown
+  // symbol_id fails with not_found (UNKNOWN_SYMBOL) first.
+  string page_token = 6;
+}
+
+// GetIndexPriceCandlesResponse contains one page of a spot market's index price
+// candles in columns: element i of every repeated field describes the same
+// candle.
+//
+// Candles are ordered newest-first by ts_sec, strictly descending, with no
+// two at the same ts_sec. There is no volume field: neither a reference candle
+// nor an index price candle carries trading volume. Gaps exist: a bucket from
+// the listing on in which the index price had no valid value is omitted, never
+// filled from the reference series, so treat a missing ts_sec as a gap. Index
+// price candles begin with the release that introduced them; buckets after a
+// listing but before that release are omitted the same way. A closed candle
+// appears once its series has processed the bucket, and candles of longer
+// timeframes are refreshed periodically, so the newest closed candles can
+// appear some time after their bucket closes. Reference candles of the most
+// recent 48 hours can still be revised. Reference candles reach back 180 days
+// at timeframes shorter than one hour, five years from one hour to twelve
+// hours, and up to 20 years, as far as the market's history goes, at one day
+// and longer. Index price candles are kept without a time limit.
+message GetIndexPriceCandlesResponse {
+  // Numeric spot market identifier echoed from the request.
+  uint32 symbol_id = 1;
+  // Candle bucket size of the returned series.
+  Timeframe timeframe = 2;
+  // Candle bucket start timestamps, in seconds since epoch (UTC), newest
+  // first. Empty when no candle exists in the requested range.
+  repeated uint64 ts_sec = 3;
+  // Opening prices, scaled by the pair's reference_price_scale from
+  // GetSpotConfig, the scale of both series.
+  repeated int64 open = 4;
+  // Highest prices in each bucket, using the same scale as open.
+  repeated int64 high = 5;
+  // Lowest prices in each bucket, using the same scale as open.
+  repeated int64 low = 6;
+  // Closing prices, using the same scale as open.
+  repeated int64 close = 7;
+  // The series each candle comes from.
+  repeated IndexPriceCandleSource source = 8;
+  // Opaque cursor for the next, older page. Empty when no older candle exists
+  // in the requested range.
+  string next_page_token = 9 [(buf.validate.field).string.max_len = 512];
 }
 
 // ---------------------------------------------------------------------------
@@ -835,6 +971,19 @@ service MarketDataService {
   rpc GetCandlesColumns(GetCandlesColumnsRequest) returns (GetCandlesColumnsResponse) {
     option (polyester.api.public) = true;
     option (polyester.api.hidden) = true;
+  }
+
+  // Retrieve one continuous price series of a spot market in a columnar
+  // representation: its composite reference candles before the bucket
+  // containing listing_at, and its index price candles from that bucket on,
+  // each candle marked with its source. Results are closed candles ordered
+  // newest-first, with inclusive time bounds and opaque keyset pagination.
+  // Prices use the pair's reference_price_scale from GetSpotConfig. There is
+  // no volume field, and buckets with no index price sample are omitted as
+  // gaps. A bad page_token fails with invalid_argument (PAGE_TOKEN_INVALID).
+  // This method is for ConnectRPC clients and has no REST route.
+  rpc GetIndexPriceCandles(GetIndexPriceCandlesRequest) returns (GetIndexPriceCandlesResponse) {
+    option (polyester.api.public) = true;
   }
 
   // Retrieve a cacheable snapshot of spot assets and pairs, including precision and trading constraints.

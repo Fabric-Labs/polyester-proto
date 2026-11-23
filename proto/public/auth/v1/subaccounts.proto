@@ -3,6 +3,7 @@ syntax = "proto3";
 package auth.v1;
 
 import "auth/v1/api_keys.proto";
+import "auth/v1/mfa.proto";
 import "auth/v1/policies.proto";
 import "buf/validate/validate.proto";
 import "gnostic/openapi/v3/annotations.proto";
@@ -265,6 +266,12 @@ message Subaccount {
   // update lists this sub-account with a role and removed false, subscribe
   // again: access is checked again on subscribe.
   bool removed = 16;
+  // The idempotency_key of the request that created this sub-account, so a
+  // caller that lost CreateSubaccount's response can find it. Present only
+  // when the caller owns the sub-account on an interactive session, the only
+  // kind of caller that can create one; real-time updates omit it. Empty when
+  // none was given.
+  string idempotency_key = 17;
 }
 
 // Request to list sub-accounts owned by or shared with the caller.
@@ -350,6 +357,24 @@ message CreateSubaccountRequest {
     (buf.validate.field).string = {min_len: 1, max_len: 8192},
     (google.api.field_behavior) = REQUIRED
   ];
+  // Optional caller-chosen key that makes this request safe to retry: 1 to
+  // 128 letters, digits, '.', '_', ':' or '-'. It is unique within the root
+  // account and never reused, even after its sub-account is deleted. Every
+  // request is authenticated first, its signature included. Sending the
+  // identical request again (the same message, label, icon and color, for the
+  // same smart account address) under the same key returns the sub-account it
+  // created, with replayed set, and consumes no challenge; once that
+  // sub-account is deleted, it fails with NotFound and
+  // AUTH_RESOURCE_NOT_FOUND instead. Any other request under that key fails
+  // with AUTH_SUBACCOUNT_IDEMPOTENCY_CONFLICT. Neither creates anything, so a
+  // resent or stale signed challenge never creates a second sub-account. After a lost response, a new challenge names the next smart
+  // account address, so a request carrying it conflicts when the first
+  // request did create the sub-account: find that sub-account in
+  // ListSubaccounts by its idempotency_key. Empty when none.
+  string idempotency_key = 9 [
+    (buf.validate.field).string.pattern = "^([A-Za-z0-9._:-]{1,128})?$",
+    (buf.validate.field).string.example = "deploy-1842"
+  ];
 }
 
 // Response returned after creating a sub-account.
@@ -363,8 +388,13 @@ message CreateSubaccountResponse {
   // Today this equals total_created for a successful create.
   uint32 smart_account_salt_nonce = 3;
   // Initial monotonic resource revision. Clients can pass this value directly
-  // as expected_revision on the next revision-gated mutation.
+  // as expected_revision on the next revision-gated mutation. A replayed
+  // request returns the sub-account's current revision.
   uint64 revision = 4;
+  // True when idempotency_key matched an earlier identical request: the
+  // response describes the sub-account that request created, and this call
+  // created nothing and consumed no challenge.
+  bool replayed = 5;
 }
 
 // SubaccountUpdateSpec contains mutable display and status configuration.
@@ -756,9 +786,476 @@ enum ActivityEventSource {
   ACTIVITY_SOURCE_MOBILE = 2;
   // Programmatic API client.
   ACTIVITY_SOURCE_API = 3;
+  // Polyester itself, with no client request behind the event.
+  ACTIVITY_SOURCE_SYSTEM = 4;
 }
 
-// Activity or audit event of a main account or one of its sub-accounts.
+// Who performed an activity event.
+enum ActivityActorKind {
+  // No actor kind was specified.
+  ACTIVITY_ACTOR_UNSPECIFIED = 0;
+  // A signed-in account: the main account's owner or a sub-account member.
+  ACTIVITY_ACTOR_USER = 1;
+  // A request signed with an API key.
+  ACTIVITY_ACTOR_API_KEY = 2;
+  // Polyester itself, with no request by a user. The system reason says why.
+  ACTIVITY_ACTOR_SYSTEM = 3;
+  // A request nobody authenticated, such as a refused sign-in. The event's IP
+  // address and user agent say where it came from.
+  ACTIVITY_ACTOR_UNAUTHENTICATED = 4;
+}
+
+// Kind of API key an actor signed a request with.
+enum ActivityApiKeyKind {
+  // No key kind was specified.
+  ACTIVITY_KEY_UNSPECIFIED = 0;
+  // A key the account holder created for their own programs.
+  ACTIVITY_KEY_STANDARD = 1;
+  // A key of the Polyester AI assistant.
+  ACTIVITY_KEY_ASSISTANT = 2;
+  // An admin key of the main account.
+  ACTIVITY_KEY_ADMIN = 3;
+  // A strategy bot's trade key.
+  ACTIVITY_KEY_STRATEGY_BOT = 4;
+  // A QuickSwap broker's key.
+  ACTIVITY_KEY_BROKER = 5;
+}
+
+// A QuickSwap broker member role.
+enum ActivityBrokerRole {
+  // No broker role was specified.
+  ACTIVITY_BROKER_ROLE_UNSPECIFIED = 0;
+  // The broker's owner.
+  ACTIVITY_BROKER_OWNER = 1;
+  // A broker administrator.
+  ACTIVITY_BROKER_ADMIN = 2;
+  // A finance member.
+  ACTIVITY_BROKER_FINANCE = 3;
+  // An affiliate manager.
+  ACTIVITY_BROKER_AFFILIATE_MANAGER = 4;
+  // A read-only member.
+  ACTIVITY_BROKER_VIEWER = 5;
+}
+
+// Why Polyester changed an item by itself.
+enum ActivitySystemReason {
+  // No system reason was specified.
+  ACTIVITY_SYSTEM_REASON_UNSPECIFIED = 0;
+  // An AI assistant key preset's definition changed, and the preset's policy
+  // was updated to it.
+  ACTIVITY_SYSTEM_ASSISTANT_PRESET_UPDATED = 1;
+  // A requested QuickSwap broker allowlist change was applied on chain, or
+  // could not be.
+  ACTIVITY_SYSTEM_BROKER_ALLOWLIST_CHANGE_SETTLED = 2;
+  // A QuickSwap pool account or its shared policy was provisioned.
+  ACTIVITY_SYSTEM_QUICKSWAP_POOL_PROVISIONED = 3;
+  // A QuickSwap broker's main account was provisioned.
+  ACTIVITY_SYSTEM_QUICKSWAP_BROKER_PROVISIONED = 4;
+  // The chain's result of a requested QuickSwap broker allowlist change did
+  // not match what was submitted, and is being reconciled. A later event
+  // records how the change ended.
+  ACTIVITY_SYSTEM_BROKER_ALLOWLIST_CHANGE_RECONCILING = 5;
+}
+
+// The actor of an activity event.
+message ActivityActor {
+  // Kind of actor.
+  ActivityActorKind kind = 1 [(buf.validate.field).enum = {defined_only: true}];
+  // Account that acted (opaque ID), for a user or an API key. A sub-account
+  // member is named by their own account, and a QuickSwap broker's key by the
+  // broker's account. Absent for the system and an unauthenticated request.
+  fixed64 account_id = 2;
+  // Username of that account, when it has one.
+  string username = 3 [(buf.validate.field).string.max_len = 64];
+  // API key the actor signed the request with, as ApiKey.key_id names it, or
+  // a QuickSwap broker key's key_id. Set for an API key actor only.
+  string api_key_id = 4 [(buf.validate.field).string.max_len = 64];
+  // Kind of that API key when the event was recorded, for example an AI
+  // assistant, a strategy bot or a QuickSwap broker key.
+  ActivityApiKeyKind api_key_kind = 5 [(buf.validate.field).enum = {defined_only: true}];
+  // Label of that API key, when it has one.
+  string api_key_label = 6 [(buf.validate.field).string.max_len = 128];
+  // Why Polyester acted. Set for the system actor only.
+  ActivitySystemReason system_reason = 7 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+// The item an activity event affected. Exactly one ID is set, and which one
+// says what the item is. A sign-in session, a failed sign-in and the
+// recovery codes have no ID, only a name.
+message ActivityItem {
+  // ID of the item (opaque IDs as each item's own APIs return them).
+  oneof id {
+    // A main account, or the member account of a sub-account membership.
+    fixed64 account_id = 1;
+    // A sub-account.
+    fixed64 subaccount_id = 2;
+    // A sub-account invitation.
+    fixed64 invite_id = 3;
+    // A sub-account policy.
+    fixed64 subaccount_policy_id = 4;
+    // An API key policy.
+    fixed64 api_policy_id = 5;
+    // An API key, as ApiKey.key_id names it.
+    string api_key_id = 6 [(buf.validate.field).string.max_len = 64];
+    // An MFA factor, as MFAFactor.factor_id names it.
+    string mfa_factor_id = 7 [(buf.validate.field).string.max_len = 64];
+    // A saved address-book destination.
+    fixed64 address_book_entry_id = 8;
+    // A QuickSwap broker allowlist change request.
+    fixed64 broker_allowlist_change_id = 9;
+    // A connected app.
+    fixed64 connected_app_id = 10;
+  }
+  // Display name of the item when the event was recorded: a policy name, an
+  // API key or address-book label, a sub-account label, a member's username,
+  // an MFA factor label, a connected app's name, or a session's device.
+  string name = 11 [(buf.validate.field).string.max_len = 512];
+}
+
+// A text value before and after an event. An empty value is unset.
+message ActivityTextChange {
+  // Value before the event.
+  string from = 1 [(buf.validate.field).string.max_len = 512];
+  // Value after the event.
+  string to = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// A flag before and after an event.
+message ActivityBoolChange {
+  // Value before the event.
+  bool from = 1;
+  // Value after the event.
+  bool to = 2;
+}
+
+// A count or amount before and after an event.
+message ActivityUintChange {
+  // Value before the event.
+  uint64 from = 1;
+  // Value after the event.
+  uint64 to = 2;
+}
+
+// A time before and after an event. An absent time is unset.
+message ActivityTimeChange {
+  // Value before the event.
+  google.protobuf.Timestamp from = 1;
+  // Value after the event.
+  google.protobuf.Timestamp to = 2;
+}
+
+// An opaque ID before and after an event. Zero is none.
+message ActivityIdChange {
+  // ID before the event.
+  fixed64 from_id = 1;
+  // ID after the event.
+  fixed64 to_id = 2;
+}
+
+// Policy actions an event allowed and stopped allowing.
+message ActivityActionsChange {
+  // Actions allowed by the event.
+  repeated PolicyAction added = 1 [(buf.validate.field).repeated.max_items = 64];
+  // Actions no longer allowed after the event.
+  repeated PolicyAction removed = 2 [(buf.validate.field).repeated.max_items = 64];
+}
+
+// Entries an event added to and removed from a list.
+message ActivityListChange {
+  // Entries added.
+  repeated string added = 1 [(buf.validate.field).repeated.max_items = 64];
+  // Entries removed.
+  repeated string removed = 2 [(buf.validate.field).repeated.max_items = 64];
+}
+
+// Opaque IDs an event added to and removed from a list.
+message ActivityIdListChange {
+  // IDs added.
+  repeated fixed64 added_ids = 1 [(buf.validate.field).repeated.max_items = 64];
+  // IDs removed.
+  repeated fixed64 removed_ids = 2 [(buf.validate.field).repeated.max_items = 64];
+}
+
+// An API key status before and after an event.
+message ActivityApiKeyStatusChange {
+  // Status before the event.
+  ApiKeyStatus from = 1;
+  // Status after the event.
+  ApiKeyStatus to = 2;
+}
+
+// An API key purpose before and after an event.
+message ActivityApiKeyPurposeChange {
+  // Purpose before the event.
+  ApiKeyPurpose from = 1;
+  // Purpose after the event.
+  ApiKeyPurpose to = 2;
+}
+
+// A sub-account status before and after an event.
+message ActivitySubaccountStatusChange {
+  // Status before the event.
+  SubaccountStatus from = 1;
+  // Status after the event.
+  SubaccountStatus to = 2;
+}
+
+// A sub-account member role before and after an event.
+message ActivitySubaccountRoleChange {
+  // Role before the event. Unspecified when the member had none.
+  SubaccountRole from = 1;
+  // Role after the event. Unspecified when the member has none.
+  SubaccountRole to = 2;
+}
+
+// A QuickSwap broker member role before and after an event.
+message ActivityBrokerRoleChange {
+  // Role before the event. Unspecified when the member had none.
+  ActivityBrokerRole from = 1;
+  // Role after the event. Unspecified when the member has none.
+  ActivityBrokerRole to = 2;
+}
+
+// An invitation status before and after an event.
+message ActivityInviteStatusChange {
+  // Status before the event.
+  SubaccountInviteStatus from = 1;
+  // Status after the event.
+  SubaccountInviteStatus to = 2;
+}
+
+// What an account event changed.
+message ActivityAccountDetails {
+  // The account's username: before and after a change.
+  ActivityTextChange username = 1;
+  // Whether Polyester generated the new username rather than the user
+  // choosing it.
+  bool generated_username = 2;
+}
+
+// How a sign-in was attempted.
+enum ActivitySignInMethod {
+  // No sign-in method was specified.
+  ACTIVITY_SIGN_IN_UNSPECIFIED = 0;
+  // A wallet signature.
+  ACTIVITY_SIGN_IN_WALLET = 1;
+  // A connected app the user approved.
+  ACTIVITY_SIGN_IN_CONNECTED_APP = 2;
+}
+
+// Why a sign-in failed.
+enum ActivitySignInFailure {
+  // No sign-in failure was specified.
+  ACTIVITY_SIGN_IN_FAILURE_UNSPECIFIED = 0;
+  // The signed message is not a sign-in challenge.
+  ACTIVITY_SIGN_IN_FAILURE_INVALID_CHALLENGE = 1;
+  // The challenge expired before it was signed.
+  ACTIVITY_SIGN_IN_FAILURE_CHALLENGE_EXPIRED = 2;
+  // The challenge was already used.
+  ACTIVITY_SIGN_IN_FAILURE_CHALLENGE_USED = 3;
+  // The signature does not match the wallet.
+  ACTIVITY_SIGN_IN_FAILURE_INVALID_SIGNATURE = 4;
+  // No challenge was issued for the wallet.
+  ACTIVITY_SIGN_IN_FAILURE_NO_CHALLENGE = 5;
+}
+
+// An action that needs a recent MFA check in the session.
+enum ActivityElevatedAction {
+  // No elevated action was specified.
+  ACTIVITY_ELEVATED_UNSPECIFIED = 0;
+  // Setting up the AI assistant's API keys.
+  ACTIVITY_ELEVATED_ASSISTANT_ACCESS = 1;
+  // Giving a strategy bot its trade key.
+  ACTIVITY_ELEVATED_STRATEGY_BOT_ACCESS = 2;
+  // Linking a Telegram account.
+  ACTIVITY_ELEVATED_TELEGRAM_LINK = 3;
+}
+
+// What a session event recorded.
+message ActivitySessionDetails {
+  // How the user signed in, for a sign-in or a failed one.
+  ActivitySignInMethod method = 1 [(buf.validate.field).enum = {defined_only: true}];
+  // Wallet address that signed in, lowercase.
+  string wallet_address = 2 [(buf.validate.field).string.max_len = 128];
+  // Why the sign-in failed, for a failed one.
+  ActivitySignInFailure failure = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // Scopes the user granted a connected app.
+  repeated string scopes = 4 [(buf.validate.field).repeated.max_items = 32];
+  // Action the session's recent MFA check was used for.
+  ActivityElevatedAction elevated_action = 5 [(buf.validate.field).enum = {defined_only: true}];
+}
+
+// What an API key event changed. On creation, the key's starting values
+// appear as changes from unset.
+message ActivityApiKeyDetails {
+  // The key's label.
+  ActivityTextChange label = 1;
+  // The key's status.
+  ActivityApiKeyStatusChange status = 2;
+  // The key's purpose.
+  ActivityApiKeyPurposeChange purpose = 3;
+  // The key's icon.
+  ActivityTextChange icon = 4;
+  // The key's color.
+  ActivityTextChange color = 5;
+  // IP addresses or ranges added to and removed from the key's allowlist.
+  // Masked like the event's IP for callers who may not see IP addresses.
+  ActivityListChange ip_allowlist = 6;
+  // The key's expiry.
+  ActivityTimeChange expires_at = 7;
+  // The API key policy bound to the key (opaque IDs).
+  ActivityIdChange api_policy_id = 8;
+  // Strategy bot the key belongs to, for a strategy bot key.
+  fixed64 strategy_bot_id = 9;
+}
+
+// What a policy event changed. On creation, the policy's starting values
+// appear as changes from unset.
+message ActivityPolicyDetails {
+  // The policy's name.
+  ActivityTextChange name = 1;
+  // The policy's description.
+  ActivityTextChange description = 2;
+  // Actions the policy allowed and stopped allowing.
+  ActivityActionsChange actions = 3;
+  // Whether the policy allows every spot market.
+  ActivityBoolChange all_spot_markets = 4;
+  // Maximum notional of one order, in canonical quote microunits (one unit is
+  // 0.000001 USDT). 0 is no cap.
+  ActivityUintChange max_order_notional = 5;
+  // Maximum number of resting orders. 0 is no cap.
+  ActivityUintChange max_open_orders = 6;
+  // Whether trading is halted.
+  ActivityBoolChange trading_halted = 7;
+  // Whether the policy is locked.
+  ActivityBoolChange locked = 8;
+  // The policy's review time.
+  ActivityTimeChange review_at = 9;
+  // The policy's expiry.
+  ActivityTimeChange expires_at = 10;
+  // AI assistant key preset the policy follows.
+  AssistantKeyPreset assistant_preset = 11 [(buf.validate.field).enum = {defined_only: true}];
+  // Template the policy was copied from (opaque ID of a policy of the same
+  // kind), and that template's revision.
+  fixed64 source_template_id = 12;
+  // Revision of the template when it was copied.
+  uint64 source_template_revision = 13;
+  // Sub-account policy bound to the event's sub-account (opaque IDs).
+  ActivityIdChange subaccount_policy_id = 14;
+  // Strategy bot the policy was made for.
+  fixed64 strategy_bot_id = 15;
+}
+
+// What a sub-account event changed.
+message ActivitySubaccountDetails {
+  // The sub-account's label.
+  ActivityTextChange label = 1;
+  // The sub-account's status.
+  ActivitySubaccountStatusChange status = 2;
+  // The sub-account's icon.
+  ActivityTextChange icon = 3;
+  // The sub-account's color.
+  ActivityTextChange color = 4;
+  // Whether the sub-account's members must use MFA.
+  ActivityBoolChange require_member_mfa = 5;
+}
+
+// What a member event changed. The member is the event's item.
+message ActivityMemberDetails {
+  // The member's role on a sub-account.
+  ActivitySubaccountRoleChange role = 1;
+  // The member's role in a QuickSwap broker.
+  ActivityBrokerRoleChange broker_role = 2;
+  // Whether the event moved a QuickSwap broker's ownership to the member.
+  bool ownership_transfer = 3;
+}
+
+// What an invitation event recorded. The invitation is the event's item.
+message ActivityInviteDetails {
+  // Account invited (opaque ID).
+  fixed64 grantee_account_id = 1;
+  // Role offered on a sub-account.
+  SubaccountRole role = 2 [(buf.validate.field).enum = {defined_only: true}];
+  // Role offered in a QuickSwap broker.
+  ActivityBrokerRole broker_role = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // The invitation's status.
+  ActivityInviteStatusChange status = 4;
+}
+
+// What an address-book event changed. The entry is the event's item.
+message ActivityDestinationDetails {
+  // The entry's label.
+  ActivityTextChange label = 1;
+  // Whether the entry's note changed. The note itself is not shown.
+  bool note_changed = 2;
+  // Tags added to and removed from the entry (opaque IDs).
+  ActivityIdListChange tag_ids = 3;
+}
+
+// Whether a QuickSwap broker allowlist change adds or removes a destination.
+enum ActivityAllowlistAction {
+  // No allowlist action was specified.
+  ACTIVITY_ALLOWLIST_UNSPECIFIED = 0;
+  // Add the destination.
+  ACTIVITY_ALLOWLIST_ADD = 1;
+  // Remove the destination.
+  ACTIVITY_ALLOWLIST_REMOVE = 2;
+}
+
+// What a QuickSwap broker allowlist event recorded. The change request is
+// the event's item.
+message ActivityBrokerAllowlistDetails {
+  // Whether the change adds or removes the destination.
+  ActivityAllowlistAction action = 1 [(buf.validate.field).enum = {defined_only: true}];
+  // Destination address.
+  string destination = 2 [(buf.validate.field).string.max_len = 256];
+  // Chain ID of the destination.
+  uint64 destination_chain_id = 3;
+  // Label of the destination.
+  string label = 4 [(buf.validate.field).string.max_len = 128];
+}
+
+// What an account security event changed.
+message ActivitySecurityDetails {
+  // Type of the MFA factor added, changed, removed or used.
+  MFAFactorType factor_type = 1 [(buf.validate.field).enum = {defined_only: true}];
+  // The MFA factor's label.
+  ActivityTextChange label = 2;
+  // What a passed MFA check was for.
+  MFAChallengePurpose challenge_purpose = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // Whether the recovery codes were replaced by new ones.
+  bool recovery_codes_rotated = 4;
+}
+
+// What an activity event changed, by the kind of item it affected.
+message ActivityDetails {
+  // Details of one kind of item.
+  oneof kind {
+    // An account change.
+    ActivityAccountDetails account = 1;
+    // A sign-in, a failed sign-in, a connected app or an MFA-elevated action.
+    ActivitySessionDetails session = 2;
+    // An API key change.
+    ActivityApiKeyDetails api_key = 3;
+    // A sub-account or API key policy change.
+    ActivityPolicyDetails policy = 4;
+    // A sub-account change.
+    ActivitySubaccountDetails subaccount = 5;
+    // A sub-account or QuickSwap broker membership change.
+    ActivityMemberDetails member = 6;
+    // A sub-account or QuickSwap broker invitation.
+    ActivityInviteDetails invite = 7;
+    // An address-book change.
+    ActivityDestinationDetails destination = 8;
+    // A QuickSwap broker allowlist change.
+    ActivityBrokerAllowlistDetails broker_allowlist = 9;
+    // An MFA or recovery-code change.
+    ActivitySecurityDetails security = 10;
+  }
+}
+
+// Activity or audit event of a main account or one of its sub-accounts: who
+// did what to which item.
 message ActivityEvent {
   // Time when the event occurred.
   google.protobuf.Timestamp created_at = 2;
@@ -768,9 +1265,11 @@ message ActivityEvent {
   // Action recorded for the entity.
   ActivityEventAction event_action = 4 [(buf.validate.field).enum = {defined_only: true}];
 
-  // Client channel from which the event originated.
+  // Client channel from which the event originated. SYSTEM for an event
+  // Polyester recorded by itself.
   ActivityEventSource source = 5 [(buf.validate.field).enum = {defined_only: true}];
-  // Origin IP address. Masked for non-owner and non-admin callers.
+  // Origin IP address. Masked for non-owner and non-admin callers. Absent
+  // for a system event.
   string ip = 6 [
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.max_len = 64
@@ -778,20 +1277,18 @@ message ActivityEvent {
   // User agent associated with the event, when available.
   string user_agent = 7 [(buf.validate.field).string.max_len = 512];
 
-  // Account that performed the action (opaque ID).
-  fixed64 actor_account_id = 8;
-
-  // Structured event details as a JSON string. Maximum 64 KiB (65536 UTF-8
-  // bytes).
-  string payload_json = 9 [(buf.validate.field).string.max_bytes = 65536];
-
   // Sub-account the event belongs to (opaque ID). Absent for an event of the
   // main account itself.
   fixed64 subaccount_id = 10;
 
-  // API key the actor used (opaque ID). Absent when the actor used a session.
-  // Set by ListAccountActivity only.
-  fixed64 actor_api_key_id = 11;
+  // Who performed the event. Always set.
+  ActivityActor actor = 12;
+  // Item the event affected. Absent only for an event recorded before items
+  // were.
+  ActivityItem item = 13;
+  // What the event changed. Absent when the event records no change, such
+  // as a deletion, or was recorded before details were.
+  ActivityDetails details = 14;
 }
 
 // Request to list sub-account activity.

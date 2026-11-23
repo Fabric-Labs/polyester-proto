@@ -50,8 +50,10 @@ enum ErrorCode {
   // A behaviour example of the version fails, or the examples were never
   // run. RunScenarios shows each result.
   SCENARIOS_FAILING = 10;
-  // The version has no finished backtest. Bots that cannot be backtested
-  // are exempt. Not returned until backtests are available.
+  // The version has no finished backtest. A bot that cannot be backtested
+  // (NOT_BACKTESTABLE, for any of the NotBacktestableReason causes) is exempt:
+  // its proposal records why, and the deploy page tells the user before they
+  // approve. Not returned until backtests are available.
   BACKTEST_MISSING = 11;
   // A market of the bot is not open to bots. markets lists them.
   MARKET_NOT_ALLOWED = 12;
@@ -65,13 +67,24 @@ enum ErrorCode {
   // timeframes.
   WINDOW_HAS_NO_DATA = 15;
   // The bot cannot be backtested on candles: it reacts to events candles do
-  // not carry, such as top-of-book or trade updates. ExplainStrategy says so.
+  // not carry, such as top-of-book or trade updates, or social signals; it
+  // reads trading volume, which the reference price history does not
+  // include; its markets have different quote assets; or a market has no
+  // reference candles over the window. Only bots that trade with market orders,
+  // including exits on watched price levels, are backtested: a bot's first
+  // limit order ends its backtest as NOT_BACKTESTABLE. ExplainStrategy says
+  // so for what is known before a backtest runs: the events, markets and
+  // quote assets the bot reads. A limit order is found only while it runs.
   NOT_BACKTESTABLE = 16;
   // The caller ran the most behaviour-example runs allowed per minute.
   // retry_after says when to try again.
   SCENARIO_RUN_LIMIT_REACHED = 17;
-  // The caller started the most backtests allowed per day. retry_after says
-  // when to try again.
+  // The caller started 200 backtests in the current UTC day, and retry_after
+  // says when the day resets (00:00 UTC); or the caller has 3 backtests
+  // queued or running, and retry_after is unset: one frees a slot when it
+  // finishes. A request that returns an existing backtest, by the same key
+  // or the same identity, never counts; starting a failed backtest again
+  // under a new key counts as a new start.
   BACKTEST_LIMIT_REACHED = 18;
   // The caller's bots and backtests would read more distinct indicator
   // settings than allowed. Reuse an indicator setting another bot reads, or
@@ -110,6 +123,25 @@ enum ErrorCode {
   // The strategy has no revision with this number. Revisions are numbered
   // from 1, so zero is never one.
   REVISION_NOT_FOUND = 30;
+  // The backtest hasn't finished, so it has no trades to list yet. Read its
+  // status with GetBacktest.
+  BACKTEST_NOT_DONE = 31;
+  // Deploying a bot needs a recently MFA-elevated session (MFA_RECENT).
+  // Complete MFA and deploy again; nothing was started.
+  MFA_ELEVATION_REQUIRED = 32;
+  // The deploy proposal expired before it was deployed. Propose the deploy
+  // again.
+  PROPOSAL_EXPIRED = 33;
+  // The deploy needs a new subaccount, and the request carries no signed
+  // authorization for it, or one that can no longer be used: a challenge
+  // since replaced or expired. Request a new subaccount challenge, have the
+  // user sign it, and deploy again with it. The deploy keeps its progress.
+  SUBACCOUNT_AUTHORIZATION_REQUIRED = 34;
+  // The strategy's notes were saved since expected_notes_revision: another
+  // save landed first. notes_conflict gives the notes' current revision.
+  // Read the notes again, apply the change to them, and save with the new
+  // revision.
+  NOTES_REVISION_CONFLICT = 35;
 }
 
 // BotCapDetail explains BOT_CAP_REACHED.
@@ -155,7 +187,8 @@ message ErrorDetail {
   // FUNDING_INVALID and MANIFEST_TOO_LARGE.
   string field_path = 2;
   // When the same request may succeed. Set only with
-  // SCENARIO_RUN_LIMIT_REACHED and BACKTEST_LIMIT_REACHED.
+  // SCENARIO_RUN_LIMIT_REACHED, and with BACKTEST_LIMIT_REACHED for the daily
+  // limit.
   google.protobuf.Timestamp retry_after = 3;
   // Set only with BOT_CAP_REACHED.
   BotCapDetail bot_cap = 4;
@@ -169,6 +202,57 @@ message ErrorDetail {
   StrategyCapDetail strategy_cap = 7;
   // Set only with DRAFT_REVISION_CONFLICT.
   RevisionConflictDetail revision_conflict = 8;
+  // Why the bot cannot be backtested. Set only with NOT_BACKTESTABLE.
+  NotBacktestableReason not_backtestable_reason = 9;
+  // The caller's backtest limits and use. Set only with
+  // BACKTEST_LIMIT_REACHED.
+  BacktestLimitDetail backtest_limit = 10;
+  // Set only with NOTES_REVISION_CONFLICT.
+  NotesConflictDetail notes_conflict = 11;
+}
+
+// NotesConflictDetail explains NOTES_REVISION_CONFLICT.
+message NotesConflictDetail {
+  // The notes' current revision. Zero when they were never saved.
+  uint64 notes_revision = 1;
+}
+
+// BacktestLimitDetail is a caller's backtest limits and how much of them is
+// used, as BACKTEST_LIMIT_REACHED reports them: daily_used reaching
+// daily_limit is the daily limit, and retry_after says when the UTC day
+// resets; active reaching active_limit is the limit at once, and a slot frees
+// when one finishes.
+message BacktestLimitDetail {
+  // Backtests the caller may start per UTC day.
+  uint32 daily_limit = 1;
+  // Backtests the caller started in the current UTC day.
+  uint32 daily_used = 2;
+  // Backtests the caller may have queued or running at once.
+  uint32 active_limit = 3;
+  // Backtests the caller has queued or running.
+  uint32 active = 4;
+}
+
+// NotBacktestableReason is why a bot cannot be backtested on candles. Such a
+// bot can still be proposed and deployed without a backtest; the proposal
+// says why.
+enum NotBacktestableReason {
+  // Not set. Never returned.
+  NOT_BACKTESTABLE_REASON_UNSPECIFIED = 0;
+  // It reacts to trades or to quotes, which candles do not carry.
+  REACTS_TO_TRADES_OR_QUOTES = 1;
+  // It reads social signals, which have no recorded history.
+  READS_SOCIAL_SIGNALS = 2;
+  // Its markets have different quote assets.
+  MIXED_QUOTE_ASSETS = 3;
+  // A market has no reference candles over the window.
+  NO_REFERENCE_CANDLES = 4;
+  // It places limit orders, which are not backtested yet.
+  PLACES_LIMIT_ORDERS = 5;
+  // It reads trading volume, such as a candle's volume or the VWAP
+  // indicator, which the reference price history a backtest replays does
+  // not include.
+  READS_VOLUME = 6;
 }
 
 // Money is an exact amount of one asset.
@@ -322,6 +406,10 @@ message StrategyTemplate {
   string code = 5;
   // Runtime version the template is written for.
   string runtime_version = 6;
+  // What the template's bot may do with money, the markets it trades and the
+  // events it handles: the card a version saved from the template unchanged
+  // shows.
+  MoneyCard money_card = 7;
 }
 
 // ListStrategyTemplatesRequest lists the bot templates.
@@ -472,6 +560,67 @@ message BacktestMetrics {
   Money fees = 5;
   // Share of the period the bot held a position, in percent.
   string exposure_percent = 6;
+  // Annualized Sharpe ratio of the daily returns, with a zero risk-free rate,
+  // for example "1.4". Unset when undefined: with fewer than two daily
+  // returns, or when they never vary.
+  optional string sharpe_ratio = 7;
+  // Profit and loss realized by the period's sells, in the quote asset, after
+  // their fees. Signed base-10 decimal string, for example "12.5" or
+  // "-3.25".
+  string realized_pnl = 8;
+  // When the largest fall started: its peak.
+  google.protobuf.Timestamp max_drawdown_start = 9;
+  // When the largest fall ended: its trough.
+  google.protobuf.Timestamp max_drawdown_end = 10;
+  // Equity at the period's start, exactly, as an exact decimal in the quote
+  // asset: the equity curve is sampled, so read the bounds here. For the
+  // tuning period (or the whole window without a split) it is the initial
+  // balances, any base asset valued at the reference open of the window's
+  // first bar. For the held-back period it is the equity at the split, the
+  // open position marked at the last close before it.
+  string start_equity = 11;
+  // Equity at the period's end, exactly, as an exact decimal in the quote
+  // asset: the equity at the period's last close, an open position marked at
+  // that close.
+  string end_equity = 12;
+}
+
+// EvidenceGrade is how much a backtest's result can be trusted: it follows
+// from its closed trades, the days its market data fully covers, and its
+// gaps, never from the calendar span alone.
+enum EvidenceGrade {
+  // Not set. Never returned on a finished backtest.
+  EVIDENCE_GRADE_UNSPECIFIED = 0;
+  // Too few trades or too little covered data to judge.
+  NOT_ENOUGH = 1;
+  // Some evidence.
+  LOW = 2;
+  // Fair evidence.
+  MEDIUM = 3;
+  // Strong evidence.
+  HIGH = 4;
+}
+
+// BacktestScenario is a backtest's result under one cost scenario.
+message BacktestScenario {
+  // The scenario: low, base or high.
+  string name = 1;
+  // Slippage per side, in basis points.
+  uint32 slippage_bps = 2;
+  // Results over the report's period.
+  BacktestMetrics metrics = 3;
+  // Results over the report's held-back period. Unset without one.
+  BacktestMetrics held_back_metrics = 4;
+}
+
+// EquityPoint is one point of a backtest's equity curve.
+message EquityPoint {
+  // The time, in simulated time.
+  google.protobuf.Timestamp time = 1;
+  // The bot's equity, as an exact decimal in the quote asset.
+  string equity = 2;
+  // Buy-and-hold's equity at the same time, from the same starting balance.
+  string buy_and_hold_equity = 3;
 }
 
 // Baseline is a simple strategy a backtest is compared with.
@@ -498,6 +647,16 @@ message BacktestTrade {
   Money fee = 6;
   // The reason the bot gave for the order.
   string reason = 7;
+  // Profit and loss this trade realized, in the quote asset, after its fee.
+  // Signed base-10 decimal string, for example "4.1" or "-0.75". Empty on a
+  // buy, which only opens or adds to a position.
+  string realized_pnl = 8;
+  // The trade's position among the backtest's trades, numbered from 0 in
+  // the order they filled. ListBacktestTrades pages in this order.
+  uint64 trade_index = 9;
+  // True when the market data the order would have filled on was missing,
+  // so it filled at the first price after the gap.
+  bool after_gap = 10;
 }
 
 // DataGap is a span with missing market data.
@@ -508,35 +667,62 @@ message DataGap {
   string timeframe = 2;
   // The span without data.
   TimeWindow window = 3;
+  // True when the bot was exposed across it: it held a position, watched a
+  // price level or had an order waiting on that market. What happened inside
+  // the gap is unknown, so the result is less certain.
+  bool affected = 4;
 }
 
-// BacktestReport is the result of a finished backtest.
+// BacktestReport is the result of a finished backtest. Only bots that trade
+// with market orders, including exits on watched price levels, are
+// backtested. Every amount is in the bot's markets' one quote asset. The
+// results below are for the base cost scenario; scenarios gives the range.
 message BacktestReport {
-  // How closely the simulation follows live trading, as a short label.
+  // What was simulated and how, as a short label naming every assumption:
+  // the candles, the reference prices, the spread and slippage, when orders
+  // fill, the fees and the starting balance.
   string fidelity = 1;
-  // How much the result can be trusted, as a short grade.
-  string evidence_grade = 2;
-  // The period the bot was tuned on.
+  // The period the bot was tuned on. With a window too short to hold months
+  // back, it is the whole window.
   TimeWindow period = 3;
-  // The most recent months, held back from tuning.
+  // The most recent months, held back from tuning. Unset when the window is
+  // too short to hold months back.
   TimeWindow held_back_period = 4;
   // Results over period.
   BacktestMetrics metrics = 5;
-  // Results over held_back_period.
+  // Results over held_back_period. Unset without one.
   BacktestMetrics held_back_metrics = 6;
   // The baselines over period: buy-and-hold and cash.
   repeated Baseline baselines = 7;
-  // Backtests run so far for this bot's family of versions. Many attempts
-  // make a good result more likely to be luck.
-  uint32 attempts = 8;
-  // The first trades, oldest first: at most 20. report_url lists all of them.
+  // The first trades of the whole window, oldest first: at most 20.
+  // ListBacktestTrades lists all of them.
   repeated BacktestTrade trades = 9;
   // Spans without market data, oldest first.
   repeated DataGap data_gaps = 10;
   // What to keep in mind when reading the result.
   repeated string warnings = 11;
-  // The full report on the website.
-  string report_url = 12;
+  // How much the result can be trusted.
+  EvidenceGrade evidence_grade = 13;
+  // The baselines over held_back_period. Empty without one.
+  repeated Baseline held_back_baselines = 14;
+  // The result under each cost scenario, low, base and high: the range to
+  // read, never one exact number.
+  repeated BacktestScenario scenarios = 15;
+  // The equity curve over the whole window, with buy-and-hold's, at most
+  // 1,000 points, oldest first. It is sampled, but always holds the peaks and
+  // troughs of every largest fall reported.
+  repeated EquityPoint equity = 16;
+  // Where held_back_period starts on the curve. Unset without one.
+  google.protobuf.Timestamp held_back_start = 17;
+  // The largest fall over the whole window, in percent.
+  string window_max_drawdown_percent = 18;
+  // When the whole window's largest fall started: its peak.
+  google.protobuf.Timestamp window_max_drawdown_start = 19;
+  // When the whole window's largest fall ended: its trough.
+  google.protobuf.Timestamp window_max_drawdown_end = 20;
+  // True when the caller's earlier backtests already showed part of
+  // held_back_period, so it is no longer excluded from tuning.
+  bool held_back_seen = 21;
 }
 
 // Backtest is one backtest of a version.
@@ -553,6 +739,12 @@ message Backtest {
     DONE = 3;
     // Failed: failure says why.
     FAILED = 4;
+    // Ended without a result because the bot cannot be backtested on
+    // candles, for example at its first limit order: not_backtestable_reason
+    // says why. It is not an error, and running it again gives the same
+    // answer. Such a bot can still be proposed and deployed without a
+    // backtest.
+    NOT_BACKTESTABLE = 5;
   }
 
   // Public backtest ID.
@@ -571,6 +763,12 @@ message Backtest {
   BacktestReport report = 7;
   // Why it failed. Empty unless status is FAILED.
   string failure = 8;
+  // Backtests the caller ran so far of this bot's versions. Many attempts
+  // make a good result more likely to be luck.
+  uint32 attempts = 9;
+  // Why the bot cannot be backtested. Set only when status is
+  // NOT_BACKTESTABLE.
+  NotBacktestableReason not_backtestable_reason = 10;
 }
 
 // StartBacktestRequest starts a backtest of a version.
@@ -581,17 +779,21 @@ message Backtest {
 // or the attempts.
 //
 // Across keys, a backtest's identity is its version, effective window,
-// effective settings and effective initial balances. A request whose
-// identity matches an earlier backtest of the caller returns that backtest
-// rather than running again, so a request that spells out a default refers to
-// the same run, while a request that changes any of them starts a new one:
-// - effective window: start_time and end_time, an unset bound replaced by
-//   the bound of the longest window with data when the request arrives;
+// effective settings, effective initial balances, and what the platform
+// resolves when the request arrives: the caller's fee rates, the platform's
+// spread, slippage and fill assumptions, and the simulation's versions. A
+// request whose identity matches an earlier backtest of the caller returns
+// that backtest rather than running again, so a request that spells out a
+// default refers to the same run, while a request that changes any of them,
+// or arrives after the platform's part changed, starts a new one:
+// - effective window: start_time and end_time, each floored to a whole
+//   second; an unset end is the end of the longest window with data when
+//   the request arrives, and an unset start is 365 days before the window's
+//   end, or the start of that longest window when its data is shorter;
 // - effective settings: every setting of the version's settings form, by
 //   name, with its default value where the request leaves it out;
-// - effective initial balances: initial_balances, or when it is empty, the
-//   effective budget setting in the quote asset; one per asset, sorted by
-//   asset;
+// - effective initial balances: initial_balances, or when it is empty,
+//   1,000 of the bot's quote asset; one per asset, sorted by asset;
 // - every decimal in its canonical form, without leading zeros or trailing
 //   fractional zeros, so "50", "50.0" and "050" are the same amount.
 message StartBacktestRequest {
@@ -600,18 +802,24 @@ message StartBacktestRequest {
     min_len: 1
     max_len: 128
   }];
-  // Start of the window, inclusive. Unset means the start of the longest
-  // window with data for the bot's markets and timeframes.
+  // Start of the window, inclusive, floored to a whole second. Unset means
+  // the most recent 365 days of data: 365 days before the window's end, or
+  // the start of the longest window with data for the bot's markets and
+  // timeframes when that is shorter.
   google.protobuf.Timestamp start_time = 2;
-  // End of the window, exclusive. Unset means the end of that longest
-  // window.
+  // End of the window, exclusive, floored to a whole second. Unset means the
+  // end of that longest window.
   google.protobuf.Timestamp end_time = 3;
   // Values for the version's settings form, at most 64, each setting once.
   // Settings left out take their default value.
   repeated SettingValue settings = 4 [(buf.validate.field).repeated.max_items = 64];
-  // Starting balances of the simulated account, one per asset. Empty means
-  // the budget setting in the quote asset. Part of the backtest's identity:
-  // the same run with other balances is another backtest.
+  // Starting balances of the simulated account, one per asset of the bot's
+  // markets, each amount more than 0: a zero or negative amount is
+  // FUNDING_INVALID. Empty, whether left out or sent as an empty list, means
+  // 1,000 of the bot's quote asset, for example 1000 USDT, whatever its
+  // settings, such as a budget that is the amount of each buy. Part of the
+  // backtest's identity: the same run with other balances is another
+  // backtest.
   repeated Money initial_balances = 5 [(buf.validate.field).repeated.max_items = 16];
   // Client-chosen key, unique per caller, that makes the call idempotent: the
   // same key and request return the backtest the first call started; another
@@ -623,8 +831,7 @@ message StartBacktestRequest {
 message StartBacktestResponse {
   // Public backtest ID. A retry with the same idempotency_key and request
   // returns the same ID; across keys, so does a request with the same
-  // version, effective window, effective settings and effective initial
-  // balances (see StartBacktestRequest).
+  // identity (see StartBacktestRequest).
   fixed64 backtest_id = 1;
   // Status: QUEUED for a new backtest, or the current status of the same
   // backtest started before.
@@ -643,6 +850,28 @@ message GetBacktestRequest {
 message GetBacktestResponse {
   // The backtest.
   Backtest backtest = 1;
+}
+
+// ListBacktestTradesRequest reads one page of a finished backtest's trades.
+message ListBacktestTradesRequest {
+  // Public backtest ID.
+  fixed64 backtest_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Page token from a previous response; empty for the first page. It is
+  // opaque and exclusive: it carries the last trade_index returned, so the
+  // next page starts after it, and it is bound to the caller and the
+  // backtest it came from.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+  // Most trades to return, at most 1,000. Zero means 100.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
+
+// ListBacktestTradesResponse is one page of trades, in trade_index order.
+message ListBacktestTradesResponse {
+  // The trades.
+  repeated BacktestTrade trades = 1;
+  // Token for the next page, after the last trade returned; empty on the
+  // last page. It is valid only for the same caller and backtest.
+  string next_page_token = 2;
 }
 
 // ScenarioSummary is one behaviour example of a version and its last result.
@@ -677,8 +906,6 @@ message BacktestSummary {
   BacktestMetrics held_back_metrics = 4;
   // Backtests run so far for this bot's family of versions.
   uint32 attempts = 5;
-  // The full report on the website. Set only when status is DONE.
-  string report_url = 6;
 }
 
 // ExplainStrategyRequest asks for the review summary of a version.
@@ -754,13 +981,16 @@ message DeployProposalSummary {
   // Behaviour examples that passed.
   uint32 scenarios_passed = 6;
   // The version's latest backtest. Omitted when the bot cannot be
-  // backtested.
+  // backtested; not_backtestable_reason then says why.
   BacktestSummary backtest = 7;
   // The strategy the proposal came from. Zero once the strategy is deleted.
   fixed64 strategy_id = 9;
   // The strategy's revision proposed, whose version is version_id. Zero once
   // the strategy is deleted.
   uint64 revision = 10;
+  // Why the bot was not backtested, when it cannot be: the deploy page tells
+  // the user before they approve. Unset when backtest is set.
+  NotBacktestableReason not_backtestable_reason = 11;
 }
 
 // ProposeDeployRequest records a deploy proposal. It never deploys.
@@ -822,6 +1052,9 @@ message DeployStatus {
     VALIDATING = 2;
     // Preparing the bot's subaccount.
     CREATING_SUBACCOUNT = 3;
+    // Setting the bot's limits and its trading key. Comes after
+    // CREATING_SUBACCOUNT and before FUNDING.
+    SETTING_ACCESS = 9;
     // Moving the funding into the bot's subaccount.
     FUNDING = 4;
     // Starting the bot.
@@ -852,8 +1085,8 @@ message DeployStatus {
   google.protobuf.Timestamp expires_at = 7;
   // When the state last changed.
   google.protobuf.Timestamp updated_at = 8;
-  // The step the deploy failed in: VALIDATING, CREATING_SUBACCOUNT, FUNDING
-  // or DEPLOYING. Set when a deploy fails, by the deploy flow, beside
+  // The step the deploy failed in: VALIDATING, CREATING_SUBACCOUNT,
+  // SETTING_ACCESS, FUNDING or DEPLOYING. Set when a deploy fails, by the deploy flow, beside
   // failure; unset in any other state.
   State failed_at = 9;
 }
@@ -867,6 +1100,47 @@ message GetDeployStatusRequest {
 // GetDeployStatusResponse returns the proposal's status.
 message GetDeployStatusResponse {
   // The status.
+  DeployStatus status = 1;
+}
+
+// SubaccountAuthorization is the user's signed authorization for the bot's
+// new subaccount: what CreateSubaccountChallenge returned, signed through the
+// returned smart account.
+message SubaccountAuthorization {
+  // The smart account address CreateSubaccountChallenge returned.
+  string smart_account_address = 1 [(buf.validate.field).string = {
+    len: 42
+    pattern: "^0x[0-9a-fA-F]{40}$"
+  }];
+  // The exact message CreateSubaccountChallenge returned, unaltered. At most
+  // 4096 bytes.
+  string message = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 4096
+  }];
+  // The smart account's signature over message, with EIP-191 personal_sign
+  // semantics. At most 8192 characters.
+  string signature = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 8192
+  }];
+}
+
+// DeployBotRequest deploys one deploy proposal of the caller.
+message DeployBotRequest {
+  // Public proposal ID.
+  fixed64 proposal_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // The user's signed authorization for the bot's new subaccount. Needed
+  // only when the deploy creates a subaccount: without it, such a deploy
+  // answers SUBACCOUNT_AUTHORIZATION_REQUIRED. A deploy that reuses one of
+  // the caller's closed bot subaccounts ignores it.
+  SubaccountAuthorization subaccount_authorization = 2;
+}
+
+// DeployBotResponse is the proposal's status when the call returns.
+message DeployBotResponse {
+  // The status: DEPLOYING once the bot's start is recorded (the bot then
+  // starts without the user), LIVE, or FAILED with failed_at and failure.
   DeployStatus status = 1;
 }
 
@@ -914,10 +1188,13 @@ message Bot {
     // been reported complete to the service; until then the bot reads
     // STOPPING.
     STOPPED = 4;
-    // Paused, by itself, after an environment reset, or after its calls
-    // failed too many times in a row: status_reason says why. Its orders
-    // stay. Read only once the bot's pause has been reported to the service;
-    // until then a paused bot reads RUNNING.
+    // Paused, by itself, after an environment reset, after its calls
+    // failed too many times in a row, or because it found one of its own
+    // orders whose placement it hadn't recorded: status_reason says why.
+    // Its orders stay.
+    // Read only once the bot's pause has been reported to the service;
+    // until then a paused bot reads RUNNING. A paused bot that is being
+    // stopped reads STOPPING.
     PAUSED = 5;
   }
 
@@ -932,6 +1209,10 @@ message Bot {
     // The environment was reset, and every bot paused until its user starts
     // it again.
     ENVIRONMENT_RESET = 3;
+    // The bot found one of its own orders whose placement it hadn't
+    // recorded, for example after a restart, and paused so you can check its
+    // state; status_reason says so.
+    UNRECORDED_ORDER = 4;
   }
 
   // Public bot ID.
@@ -943,14 +1224,14 @@ message Bot {
   fixed64 subaccount_id = 3;
   // Current state.
   Status status = 4;
-  // Why the bot is in its state. Empty when RUNNING.
+  // Why the bot paused, in words: the bot's own message when it decided
+  // to pause, else a sentence for pause_reason. Set only with PAUSED.
   string status_reason = 5;
   // The version it runs.
   string version_id = 6;
-  // Profit and loss since deployment, as an exact decimal in quote_asset:
-  // negative for a loss, for example "-12.5".
-  string profit_and_loss = 7;
-  // When the bot last decided. Omitted before its first decision.
+  // When the bot last decided: the time of the event behind its newest
+  // decision, over all its deployments. Omitted before its first decision.
+  // Lags the bot by up to about a minute.
   google.protobuf.Timestamp last_decision_at = 8;
   // When the bot was deployed.
   google.protobuf.Timestamp created_at = 9;
@@ -973,6 +1254,26 @@ message Bot {
   // Why the bot paused. Set only with PAUSED, which is read only once the
   // bot's pause has been reported to the service.
   PauseReason pause_reason = 15;
+  // What the bot did in each of the last 24 hours, oldest first, ending with
+  // the current UTC hour, which is still under way. An hour it did nothing
+  // in is there with zero counts. A bot deployed again within the day counts
+  // every one of its runs. Counts lag the bot by up to about a minute.
+  repeated BotActivityHour activity = 16;
+}
+
+// BotActivityHour is what a bot did in one UTC hour, by when each event
+// reached it.
+message BotActivityHour {
+  // The hour's start: a whole UTC hour.
+  google.protobuf.Timestamp start = 1;
+  // Its decisions: events the bot was called for, whether the call
+  // succeeded, failed, or ended before the bot's code ran.
+  uint32 decisions = 2;
+  // Its fills, whether or not its code handles them.
+  uint32 fills = 3;
+  // Events it skipped because they were already too old when it could run,
+  // for example while it was behind: never decisions.
+  uint32 expired = 4;
 }
 
 // BotFunding is where a bot's initial funding came from, as its deploy
@@ -1018,60 +1319,42 @@ message ListBotsResponse {
   repeated BotStatusCount status_counts = 3;
 }
 
-// BotBalance is one asset balance of a bot's subaccount.
-message BotBalance {
-  // Asset symbol, for example USDT.
-  string asset = 1;
-  // Balance free to use, as an exact decimal.
-  string free = 2;
-  // Balance held by open orders, as an exact decimal.
-  string locked = 3;
-}
-
-// BotOrder is one open order of a bot.
-message BotOrder {
-  // Public order ID.
-  fixed64 order_id = 1;
-  // Market, for example BTC/USDT.
-  string market = 2;
-  // Side.
-  OrderSide side = 3;
-  // Order type, for example limit or stop_loss.
-  string type = 4;
-  // Limit or trigger price, as an exact decimal in the quote asset. Empty for
-  // a market order.
-  string price = 5;
-  // Quantity, as an exact decimal in the base asset.
-  string quantity = 6;
-  // Quantity filled so far.
-  string filled_quantity = 7;
-  // When the order was placed.
-  google.protobuf.Timestamp created_at = 8;
-}
-
 // BotDecision is one handler call of a bot.
 message BotDecision {
-  // When the decision was made.
+  // When the event that woke the bot reached it.
   google.protobuf.Timestamp decided_at = 1;
-  // The event that woke the bot, for example "schedule mon 09:00 UTC".
+  // The handler the event woke, for example on_timer or on_fill.
   string event = 2;
-  // The orders the bot asked for, each with its reason, in the shape the
-  // manifest's behaviour examples use. Empty when it decided to do nothing.
+  // The orders the bot asked for, in the shape the manifest's behaviour
+  // examples use, with what a live call adds; a key is left out when unset.
+  // An order: {"buy" or "sell": market, "qty" or "quote", "limit", "tif",
+  // "post_only", "max_slippage_bps", "stop_loss", "take_profit", "reason",
+  // "client_order_id"}. A trigger (bot.buy_when, bot.sell_when): {"buy" or
+  // "sell": market, "above" or "below": its price, "qty", "limit", "tif",
+  // "price_source", "reason", "client_trigger_id"}. A cancel: {"cancel": the
+  // order's or trigger's client ID, or the trigger's ID}. An order refused
+  // before it was sent: {"refused": market, "client_order_id", "reason"}.
+  // Amounts and prices are decimal strings. An order on a market the
+  // service doesn't know names it "market #<id>", shows its amounts and
+  // prices as unscaled integers, and carries "unscaled": true. Empty when
+  // it decided to do nothing.
   repeated google.protobuf.Struct orders = 3;
-  // The bot's log lines from the call, oldest first.
+  // The bot's log lines from the call, oldest first: at most 20, each at
+  // most 256 bytes of UTF-8 and 1 KiB in all. A shortened line ends with
+  // "…", and a last line of "…" stands for the lines left out.
   repeated string logs = 4;
-  // What the bot saw: prices, indicator values, balances and open orders at
-  // the event.
-  google.protobuf.Struct snapshot = 5;
 }
 
 // BotError is one failed handler call of a bot.
 message BotError {
-  // When the call failed.
+  // When the event whose call failed reached the bot.
   google.protobuf.Timestamp time = 1;
-  // The event that woke the bot.
+  // The handler the event woke, for example on_timer or on_fill.
   string event = 2;
-  // The error.
+  // What failed, at most 512 bytes of UTF-8, ending with "…" when
+  // shortened: the bot's own error when its code raised, the rule its result
+  // broke, or a sentence saying the call ran out of its time or memory or
+  // could not finish.
   string message = 3;
 }
 
@@ -1123,9 +1406,11 @@ message StopBotResponse {
   StopMode mode = 2;
 }
 
-// GetBotResponse is a bot with its money rules, account and recent
-// decisions. Balances, open orders, decisions and errors are not available
-// yet: those fields are empty until they are.
+// GetBotResponse is a bot with its money rules, settings and recent
+// decisions. The bot's subaccount is read like any other, by its
+// subaccount_id: its balances with LedgerReadService.GetBalances, its open
+// orders with OrdersReadService.GetOpenOrders, and its profit and loss with
+// ProfitAndLossService.
 message GetBotResponse {
   // The bot.
   Bot bot = 1;
@@ -1135,13 +1420,11 @@ message GetBotResponse {
   // description, kind and asset from the version's settings form. Empty
   // until the deploy flow records the deploy proposal the bot came from.
   repeated SettingValue settings = 3;
-  // Balances of its subaccount, by asset. Empty until available.
-  repeated BotBalance balances = 4;
-  // Open orders of its subaccount, newest first. Empty until available.
-  repeated BotOrder open_orders = 5;
-  // Its last decisions, newest first: at most 20. Empty until available.
+  // Its last decisions, newest first, from the run it is on now: at most 20,
+  // fewer when they are large. Empty until its run's first decision reaches
+  // the service, up to about a minute after the bot made it.
   repeated BotDecision decisions = 6;
-  // Its last errors, newest first: at most 20. Empty until available.
+  // Its last errors, newest first, from the run it is on now: at most 20.
   repeated BotError errors = 7;
 }
 
@@ -1214,6 +1497,11 @@ message GetStrategyVersionResponse {
   // do. Not set for a version that did not validate, or that was stored
   // before flows existed.
   StrategyFlow flow = 9;
+  // The version's check result as it was stored, the same one saving the
+  // version answered: its errors and warnings, and, for a valid version, its
+  // money card, settings form and flow. Reading never checks the version
+  // again. Not set for a version stored without its check result.
+  VersionValidation validation = 10;
 }
 
 // StrategyFlow is the flow of a version: what wakes the bot (triggers), what
@@ -1319,13 +1607,22 @@ message Strategy {
   // account:read scope. Every response that returns a strategy follows this
   // rule, RenameStrategy and CreateStrategy included.
   StrategyBot bot = 9;
+  // The markets of the current revision's version, as its money card names
+  // them, for example BTC/USDT. Empty for a strategy with no revision, or
+  // whose current revision did not validate. Set only for a caller who may
+  // read the strategy, under the same rule as bot.
+  repeated string markets = 10;
+  // The one-line summary of the strategy's notes. Empty before the notes'
+  // first save. Set only for a caller who may read the strategy, under the
+  // same rule as bot.
+  string summary = 11;
 }
 
 // StrategyBot is a bot deployed from a strategy, as the strategy shows it.
 message StrategyBot {
   // Public bot ID. GetBot reads the bot.
   fixed64 bot_id = 1;
-  // The bot's state, as GetBot reads it: RUNNING or STOPPING.
+  // The bot's state, as GetBot reads it: RUNNING, PAUSED or STOPPING.
   Bot.Status status = 2;
 }
 
@@ -1447,6 +1744,12 @@ message SaveDraftVersionRequest {
     (buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$",
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
   ];
+  // Optional: the notes revision this draft was written against, zero for
+  // notes never saved. When set, any other current notes revision is
+  // NOTES_REVISION_CONFLICT, checked together with expected_revision, so a
+  // writer that measured the draft and the notes together saves them as it
+  // measured them.
+  optional uint64 expected_notes_revision = 8;
 }
 
 // SaveDraftVersionResponse is the saved draft.
@@ -1473,6 +1776,9 @@ message GetStrategyResponse {
   // The version of the current revision, as GetStrategyVersion reads it.
   // Unset when revision is zero.
   GetStrategyVersionResponse head = 2;
+  // The strategy's notes, as GetStrategyNotes reads them: notes_revision is
+  // zero when they were never saved.
+  StrategyNotes notes = 3;
 }
 
 // ListStrategiesRequest lists the caller's strategies.
@@ -1540,7 +1846,145 @@ message DeleteStrategyRequest {
 // DeleteStrategyResponse confirms the strategy is deleted.
 message DeleteStrategyResponse {}
 
-// BotLogEntry is one line of a bot's log.
+// StrategyNotes is the caller's notes about one strategy: what it is meant
+// to do, what was decided and why, and what was tried and dropped. The user
+// writes them, and so do assistants acting for the user. They are never
+// shown in a community listing, and a copied or forked strategy starts with
+// none.
+message StrategyNotes {
+  // Public strategy ID.
+  fixed64 strategy_id = 1;
+  // The notes' revision: one per save that changed them, from 1. Zero when
+  // the notes were never saved. It counts apart from the strategy's
+  // revision.
+  uint64 notes_revision = 2;
+  // What the strategy is, in one line, with no line break: at most 120
+  // characters.
+  string summary = 3;
+  // The notes, as Markdown. At most 8192 bytes of UTF-8.
+  string body = 4;
+  // When this revision was saved. Omitted when notes_revision is zero.
+  google.protobuf.Timestamp saved_at = 5;
+  // How the caller that saved this revision signed in. Unspecified when
+  // notes_revision is zero.
+  StrategyRevision.SavedBy saved_by = 6;
+}
+
+// GetStrategyNotesRequest reads the notes of one strategy of the caller.
+message GetStrategyNotesRequest {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetStrategyNotesResponse is a strategy's current notes.
+message GetStrategyNotesResponse {
+  // The notes: notes_revision is zero when they were never saved.
+  StrategyNotes notes = 1;
+}
+
+// SaveStrategyNotesRequest saves the notes of one strategy of the caller as
+// their next revision.
+message SaveStrategyNotesRequest {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // The notes revision this text was made from: the current one, zero for
+  // the first save. Any other value is NOTES_REVISION_CONFLICT.
+  uint64 expected_notes_revision = 2;
+  // What the strategy is, in one line: at most 120 characters, with no line
+  // break of any kind.
+  string summary = 3 [(buf.validate.field).string = {
+    max_len: 120
+    pattern: "^[^\\r\\n\\v\\f\\x{85}\\x{2028}\\x{2029}]*$"
+  }];
+  // The notes, as Markdown: at most 8192 bytes of UTF-8.
+  string body = 4 [(buf.validate.field).string.max_bytes = 8192];
+  // Client-chosen key, unique per caller, that makes the call idempotent: the
+  // same key and request return the notes revision the first call saved,
+  // even after later saves moved the notes past it; another request with the
+  // same key, of any strategies write that takes a key, is
+  // IDEMPOTENCY_CONFLICT. Optional: without it, a retry after a save that
+  // landed is NOTES_REVISION_CONFLICT.
+  string idempotency_key = 5 [
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+  // Optional: the strategy's revision this text was written against, zero
+  // for a strategy never saved. When set, any other current revision is
+  // DRAFT_REVISION_CONFLICT, checked together with expected_notes_revision,
+  // so a writer that measured the draft and the notes together saves them as
+  // it measured them.
+  optional uint64 expected_revision = 6;
+}
+
+// SaveStrategyNotesResponse is the saved notes.
+message SaveStrategyNotesResponse {
+  // The notes as saved. When the summary and body are the current ones, no
+  // revision is added, and this is the current revision.
+  StrategyNotes notes = 1;
+}
+
+// ListStrategyNotesRevisionsRequest lists the saved notes of one strategy of
+// the caller.
+message ListStrategyNotesRevisionsRequest {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Maximum number of revisions to return: default 10, max 20.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 20];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller and strategy_id; reuse it
+  // only with the same strategy_id.
+  string page_token = 3 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListStrategyNotesRevisionsResponse returns one page of a strategy's notes
+// revisions.
+message ListStrategyNotesRevisionsResponse {
+  // Revisions, newest first. Every revision is kept.
+  repeated StrategyNotes revisions = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// ListBacktestsRequest lists the backtests of one strategy of the caller:
+// the backtests of the versions its revisions saved.
+message ListBacktestsRequest {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Maximum number of backtests to return: default 10, max 50.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 50];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to the caller and strategy_id; reuse it
+  // only with the same strategy_id.
+  string page_token = 3 [(buf.validate.field).string.max_len = 256];
+}
+
+// StrategyBacktest is one backtest of a strategy's versions, as a list shows
+// it: its headline, not its trades. GetBacktest reads the whole report.
+message StrategyBacktest {
+  // The backtest's headline.
+  BacktestSummary summary = 1;
+  // The version backtested.
+  string version_id = 2;
+  // The newest revision of the strategy that saved that version.
+  uint64 revision = 3;
+  // The simulated window.
+  TimeWindow window = 4;
+  // When the backtest was started.
+  google.protobuf.Timestamp created_at = 5;
+  // When it finished or failed. Omitted before.
+  google.protobuf.Timestamp finished_at = 6;
+}
+
+// ListBacktestsResponse returns one page of a strategy's backtests.
+message ListBacktestsResponse {
+  // Backtests, newest first. A backtest is kept 30 days after it finished.
+  repeated StrategyBacktest backtests = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// BotLogEntry is one entry of a bot's recent activity: a decision, a line its
+// call wrote, or a failed call.
 message BotLogEntry {
   // Kind is what a log entry records.
   enum Kind {
@@ -1554,9 +1998,14 @@ message BotLogEntry {
     ERROR = 3;
   }
 
-  // Position in the bot's log, increasing.
+  // Position in the log of the bot's current deployment, increasing within
+  // that deployment. A new deployment starts a new log, whose positions start
+  // low again. A decision comes first, then the lines its call wrote, then
+  // its error if the call failed.
   uint64 sequence = 1;
-  // When it was written.
+  // When the event behind it was observed: a decision's lines and its error
+  // have the decision's time. Two decisions can have the same time, for
+  // example two markets' candles of one minute.
   google.protobuf.Timestamp time = 2;
   // What it records.
   Kind kind = 3;
@@ -1564,29 +2013,42 @@ message BotLogEntry {
   string message = 4;
 }
 
-// ListBotLogsRequest reads a bot's log.
+// ListBotLogsRequest reads a bot's recent activity.
 message ListBotLogsRequest {
   // Public bot ID.
   fixed64 bot_id = 1 [(buf.validate.field).fixed64.gt = 0];
-  // Earliest entry time, inclusive. Unset means the start of the retained
-  // log.
+  // Earliest entry time, inclusive. Unset reads from the oldest entry kept.
+  // It filters by the time of the event behind each entry, which doesn't
+  // follow the order of the log: to read what is written later, use
+  // follow_token, never a later start_time.
   google.protobuf.Timestamp start_time = 2;
   // Maximum number of entries to return: default 100, max 200.
   uint32 limit = 3 [(buf.validate.field).uint32.lte = 200];
   // Opaque, keyset-backed and exclusive cursor from a previous response's
-  // next_page_token. It is bound to the caller, bot_id and start_time; reuse
-  // it only with the same values.
+  // next_page_token, or follow_token. It is bound to the caller, bot_id,
+  // start_time and the deployment whose log the first page read; reuse it
+  // only with the same values. Its pages read that deployment's log even
+  // after the bot is deployed again.
   string page_token = 4 [(buf.validate.field).string.max_len = 256];
 }
 
-// ListBotLogsResponse returns one page of a bot's log.
+// ListBotLogsResponse returns one page of a bot's recent activity.
 message ListBotLogsResponse {
-  // Entries, oldest first.
+  // Entries, oldest first: in increasing sequence.
   repeated BotLogEntry entries = 1;
-  // Cursor for the next page. Empty when no more results exist. Entries
-  // written later are read with a new listing whose start_time is the last
-  // entry's time, skipping sequences already read.
+  // Cursor for the next page. Empty when no more results exist now.
   string next_page_token = 2;
+  // Cursor for what is written later: pass it as page_token, now or later,
+  // to read the entries after the last one this response read, by sequence,
+  // in the same deployment's log. Set on the last page. An entry that left
+  // the window before it was read is not returned.
+  string follow_token = 3;
+  // The bot was deployed again after the deployment whose log this response
+  // read: a new run started, whose entries are in a new log, read by listing
+  // again without page_token. It doesn't end this log: entries of this
+  // deployment can still arrive after it, with no set time limit, and
+  // follow_token keeps reading them for as long as they are kept.
+  bool deployed_again = 4;
 }
 
 // StrategiesService writes, tests and proposes the caller's trading bots and
@@ -1694,7 +2156,9 @@ service StrategiesService {
   // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
   //   an unknown one.
   // - FAILED_PRECONDITION: DRAFT_REVISION_CONFLICT; revision_conflict gives
-  //   the current revision and its version.
+  //   the current revision and its version. NOTES_REVISION_CONFLICT when
+  //   expected_notes_revision is set and the notes moved past it;
+  //   notes_conflict gives their current revision.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original save stands.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
   // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
@@ -1826,14 +2290,115 @@ service StrategiesService {
     };
   }
 
+  // GetStrategyNotes reads the notes of one strategy of the caller: its
+  // summary and body as last saved.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
+  //   an unknown one.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetStrategyNotes(GetStrategyNotesRequest) returns (GetStrategyNotesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Strategy Notes"
+      description: "Read a strategy's notes: its one-line summary and its Markdown body. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // SaveStrategyNotes saves the notes of one strategy of the caller as their
+  // next revision. expected_notes_revision must be the notes' current
+  // revision; every revision is kept. Notes equal to the current ones add no
+  // revision.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, including a summary with a line
+  //   break or over 120 characters, or a body over 8192 bytes; its
+  //   buf.validate.Violations detail names the field and the rule.
+  // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
+  //   an unknown one.
+  // - FAILED_PRECONDITION: NOTES_REVISION_CONFLICT; notes_conflict gives the
+  //   notes' current revision. DRAFT_REVISION_CONFLICT when
+  //   expected_revision is set and the strategy moved past it.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original save stands.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc SaveStrategyNotes(SaveStrategyNotesRequest) returns (SaveStrategyNotesResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Save Strategy Notes"
+      description: "Save a strategy's notes as their next revision. expected_notes_revision must be the notes' current revision. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListStrategyNotesRevisions lists the saved notes of one strategy of the
+  // caller, newest first, with who saved each.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
+  //   an unknown one.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListStrategyNotesRevisions(ListStrategyNotesRevisionsRequest) returns (ListStrategyNotesRevisionsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Strategy Notes Revisions"
+      description: "List a strategy's saved notes, newest first, with how each was saved. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListBacktests lists the backtests of one strategy of the caller, newest
+  // first: those of the versions its revisions saved, each as a headline. A
+  // backtest is kept 30 days after it finished; GetBacktest reads one whole.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
+  //   an unknown one.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListBacktests(ListBacktestsRequest) returns (ListBacktestsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Backtests"
+      description: "List a strategy's backtests, newest first, each as a headline. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
   // RunScenarios runs a version's behaviour examples against its code and
-  // records the results. The result is deterministic: a version always gets
-  // the same one.
+  // records the results. Each market's trading rules (tick, step, minimum
+  // quantity and minimum notional) are the exchange's when the version first
+  // runs, unless an example's `observe.markets` says otherwise, and the
+  // record keeps them: a version always gets the same result, and a new
+  // version runs on the rules current then.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
   // - NOT_FOUND: VERSION_NOT_FOUND.
-  // - FAILED_PRECONDITION: VERSION_INVALID.
+  // - FAILED_PRECONDITION: VERSION_INVALID, also when a market of the
+  //   version isn't listed on the exchange.
   // - RESOURCE_EXHAUSTED: SCENARIO_RUN_LIMIT_REACHED; retry after
   //   retry_after.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
@@ -1853,9 +2418,10 @@ service StrategiesService {
 
   // StartBacktest starts a backtest of a version. A retry with the same
   // idempotency_key and request returns the backtest the first call started.
-  // Across keys, a request with the same version, effective window, effective
-  // settings and effective initial balances returns the same backtest rather
-  // than running again; defaults count as their resolved values (see
+  // Across keys, a request with the same identity (version, effective window,
+  // settings and initial balances, and the fee rates, platform assumptions and
+  // simulation versions in force) returns the same backtest rather than
+  // running again; defaults count as their resolved values (see
   // StartBacktestRequest). Every new backtest counts in the attempts of the
   // bot's family of versions.
   //
@@ -1865,8 +2431,9 @@ service StrategiesService {
   // - NOT_FOUND: VERSION_NOT_FOUND.
   // - FAILED_PRECONDITION: VERSION_INVALID, WINDOW_HAS_NO_DATA or
   //   NOT_BACKTESTABLE.
-  // - RESOURCE_EXHAUSTED: BACKTEST_LIMIT_REACHED, retry after retry_after; or
-  //   INDICATOR_SETTINGS_LIMIT_REACHED.
+  // - RESOURCE_EXHAUSTED: BACKTEST_LIMIT_REACHED, for the daily limit retry
+  //   after retry_after, for the limit on backtests at once retry when one
+  //   finishes; or INDICATOR_SETTINGS_LIMIT_REACHED.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original backtest stands.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
   // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
@@ -1900,6 +2467,30 @@ service StrategiesService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Backtest"
       description: "Read one backtest, with its report once it is done. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListBacktestTrades lists every trade of one finished backtest of the
+  // caller, in trade_index order, a page at a time.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or a page token from another
+  //   caller or backtest.
+  // - NOT_FOUND: BACKTEST_NOT_FOUND, also once a backtest is past its
+  //   retention.
+  // - FAILED_PRECONDITION: BACKTEST_NOT_DONE.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListBacktestTrades(ListBacktestTradesRequest) returns (ListBacktestTradesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Backtest Trades"
+      description: "List every trade of a finished backtest, a page at a time. An API key needs READ_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -1959,6 +2550,48 @@ service StrategiesService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Propose Deploy"
       description: "Record a deploy proposal for a revision of a strategy and get the link where the user deploys it. It never deploys or moves funds. An API key needs PROPOSE_STRATEGY_DEPLOY and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // DeployBot deploys one deploy proposal of the caller: it checks the
+  // version again, prepares the bot's subaccount, sets the bot's limits and
+  // its trading key, and starts the bot. The steps run in the call; once the
+  // bot's start is recorded, the bot starts without the user.
+  //
+  // Only the user's own session may deploy, and it must be a recently
+  // MFA-elevated session (MFA_RECENT). API keys and sessions a connected app
+  // holds on the user's behalf are refused.
+  //
+  // A proposal is deployed at most once. Calling again, after an error, a
+  // timeout or from another tab, continues the same deploy from where it
+  // is, and answers its status; it never starts a second bot. A step that
+  // fails ends the deploy as FAILED, answered as a status, not an error:
+  // failure says why and what to do.
+  //
+  // A deploy that creates a subaccount needs the user's signed
+  // authorization: request a challenge with CreateSubaccountChallenge, have
+  // the user sign it, and pass it as subaccount_authorization.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: PROPOSAL_NOT_FOUND, for another account's proposal as for
+  //   an unknown one.
+  // - FAILED_PRECONDITION: PROPOSAL_EXPIRED, BOT_CAP_REACHED (nothing was
+  //   started), or SUBACCOUNT_AUTHORIZATION_REQUIRED (the deploy keeps its
+  //   progress).
+  // - PERMISSION_DENIED: MFA_ELEVATION_REQUIRED; or
+  //   AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a session a connected
+  //   app holds on the user's behalf.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc DeployBot(DeployBotRequest) returns (DeployBotResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.mfa_requirement) = MFA_RECENT;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Deploy Bot"
+      description: "Deploy a deploy proposal: check it again, prepare the bot's subaccount, set its limits and trading key, and start the bot. Session only, recently MFA-elevated. Calling again continues the same deploy."
       tags: "Strategies Service"
     };
   }
@@ -2026,9 +2659,11 @@ service StrategiesService {
     };
   }
 
-  // GetBot reads one bot of the caller: its money rules and settings, its
-  // subaccount's balances and open orders, and its recent decisions and
-  // errors. Only the caller's main account reads its bots.
+  // GetBot reads one bot of the caller: its money rules and settings, and
+  // its recent decisions and errors. Its subaccount's balances, open orders
+  // and profit and loss are read by the bot's subaccount_id, with
+  // LedgerReadService.GetBalances, OrdersReadService.GetOpenOrders and
+  // ProfitAndLossService. Only the caller's main account reads its bots.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
@@ -2044,7 +2679,7 @@ service StrategiesService {
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Bot"
-      description: "Read one bot with its money rules, balances, open orders and recent decisions. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      description: "Read one bot with its money rules, settings and recent decisions. Read its subaccount's balances, open orders and profit and loss by its subaccount ID. An API key needs READ_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -2096,7 +2731,10 @@ service StrategiesService {
     };
   }
 
-  // ListBotLogs reads a bot's log lines, decisions and errors, oldest first.
+  // ListBotLogs reads a bot's recent activity, oldest first: the last 20
+  // decisions of its current deployment, each with the lines its call wrote,
+  // and its last 20 errors. Older entries are not kept. Each entry lags the
+  // bot by up to about a minute.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request or page token.
@@ -2111,7 +2749,7 @@ service StrategiesService {
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "List Bot Logs"
-      description: "Read a bot's log lines, decisions and errors, oldest first. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      description: "Read a bot's recent activity, oldest first: the last 20 decisions of its current deployment, each with the lines its call wrote, and its last 20 errors. Older entries are not kept. An API key needs READ_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -2121,7 +2759,8 @@ service StrategiesService {
   // stay in the book as the subaccount's own orders, which the bot no longer
   // manages. CANCEL_ORDERS cancels them all. Its holdings stay in its
   // subaccount. It works in every state but STOPPED: a running or paused bot
-  // is stopped. The stop is recorded before the call answers; the bot then
+  // is stopped, and a bot still being deployed is stopped by ending its
+  // deploy before the bot starts. The stop is recorded before the call answers; the bot then
   // reads STOPPING, with no deadline, until its stop is reported complete to
   // the service, and STOPPED after. A KEEP_ORDERS stop is complete once the
   // bot's in-flight orders are settled: the orders it hands over never hold

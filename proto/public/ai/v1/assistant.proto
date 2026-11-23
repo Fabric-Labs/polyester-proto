@@ -268,6 +268,23 @@ message Conversation {
   // What the conversation is about, fixed when it started. Omitted for a
   // general conversation.
   Subject subject = 5;
+  // The account the conversation's latest message selected, from any client,
+  // as of this list: a message sent since may have selected another.
+  // ListMessagesResponse.last_account is the account as it stands when the
+  // conversation is opened. Every message still names its own account:
+  // SendMessageRequest.subaccount_id and account_selection.
+  ConversationAccount last_account = 6;
+}
+
+// ConversationAccount is the account a message of a conversation selected, as
+// its SendMessageRequest named it.
+message ConversationAccount {
+  // ACCOUNT_SELECTION_NONE when the message read no account; otherwise
+  // ACCOUNT_SELECTION_UNSPECIFIED.
+  AccountSelection account_selection = 1;
+  // The trading account (subaccount) the message named. Omitted for the main
+  // account, and when account_selection is ACCOUNT_SELECTION_NONE.
+  optional fixed64 subaccount_id = 2;
 }
 
 // Message is one message of a conversation.
@@ -688,6 +705,24 @@ message SubagentFinished {
   // subagent proposed, after MFA and a wallet signature. Omitted when it
   // proposed none. The subagent never deploys a bot itself.
   optional string deploy_url = 5;
+  // The last strategy revision the subagent's saves are known to have landed,
+  // valid or not, whatever its outcome: a subagent stopped at its cap, or by a
+  // cancel, may still have saved. Absent when no save is known to have landed,
+  // including when the outcome of its last save is unknown: read the
+  // strategy's revisions then. Read the strategy itself for what it shows:
+  // this only tells the client that the strategy changed.
+  DraftVersion draft_version = 6;
+}
+
+// DraftVersion is the strategy revision a subagent saved last.
+message DraftVersion {
+  // Public strategy ID.
+  fixed64 strategy_id = 1;
+  // The revision the save created or kept: from 1.
+  uint64 revision = 2;
+  // ID of the revision's version, which strategies.v1 GetStrategyVersion
+  // reads.
+  string version_id = 3;
 }
 
 // ApprovalParameter is one key parameter of the action an approval approves,
@@ -1240,6 +1275,17 @@ message CancelTriggerPreview {
   bool cancels_open_orders = 13;
 }
 
+// CancelTriggersPreview is the exact set of live triggers an approval
+// cancels together, in the order the user named them, each as it was when
+// the cancellation was requested. Approving cancels exactly these triggers
+// and no other: a trigger created after the approval is not cancelled under
+// it. Cancelling a leg of a one-cancels-the-other pair also ends its other
+// leg, as cancelling that one trigger does.
+message CancelTriggersPreview {
+  // Every trigger it cancels.
+  repeated CancelTriggerPreview triggers = 1;
+}
+
 // OrderChange is one open limit order a modification changes, before and
 // after.
 message OrderChange {
@@ -1410,6 +1456,8 @@ message ApprovalRequested {
     SwapPreview swap = 10;
     // The trigger the approval cancels.
     CancelTriggerPreview cancel_trigger = 12;
+    // The triggers the approval cancels together.
+    CancelTriggersPreview cancel_triggers = 13;
   }
 }
 
@@ -1799,6 +1847,11 @@ message ListMessagesResponse {
   repeated Message messages = 1;
   // Cursor for the next page. Empty when no more results exist.
   string next_page_token = 2;
+  // The account the conversation's latest message selected, from any client,
+  // as of this read: the same as Conversation.last_account, and current even
+  // when the conversation was listed earlier. Set on every page. A client that
+  // opens the conversation selects it before the next message.
+  ConversationAccount last_account = 3;
 }
 
 // GetMessageImageRequest selects one image of the caller's messages.
