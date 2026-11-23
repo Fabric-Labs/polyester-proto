@@ -614,7 +614,7 @@
             "name": "include_reference",
             "jsonName": "includeReference",
             "number": 7,
-            "doc": "Include the composite reference market candle series for the same market,\n timeframe, and time range.\n The reference series can be empty when no reference series is available for\n the requested timeframe.",
+            "doc": "Include the composite reference market candle series for the same market,\n timeframe, and time range.\n Reference candles cover only the time before the pair's listing: each one's\n bucket starts before the bucket that contains listing_at, as GetSpotConfig\n reports it. From that bucket on, the pair's own candles cover the market.\n Without listing_at no listing cutoff applies; availability, the requested\n range and pagination still do.\n The reference series can be empty when no reference series is available for\n the requested timeframe, or when the requested range starts after listing.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -622,14 +622,9 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 8,
-            "doc": "Opaque exclusive keyset cursor for older closed candles, bound to symbol,\n timeframe, and time bounds. Columns within each page are ordered oldest-first.\n Inclusion flags and response shape may change between pages.",
+            "doc": "Opaque exclusive keyset cursor for older closed candles, from a previous\n GetCandlesColumns or GetCandles response; a cursor from either pages the\n other. It is bound to symbol_id, timeframe, and start_time and end_time\n exactly as sent: an absent bound and an explicit one, the Unix epoch\n included, are different requests. Columns within each page are ordered\n oldest-first. Inclusion flags and response shape may change between\n pages. At most 512 characters. For a known symbol_id, a cursor that is\n longer, malformed, from GetIndexPriceCandles, or sent with a different\n symbol_id, timeframe, start_time or end_time fails with invalid_argument\n (PAGE_TOKEN_INVALID); an unknown symbol_id fails with not_found\n (UNKNOWN_SYMBOL) first.",
             "protoScalar": "string",
-            "jsonType": "string",
-            "validate": {
-              "string": {
-                "maxLen": 512
-              }
-            }
+            "jsonType": "string"
           }
         ]
       }
@@ -899,7 +894,7 @@
             "name": "include_reference",
             "jsonName": "includeReference",
             "number": 7,
-            "doc": "Include the composite reference market candle series for the same market,\n timeframe, and time range.\n The reference series can be empty when no reference series is available for\n the requested timeframe.",
+            "doc": "Include the composite reference market candle series for the same market,\n timeframe, and time range.\n Reference candles cover only the time before the pair's listing: each one's\n bucket starts before the bucket that contains listing_at, as GetSpotConfig\n reports it. From that bucket on, the pair's own candles cover the market.\n Without listing_at no listing cutoff applies; availability, the requested\n range and pagination still do.\n The reference series can be empty when no reference series is available for\n the requested timeframe, or when the requested range starts after listing.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -907,14 +902,9 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 8,
-            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to symbol, timeframe, time bounds, and newest-first candle ordering.\n Inclusion flags affect response enrichment and may change between pages.",
+            "doc": "Opaque exclusive keyset cursor from a previous GetCandles or\n GetCandlesColumns response; a cursor from either pages the other. It is\n bound to symbol_id, timeframe, and start_time and end_time exactly as\n sent: an absent bound and an explicit one, the Unix epoch included, are\n different requests. Inclusion flags affect response enrichment and may\n change between pages. At most 512 characters. For a known symbol_id, a\n cursor that is longer, malformed, from GetIndexPriceCandles, or sent with a\n different symbol_id, timeframe, start_time or end_time fails with\n invalid_argument (PAGE_TOKEN_INVALID); an unknown symbol_id fails with\n not_found (UNKNOWN_SYMBOL) first.",
             "protoScalar": "string",
-            "jsonType": "string",
-            "validate": {
-              "string": {
-                "maxLen": 512
-              }
-            }
+            "jsonType": "string"
           }
         ]
       }
@@ -962,6 +952,190 @@
             "jsonName": "nextPageToken",
             "number": 5,
             "doc": "Opaque cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 512
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketdata.v1.GetIndexPriceCandlesRequest",
+      "kind": "message",
+      "doc": "GetIndexPriceCandlesRequest selects one page of a spot market's index price\n candles.\n\n The series is continuous across the listing: buckets that start before the\n bucket containing the pair's listing_at (as GetSpotConfig reports it) are\n reference candles, and from that bucket on they are index price candles. A\n bucket is never both. Without listing_at, or with a listing_at in the future,\n the series is reference candles only. Only closed candles are returned,\n newest-first by bucket start time, with the same bucket alignment as\n GetCandles. When both start_time and end_time are set, both bounds are\n inclusive.",
+      "message": {
+        "cel": [
+          {
+            "id": "get_index_price_candles.time_range_valid",
+            "message": "end_time must be \u003e= start_time when both are set",
+            "expression": "!has(this.start_time) || !has(this.end_time) || this.end_time \u003e= this.start_time"
+          },
+          {
+            "id": "get_index_price_candles.time_not_future",
+            "message": "start_time and end_time must not be more than 5 minutes in the future",
+            "expression": "(!has(this.start_time) || this.start_time \u003c= now + duration('300s')) \u0026\u0026 (!has(this.end_time) || this.end_time \u003c= now + duration('300s'))"
+          }
+        ],
+        "fields": [
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 1,
+            "doc": "Numeric spot market identifier.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "timeframe",
+            "jsonName": "timeframe",
+            "number": 2,
+            "doc": "Candle bucket size. Required. Every candle timeframe except SEC_1, which\n has no index price candles and fails with invalid_argument (BAD_REQUEST).",
+            "protoRef": "marketdata.v1.Timeframe",
+            "validate": {
+              "required": true,
+              "enum": {
+                "definedOnly": true
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Maximum number of candles to return. Defaults to 500 when unset; max\n 10000.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "10000"
+              }
+            }
+          },
+          {
+            "name": "start_time",
+            "jsonName": "startTime",
+            "number": 4,
+            "doc": "Inclusive lower bound for candle bucket start time, as a UTC timestamp.\n Must not be more than 5 minutes in the future.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "end_time",
+            "jsonName": "endTime",
+            "number": 5,
+            "doc": "Inclusive upper bound for candle bucket start time, as a UTC timestamp.\n Must be greater than or equal to start_time when both are set, and must not\n be more than 5 minutes in the future.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 6,
+            "doc": "Opaque exclusive keyset cursor from a previous GetIndexPriceCandles\n response, bound to symbol_id, timeframe, and start_time and end_time as\n sent, an absent bound included. It continues toward older candles. At\n most 512 characters. For a known symbol_id, a cursor that is longer,\n malformed, from GetCandles or GetCandlesColumns, or bound to another\n request fails with invalid_argument (PAGE_TOKEN_INVALID); an unknown\n symbol_id fails with not_found (UNKNOWN_SYMBOL) first.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketdata.v1.GetIndexPriceCandlesResponse",
+      "kind": "message",
+      "doc": "GetIndexPriceCandlesResponse contains one page of a spot market's index price\n candles in columns: element i of every repeated field describes the same\n candle.\n\n Candles are ordered newest-first by ts_sec, strictly descending, with no\n two at the same ts_sec. There is no volume field: neither a reference candle\n nor an index price candle carries trading volume. Gaps exist: a bucket from\n the listing on in which the index price had no valid value is omitted, never\n filled from the reference series, so treat a missing ts_sec as a gap. Index\n price candles begin with the release that introduced them; buckets after a\n listing but before that release are omitted the same way. A closed candle\n appears once its series has processed the bucket, and candles of longer\n timeframes are refreshed periodically, so the newest closed candles can\n appear some time after their bucket closes. Reference candles of the most\n recent 48 hours can still be revised. Reference candles reach back 180 days\n at timeframes shorter than one hour, five years from one hour to twelve\n hours, and up to 20 years, as far as the market's history goes, at one day\n and longer. Index price candles are kept without a time limit.",
+      "message": {
+        "fields": [
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 1,
+            "doc": "Numeric spot market identifier echoed from the request.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "timeframe",
+            "jsonName": "timeframe",
+            "number": 2,
+            "doc": "Candle bucket size of the returned series.",
+            "protoRef": "marketdata.v1.Timeframe"
+          },
+          {
+            "name": "ts_sec",
+            "jsonName": "tsSec",
+            "number": 3,
+            "doc": "Candle bucket start timestamps, in seconds since epoch (UTC), newest\n first. Empty when no candle exists in the requested range.",
+            "repeated": true,
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "open",
+            "jsonName": "open",
+            "number": 4,
+            "doc": "Opening prices, scaled by the pair's reference_price_scale from\n GetSpotConfig, the scale of both series.",
+            "repeated": true,
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "high",
+            "jsonName": "high",
+            "number": 5,
+            "doc": "Highest prices in each bucket, using the same scale as open.",
+            "repeated": true,
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "low",
+            "jsonName": "low",
+            "number": 6,
+            "doc": "Lowest prices in each bucket, using the same scale as open.",
+            "repeated": true,
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "close",
+            "jsonName": "close",
+            "number": 7,
+            "doc": "Closing prices, using the same scale as open.",
+            "repeated": true,
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "source",
+            "jsonName": "source",
+            "number": 8,
+            "doc": "The series each candle comes from.",
+            "repeated": true,
+            "protoRef": "marketdata.v1.IndexPriceCandleSource"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 9,
+            "doc": "Opaque cursor for the next, older page. Empty when no older candle exists\n in the requested range.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -1844,6 +2018,25 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketdata.v1.IndexPriceCandleSource",
+      "kind": "enum",
+      "doc": "IndexPriceCandleSource names the series a GetIndexPriceCandles candle comes\n from.",
+      "enum": {
+        "values": [
+          {
+            "name": "INDEX_PRICE_CANDLE_SOURCE_REFERENCE",
+            "number": 1,
+            "doc": "A composite reference candle: the median of external venues' candles,\n from a bucket that starts before the bucket containing the pair's\n listing_at."
+          },
+          {
+            "name": "INDEX_PRICE_CANDLE_SOURCE_INDEX",
+            "number": 2,
+            "doc": "An index price candle: the open, high, low and close of the pair's index\n price within the bucket, from the bucket containing listing_at on."
           }
         ]
       }

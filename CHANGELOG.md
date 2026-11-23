@@ -3,6 +3,37 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-23 — develop-20261123T082325Z
+
+Index price candles, stricter request validation, strategy money cards and market rules, and retry-safe sub-account creation.
+
+- [2026-11-20T2357Z-strategies-v1](changes/2026-11-20T2357Z-strategies-v1.md): changed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-21T0503Z-marketdata-v1](changes/2026-11-21T0503Z-marketdata-v1.md): changed `marketdata.v1.MarketDataService`. **Breaking.**
+- [2026-11-21T0515Z-swap-quickswap-v1](changes/2026-11-21T0515Z-swap-quickswap-v1.md): changed `swap.quickswap.v1.QuickSwapService`.
+- [2026-11-21T0654Z-strategies-v1](changes/2026-11-21T0654Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-21T0824Z-ledger-read-v1](changes/2026-11-21T0824Z-ledger-read-v1.md): changed `ledger.read.v1.LedgerReadService`.
+- [2026-11-21T1310Z-strategies-v1](changes/2026-11-21T1310Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-21T1518Z-ai-v1](changes/2026-11-21T1518Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-21T1600Z-strategies-v1](changes/2026-11-21T1600Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-21T1613Z-strategies-v1](changes/2026-11-21T1613Z-strategies-v1.md): added `strategies.v1.StrategiesService`.
+- [2026-11-21T2325Z-strategies-v1](changes/2026-11-21T2325Z-strategies-v1.md): removed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-22T0040Z-strategies-v1](changes/2026-11-22T0040Z-strategies-v1.md): removed `strategies.v1.StrategiesService`. **Breaking.**
+- [2026-11-22T0150Z-strategies-v1](changes/2026-11-22T0150Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-22T0220Z-ai-v1](changes/2026-11-22T0220Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-22T0308Z-chain-lifecycle-v1](changes/2026-11-22T0308Z-chain-lifecycle-v1.md): changed `chain.lifecycle.v1.LifecycleReadService`.
+- [2026-11-22T0427Z-auth-v1](changes/2026-11-22T0427Z-auth-v1.md): changed `auth.v1.ApiKeyService`.
+- [2026-11-22T0516Z-auth-v1](changes/2026-11-22T0516Z-auth-v1.md): changed `auth.v1.AccountActivityService`, `auth.v1.SubaccountViewService`. **Breaking.**
+- [2026-11-22T0606Z-changelog-v1](changes/2026-11-22T0606Z-changelog-v1.md): added `changelog.v1.ChangelogService`.
+- [2026-11-22T0618Z-strategies-v1](changes/2026-11-22T0618Z-strategies-v1.md): added `strategies.v1.StrategiesService`.
+- [2026-11-22T0928Z-ledger-v1](changes/2026-11-22T0928Z-ledger-v1.md): added `ledger.read.v1.LedgerReadService`.
+- [2026-11-22T0941Z-ai-v1](changes/2026-11-22T0941Z-ai-v1.md): added `ai.v1.AssistantService`.
+- [2026-11-22T1023Z-strategies-v1](changes/2026-11-22T1023Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-22T1143Z-strategies-v1](changes/2026-11-22T1143Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-22T1234Z-auth-v1](changes/2026-11-22T1234Z-auth-v1.md): added `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`.
+- [2026-11-22T1523Z-strategies-v1](changes/2026-11-22T1523Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-22T1548Z-marketdata-v1](changes/2026-11-22T1548Z-marketdata-v1.md): changed `marketdata.v1.MarketDataService`, `orders.v1.OrdersService`, `orders.v1.OrdersReadService`, `ledger.read.v1.LedgerReadService`. **Breaking.**
+- [2026-11-22T1708Z-strategies-v1](changes/2026-11-22T1708Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+
 ## 2026-11-21 — develop-20261121T092627Z
 
 Exact Trading balance updates with epoch and sequence positions, profit and loss and trading statistics, cancel-all for triggers, rate-limit and order book heatmap updates, strategy bot access for API keys, and QuickSwap service changes..
