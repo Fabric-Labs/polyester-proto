@@ -10,7 +10,7 @@
             "name": "idempotency_key",
             "jsonName": "idempotencyKey",
             "number": 1,
-            "doc": "Client-chosen key, unique per caller, that makes creation idempotent: the\n same key and request return the same Swap; another request with the same\n key is IDEMPOTENCY_CONFLICT.",
+            "doc": "Client-chosen key, unique per caller, that makes creation idempotent: the\n same key and request return the same Swap; another request with the same\n key is IDEMPOTENCY_CONFLICT. Keys starting \"aw:\" are reserved for\n auto-withdraw's conversions and refused (INVALID_ARGUMENT).",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -33,7 +33,7 @@
             "name": "min_amount_out_e18",
             "jsonName": "minAmountOutE18",
             "number": 3,
-            "doc": "Positive minimum destination amount after fees for the whole amount, in\n 18-decimal units, usually the quote's min_amount_out_e18. Execution never\n nets a lower rate; what cannot be traded at it stays on the account.",
+            "doc": "Positive minimum destination amount after fees for the whole amount, in\n 18-decimal units, usually the quote's min_amount_out_e18. An order that\n matches within its window never nets a lower rate: its price limit allows\n for the taker fee in force then. What cannot be traded at that rate stays\n on the account. An order the exchange first accepts after its window\n (only under severe delay) may pay a later scheduled fee; if that takes a\n fill below the minimum rate, the Swap fails closed with MINIMUM_NOT_MET.",
             "protoRef": "polyester.type.v1.U128",
             "validate": {
               "required": true
@@ -79,7 +79,7 @@
           {
             "name": "ROUTE_UNSUPPORTED",
             "number": 1,
-            "doc": "No spot market trades the source asset directly against the destination\n asset."
+            "doc": "No spot market trades the source asset against the destination asset,\n directly or through USDT or USDC."
           },
           {
             "name": "AMOUNT_OUT_OF_RANGE",
@@ -139,7 +139,7 @@
           {
             "name": "DIRECTION_UNSUPPORTED",
             "number": 13,
-            "doc": "The market trades the two assets but cannot execute a Swap in this\n direction: a buy there would pay its fee in the asset it spends."
+            "doc": "A market of the route trades its two assets but cannot execute a Swap in\n this direction: a buy there would pay its fee in the asset it spends."
           }
         ]
       }
@@ -179,6 +179,41 @@
             "number": 4,
             "doc": "AMOUNT_OUT_OF_RANGE only: the largest amount current depth absorbs in one\n order within the market's maximum order quantity, in 18-decimal units of\n the source asset. A buy above it would buy more than the maximum order\n quantity, so it is refused rather than partly executed.",
             "protoRef": "polyester.type.v1.U128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.Execution",
+      "kind": "message",
+      "doc": "Execution selects how a Swap is traded.",
+      "message": {
+        "oneofs": [
+          {
+            "name": "strategy",
+            "required": true,
+            "fields": [
+              "market",
+              "twap"
+            ]
+          }
+        ],
+        "fields": [
+          {
+            "name": "market",
+            "jsonName": "market",
+            "number": 1,
+            "doc": "Execute immediately.",
+            "protoRef": "swap.v1.MarketExecution",
+            "oneof": "strategy"
+          },
+          {
+            "name": "twap",
+            "jsonName": "twap",
+            "number": 2,
+            "doc": "Execute in equal time slices.",
+            "protoRef": "swap.v1.TwapExecution",
+            "oneof": "strategy"
           }
         ]
       }
@@ -245,6 +280,14 @@
             "protoRef": "swap.v1.Swap"
           }
         ]
+      }
+    },
+    {
+      "name": "swap.v1.MarketExecution",
+      "kind": "message",
+      "doc": "MarketExecution executes the Swap at once, in immediate orders.",
+      "message": {
+        "fields": []
       }
     },
     {
@@ -424,13 +467,6 @@
             "protoRef": "polyester.type.v1.U128"
           },
           {
-            "name": "fee_e18",
-            "jsonName": "feeE18",
-            "number": 14,
-            "doc": "Total fee charged, in 18-decimal units of the destination asset.",
-            "protoRef": "polyester.type.v1.U128"
-          },
-          {
             "name": "orders",
             "jsonName": "orders",
             "number": 15,
@@ -446,6 +482,108 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "execution",
+            "jsonName": "execution",
+            "number": 17,
+            "doc": "How the Swap executes.",
+            "protoRef": "swap.v1.Execution"
+          },
+          {
+            "name": "intermediate_asset_id",
+            "jsonName": "intermediateAssetId",
+            "number": 18,
+            "doc": "Unified asset ID of a two-leg route's intermediate asset; zero for a\n direct route.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "intermediate_remainder_e18",
+            "jsonName": "intermediateRemainderE18",
+            "number": 19,
+            "doc": "On a two-leg route, intermediate asset received and not converted, in\n 18-decimal units; it is on the account. Final once is_terminal is true.\n Zero for a direct route.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "legs",
+            "jsonName": "legs",
+            "number": 20,
+            "doc": "The route's markets in order, with each leg's settled totals and fee.",
+            "repeated": true,
+            "protoRef": "swap.v1.SwapLeg"
+          },
+          {
+            "name": "progress",
+            "jsonName": "progress",
+            "number": 21,
+            "doc": "Execution schedule and slices; unset before execution is planned.",
+            "protoRef": "swap.v1.SwapProgress"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.SwapLeg",
+      "kind": "message",
+      "doc": "SwapLeg is one market of a Swap's route and its settled totals.",
+      "message": {
+        "fields": [
+          {
+            "name": "leg",
+            "jsonName": "leg",
+            "number": 1,
+            "doc": "Zero-based position of the market in the route.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "symbol_id",
+            "jsonName": "symbolId",
+            "number": 2,
+            "doc": "Stable numeric pair ID from GetSpotConfig.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "side",
+            "jsonName": "side",
+            "number": 3,
+            "doc": "Side of the leg's orders.",
+            "protoRef": "swap.v1.Side"
+          },
+          {
+            "name": "spent_e18",
+            "jsonName": "spentE18",
+            "number": 4,
+            "doc": "Amount the leg spent in settled fills, fees in the spent asset included,\n in 18-decimal units of the asset it spends.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "received_e18",
+            "jsonName": "receivedE18",
+            "number": 5,
+            "doc": "Amount the leg received in settled fills after fees, in 18-decimal units\n of the asset it receives.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "fee_e18",
+            "jsonName": "feeE18",
+            "number": 6,
+            "doc": "Fee charged on the leg's settled fills, in 18-decimal units of\n fee_asset_id.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "fee_asset_id",
+            "jsonName": "feeAssetId",
+            "number": 7,
+            "doc": "Asset the leg's fee is charged in: the asset it receives.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -453,7 +591,7 @@
     {
       "name": "swap.v1.SwapOrder",
       "kind": "message",
-      "doc": "SwapOrder is one spot order of a Swap: an immediate-or-cancel limit order\n at the Swap's protection price.",
+      "doc": "SwapOrder is one spot order of a Swap: an immediate-or-cancel limit order\n at the Swap's protection price, on one leg of one slice.",
       "message": {
         "fields": [
           {
@@ -526,6 +664,15 @@
             "number": 9,
             "doc": "Fee charged on settled fills, in 18-decimal units of the asset the order\n receives.",
             "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "slice",
+            "jsonName": "slice",
+            "number": 10,
+            "doc": "Zero-based slice of the Swap's schedule the order belongs to; 0 at\n market.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -565,6 +712,67 @@
       }
     },
     {
+      "name": "swap.v1.SwapProgress",
+      "kind": "message",
+      "doc": "SwapProgress is a Swap's execution schedule and slices.",
+      "message": {
+        "fields": [
+          {
+            "name": "completed_slices",
+            "jsonName": "completedSlices",
+            "number": 1,
+            "doc": "Slices that traded source amount and are over.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "total_slices",
+            "jsonName": "totalSlices",
+            "number": 2,
+            "doc": "Slices of the schedule: 1 at market, duration_ms over slice_interval_ms\n rounded up for a TWAP; zero until execution is planned.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "started_at",
+            "jsonName": "startedAt",
+            "number": 3,
+            "doc": "When a TWAP's schedule started, its first slot; unset at market and\n until the TWAP is planned.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "deadline",
+            "jsonName": "deadline",
+            "number": 4,
+            "doc": "The last moment an order of the Swap may be sent: the TWAP's start plus\n its duration, or the end of the market execution window. Unset until\n execution is planned. An order sent before it may settle, and an order's\n outcome be confirmed (RECONCILING), after it; the Swap is terminal only\n then.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "slices",
+            "jsonName": "slices",
+            "number": 5,
+            "doc": "A TWAP's slices in index order, at most 50, including future slices.\n Empty at market.",
+            "repeated": true,
+            "protoRef": "swap.v1.SwapSlice"
+          },
+          {
+            "name": "slices_truncated",
+            "jsonName": "slicesTruncated",
+            "number": 6,
+            "doc": "True when the TWAP has more than 50 slices; only the first 50 are\n listed, and completed_slices still counts them all.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.v1.SwapQuote",
       "kind": "message",
       "doc": "SwapQuote is an estimate from current order-book depth. Nothing is\n reserved: the prices are indicative, and only min_amount_out binds once the\n Swap is created.",
@@ -581,7 +789,7 @@
             "name": "legs",
             "jsonName": "legs",
             "number": 2,
-            "doc": "Markets the Swap would trade on, in order. A direct Swap has one.",
+            "doc": "Markets the Swap would trade on, in order: the direct market between the\n two assets when one exists, otherwise two markets through\n intermediate_asset_id (USDT or USDC), the route with the largest\n expected output.",
             "repeated": true,
             "protoRef": "swap.v1.SwapQuoteLeg"
           },
@@ -616,6 +824,33 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "intermediate_asset_id",
+            "jsonName": "intermediateAssetId",
+            "number": 7,
+            "doc": "Unified asset ID of a two-leg route's intermediate asset (for example\n USDT for BTC to SOL); zero for a direct route.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "price_impact_bps",
+            "jsonName": "priceImpactBps",
+            "number": 8,
+            "doc": "Distance of the whole amount's average execution from the best prices\n of the books, across every leg, in basis points, rounded up:\n 1 - (1 - impact of leg 1) x (1 - impact of leg 2).",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "total_slices",
+            "jsonName": "totalSlices",
+            "number": 9,
+            "doc": "Slices the Swap executes in: 1 at market; for a TWAP, duration_ms over\n slice_interval_ms, rounded up. A TWAP is quoted as the whole amount at\n current depth, an estimate of every slice.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -623,7 +858,7 @@
     {
       "name": "swap.v1.SwapQuoteLeg",
       "kind": "message",
-      "doc": "SwapQuoteLeg is one spot market a quote trades on.",
+      "doc": "SwapQuoteLeg is one spot market a quote trades on. The first leg of a\n two-leg route receives the intermediate asset and the second spends it.",
       "message": {
         "fields": [
           {
@@ -671,7 +906,7 @@
             "name": "fee_e18",
             "jsonName": "feeE18",
             "number": 6,
-            "doc": "Estimated fee, in 18-decimal units of the asset the leg receives\n (fee_asset_id).",
+            "doc": "Estimated fee, in 18-decimal units of the asset the leg receives\n (fee_asset_id): the leg's received amount times its taker fee rate. A\n second leg is priced on what the first leg receives after its fee.",
             "protoRef": "polyester.type.v1.U128"
           },
           {
@@ -725,7 +960,7 @@
           {
             "name": "EXPIRED",
             "number": 7,
-            "doc": "The execution window ended before the order could be placed."
+            "doc": "The execution window ended before the order could be placed, or a\n TWAP's deadline ended it with slots left untraded."
           },
           {
             "name": "MINIMUM_NOT_MET",
@@ -736,6 +971,113 @@
             "name": "MAX_ORDER_QUANTITY",
             "number": 9,
             "doc": "The order bought the market's maximum order quantity and stopped there;\n the rest of the amount stays on the account, unspent. The market's depth\n or maximum changed after the quote, which never quotes past it."
+          },
+          {
+            "name": "INTERMEDIATE_BELOW_MINIMUM",
+            "number": 10,
+            "doc": "On a two-leg route, intermediate asset below the second market's minimum\n order, with later slices' intermediate added where a TWAP had slices\n left, stays on the account, unconverted (intermediate_remainder_e18)."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.SwapSlice",
+      "kind": "message",
+      "doc": "SwapSlice is one slot of a TWAP Swap's schedule, including a slot that\n traded nothing. Its index and planned_at never change.",
+      "message": {
+        "fields": [
+          {
+            "name": "index",
+            "jsonName": "index",
+            "number": 1,
+            "doc": "Zero-based position in the Swap's frozen schedule.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "planned_at",
+            "jsonName": "plannedAt",
+            "number": 2,
+            "doc": "Frozen scheduled start of the slot.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "executed_at",
+            "jsonName": "executedAt",
+            "number": 3,
+            "doc": "When its first order was sent; unset for an unsent slice.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "finished_at",
+            "jsonName": "finishedAt",
+            "number": 4,
+            "doc": "When its outcome became final; unset while planned or executing.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "state",
+            "jsonName": "state",
+            "number": 5,
+            "doc": "Current slice state.",
+            "protoRef": "swap.v1.SwapSlice.State"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 6,
+            "doc": "Why a final slice did not trade in full; unspecified after full trading.",
+            "protoRef": "swap.v1.SwapSlice.Reason"
+          },
+          {
+            "name": "completed",
+            "jsonName": "completed",
+            "number": 7,
+            "doc": "Whether the slice traded source amount and is over.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "input_traded_e18",
+            "jsonName": "inputTradedE18",
+            "number": 8,
+            "doc": "Source amount the slice's first leg spent in settled fills, in\n 18-decimal units.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "output_received_e18",
+            "jsonName": "outputReceivedE18",
+            "number": 9,
+            "doc": "Destination amount received in the slice after fees, in 18-decimal\n units. On a two-leg route this is its second leg's output, which can\n include intermediate carried from earlier slices.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "second_leg_input_e18",
+            "jsonName": "secondLegInputE18",
+            "number": 10,
+            "doc": "On a two-leg route, intermediate amount the slice's second leg spent, in\n 18-decimal units; zero on a direct route.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "intermediate_carried_e18",
+            "jsonName": "intermediateCarriedE18",
+            "number": 11,
+            "doc": "On a two-leg route, intermediate acquired through this slice, from it and\n earlier slices, that no second leg had converted by its end, in\n 18-decimal units: added to a later slice's second leg when none could be\n ordered (carry_reason), otherwise left on the account. Zero on a direct\n route.",
+            "protoRef": "polyester.type.v1.U128"
+          },
+          {
+            "name": "carry_reason",
+            "jsonName": "carryReason",
+            "number": 12,
+            "doc": "Why intermediate asset could not be converted in this slice;\n unspecified when no conversion was refused.",
+            "protoRef": "swap.v1.SwapSlice.Reason"
           }
         ]
       }
@@ -777,7 +1119,7 @@
     {
       "name": "swap.v1.SwapTerms",
       "kind": "message",
-      "doc": "SwapTerms are the economic terms of one Swap: spend amount_e18 of the\n source asset from the account's Trading balance and receive the destination\n asset there. The same terms are quoted and created. A Swap executes as spot\n orders at the account's own spot taker fee; no other fee is charged.",
+      "doc": "SwapTerms are the economic terms of one Swap: spend amount_e18 of the\n source asset from the account's Trading balance and receive the destination\n asset there, at market or over time. The same terms are quoted and created.\n A Swap executes as spot orders at the account's own spot taker fee on each\n market it trades; no other fee is charged.",
       "message": {
         "cel": [
           {
@@ -845,6 +1187,58 @@
             "doc": "Positive source amount to spend, in 18-decimal units (0.5 is\n 500000000000000000). Only whole order steps of the market are traded;\n the rest stays on the account.",
             "protoRef": "polyester.type.v1.U128",
             "oneof": "amount"
+          },
+          {
+            "name": "execution",
+            "jsonName": "execution",
+            "number": 5,
+            "doc": "How the Swap executes; unset executes at market.",
+            "protoRef": "swap.v1.Execution"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.TwapExecution",
+      "kind": "message",
+      "doc": "TwapExecution spreads the Swap evenly over a duration, one slice per slot.\n Slot k starts k slice intervals after execution starts. Each slice trades\n what is left of the amount over the slots left, and each slice nets at\n least the Swap's minimum rate (min_amount_out_e18 over amount_e18) on what\n it converts, judged slice by slice; slices whose intermediate one later\n second leg converts together (below) are judged together. Each order's\n price limit allows for the taker fee in force when the order can match\n within its window, the highest rate scheduled from when the order is\n prepared until it can last be accepted, some minutes after its sending\n window since a resent copy of it can still be accepted then. An order the\n exchange first accepts after that window (only under severe delay) may pay\n a later scheduled fee, and a slice it takes below the minimum fails the\n Swap closed (MINIMUM_NOT_MET). A slice's first order is sent only within\n its slot: a slot missed is skipped, never sent late. On a two-leg route, a\n slice's second leg is sent once its first leg has settled, at any time\n before the deadline, even after the slice's slot, and the next slice\n starts only once it is over. When no second-leg order can meet the\n protection or the second market's order limits, the slice's intermediate\n asset is added to the next slice's second leg. What a second-leg order\n leaves unfilled, and what is still unconverted when execution ends, stays\n on the account (intermediate_remainder_e18), and the Swap then ends\n PARTIALLY_COMPLETED; a rest smaller than one order step of the second\n market is ordinary residue and the Swap can still end COMPLETED. A TWAP\n needs a larger amount than a market execution, since every slice must be a\n valid order.",
+      "message": {
+        "cel": [
+          {
+            "id": "twap_execution.interval_within_duration",
+            "message": "slice_interval_ms must not exceed duration_ms",
+            "expression": "this.slice_interval_ms \u003c= this.duration_ms"
+          }
+        ],
+        "fields": [
+          {
+            "name": "duration_ms",
+            "jsonName": "durationMs",
+            "number": 1,
+            "doc": "Total execution duration in milliseconds, from 60000 (1 minute) to\n 3600000 (60 minutes). The duration starts when execution starts.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64",
+            "validate": {
+              "number": {
+                "gte": "60000",
+                "lte": "3600000"
+              }
+            }
+          },
+          {
+            "name": "slice_interval_ms",
+            "jsonName": "sliceIntervalMs",
+            "number": 2,
+            "doc": "Interval between slices in milliseconds, from 10000 (10 seconds) up to\n duration_ms. The slice count is duration_ms / slice_interval_ms, rounded\n up.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64",
+            "validate": {
+              "number": {
+                "gte": "10000"
+              }
+            }
           }
         ]
       }

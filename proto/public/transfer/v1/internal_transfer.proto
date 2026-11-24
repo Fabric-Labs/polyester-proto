@@ -348,14 +348,28 @@ message BatchCreateInternalTransfersResponse {
 }
 
 // GetInternalTransferBatchRequest selects a batch by the request ID
-// BatchCreateInternalTransfers returned.
+// BatchCreateInternalTransfers returned, or by the idempotency key the caller
+// sent it.
 message GetInternalTransferBatchRequest {
+  // Exactly one of request_id and idempotency_key selects the batch.
+  option (buf.validate.message).oneof = {
+    fields: [
+      "request_id",
+      "idempotency_key"
+    ]
+    required: true
+  };
+
   // Batch request ID returned by BatchCreateInternalTransfers.
   string request_id = 1 [(buf.validate.field).string = {
-    min_len: 1
     max_len: 39
     pattern: "^[1-9][0-9]*$"
   }];
+  // Idempotency key the caller sent to BatchCreateInternalTransfers, scoped
+  // to the authenticated caller as that request scoped it: the session's
+  // account, or the API key. Reads the batch's stored outcome when its answer
+  // was lost.
+  string idempotency_key = 2 [(buf.validate.field).string.max_len = 128];
 }
 
 // GetInternalTransferBatchResponse returns the batch's current outcome and
@@ -486,6 +500,19 @@ service InternalTransferService {
   // read the transfers of every source account of the batch; any other
   // batch is not found. An API key whose policy does not grant
   // READ_INTERNAL_TRANSFERS is refused PERMISSION_DENIED for any batch.
+  //
+  // By idempotency key instead, the read answers the batch the caller
+  // submitted under that key as BatchCreateInternalTransfers stored its
+  // outcome: accepted with its transfer IDs, still processing, or refused
+  // with its reasons. It needs the read permission on every source account,
+  // never the move permission, so a caller no longer allowed to move a
+  // source still reads an answer it lost. The key is the caller's own, so
+  // two answers differ from a read by request ID, which answers NOT_FOUND for
+  // both: a batch its checks refused reads its refusal, and a caller who may
+  // not read one of its sources is refused PERMISSION_DENIED, or UNAVAILABLE
+  // while that permission cannot be decided yet (retry). NOT_FOUND means the
+  // caller submitted no batch under that key.
+  //
   // This read does not submit or retry the batch and requires no fresh MFA.
   rpc GetInternalTransferBatch(GetInternalTransferBatchRequest) returns (GetInternalTransferBatchResponse) {
     option (polyester.api.authentication_methods) = SESSION_TOKEN;
@@ -495,9 +522,10 @@ service InternalTransferService {
       summary: "Get Internal Transfer Batch"
       description:
         "Read a batch's current outcome and the state of every leg by "
-        "the request ID that Batch Create Internal Transfers returned. "
-        "The caller must be allowed to read the transfers of every "
-        "source account of the batch."
+        "the request ID that Batch Create Internal Transfers returned, "
+        "or by the idempotency key the caller sent it. The caller must be "
+        "allowed to read the transfers of every source account of the "
+        "batch."
       tags: "Internal Transfers"
     };
   }

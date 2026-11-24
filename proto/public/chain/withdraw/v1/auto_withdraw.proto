@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
+import "swap/v1/swap.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/chain/withdraw/v1;chainwithdrawv1";
 
@@ -160,6 +161,16 @@ message AutoWithdrawRule {
   polyester.type.v1.U128 min_usd_value_e18 = 8;
   // Public account ID of the person who created this version.
   fixed64 created_by_account_id = 9;
+  // Ledger asset every other asset with a balance is converted into, through
+  // a Swap placed from the account, before the run pays it; zero pays every
+  // asset in kind. When set, destinations has exactly one entry, for this
+  // asset.
+  uint32 payout_asset_id = 10;
+  // Duration of a conversion that runs as TWAP, in milliseconds, 60000 to
+  // 3600000; zero means 300000. A conversion runs as TWAP when its USD value
+  // exceeds 10,000 or its quoted price impact exceeds 0.5%, otherwise at
+  // market.
+  uint64 conversion_twap_duration_ms = 11;
 }
 
 // SetAutoWithdrawRuleRequest creates or replaces the rule of the root
@@ -185,6 +196,26 @@ message SetAutoWithdrawRuleRequest {
   // current price is available. A payout never goes below its destination's
   // min_amount_e18 or the route's withdrawal minimum.
   polyester.type.v1.U128 min_usd_value_e18 = 5;
+  // Ledger asset every other asset with a balance is converted into, through
+  // a Swap placed from the account, before the run pays it; zero pays every
+  // asset in kind. When set, destinations has exactly one entry, for this
+  // asset. Creating or resuming a rule with a payout asset also needs the
+  // permission to swap on the account; on a broker vault that is the
+  // permission to manage its payouts (the Owner and Finance roles). Pausing
+  // it does not, and a run whose author lost it leaves the assets in kind
+  // (policy_denied).
+  uint32 payout_asset_id = 6;
+  // Duration of a conversion that runs as TWAP, in milliseconds, 60000 to
+  // 3600000; zero means 300000. A conversion runs as TWAP when its USD value
+  // exceeds 10,000 or its quoted price impact exceeds 0.5%, otherwise at
+  // market.
+  uint64 conversion_twap_duration_ms = 7 [
+    (buf.validate.field).uint64 = {
+      gte: 60000
+      lte: 3600000
+    },
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
 }
 
 // SetAutoWithdrawRuleResponse returns the new rule version.
@@ -243,6 +274,8 @@ enum AutoWithdrawRunState {
   // Nothing was paid: every asset was below its minimum, no current price
   // valued it, or the rule was no longer current.
   RUN_SKIPPED = 6;
+  // The run's conversions into the payout asset are executing; payouts start once every conversion is final and settled.
+  RUN_CONVERTING = 7;
 }
 
 // AutoWithdrawStepState is where one asset's payout of a run stands.
@@ -301,7 +334,9 @@ message AutoWithdrawStep {
   // route's supply_status in the deposit and withdraw config is MISSING or
   // STALE; the funds stay for a later run), authority_revoked,
   // gateway_capacity_insufficient (the funds stay for a later run),
-  // withdrawal_released or withdrawal_failed; empty otherwise.
+  // withdrawals_disabled (the environment does not allow withdrawals; the
+  // funds stay on the account), withdrawal_released or withdrawal_failed;
+  // empty otherwise.
   string reason = 7;
   // Withdraw intent identifier once the withdrawal is accepted; follows the
   // same lifecycle as a user withdrawal.
@@ -347,6 +382,41 @@ message AutoWithdrawRun {
   google.protobuf.Timestamp created_at = 7;
   // When the run ended; unset while it is in progress.
   google.protobuf.Timestamp finished_at = 8;
+  // Conversions into the rule's payout asset, ordered by source_asset_id; empty for an in-kind rule.
+  repeated AutoWithdrawConversion conversions = 9;
+}
+
+// AutoWithdrawConversion is one asset a run converts into its rule's payout
+// asset through a Swap placed from the account, before it pays.
+message AutoWithdrawConversion {
+  // Ledger asset converted.
+  uint32 source_asset_id = 1;
+  // Amount the conversion spends.
+  polyester.type.v1.U128 amount_e18 = 2;
+  // The Swap (swap.v1 GetSwap); zero when the asset was not converted.
+  fixed64 swap_id = 3;
+  // Market or TWAP; unset when the asset was not converted.
+  swap.v1.Execution execution = 4;
+  // Where the Swap stands; unset when the asset was not converted.
+  swap.v1.SwapStatus status = 5;
+  // Why a terminal Swap did not trade its whole amount; unset when it did or
+  // when the asset was not converted.
+  swap.v1.SwapReason reason = 6;
+  // Whether the conversion is over: its Swap is terminal, or it was skipped.
+  bool is_terminal = 7;
+  // Source spent, settled.
+  polyester.type.v1.U128 executed_amount_e18 = 8;
+  // Stays on the account.
+  polyester.type.v1.U128 unspent_amount_e18 = 9;
+  // Payout asset after fees.
+  polyester.type.v1.U128 received_amount_e18 = 10;
+  // Per-leg spent, received and fee.
+  repeated swap.v1.SwapLeg legs = 11;
+  // Why the asset was not converted (route_unsupported, below_minimum,
+  // above_maximum, conversion_unavailable, price_unavailable,
+  // conversion_refused, rule_superseded or policy_denied); empty otherwise.
+  // Its balance stays on the account.
+  string skip_reason = 12;
 }
 
 // ListAutoWithdrawRunsRequest pages through an account's runs, newest first.
@@ -425,9 +495,11 @@ message AutoWithdrawPreviewAsset {
   // no_destination (the rule pays no destination for the asset),
   // destination_cooling_down (a broker vault pays a destination only once
   // it has been on the vault's external withdraw whitelist for 24 hours;
-  // see payable_from), above_max (the balance above max_amount_e18 stays)
-  // or dust (less than one whole on-chain unit stays); empty when the whole
-  // balance pays.
+  // see payable_from), above_max (the balance above max_amount_e18 stays),
+  // dust (less than one whole on-chain unit stays) or, on a rule with a
+  // payout asset, converts (the asset is converted into the payout asset
+  // instead; see conversion) or why it would not be converted (see
+  // conversion.skip_reason); empty when the whole balance pays.
   string hold_reason = 7;
   // The least one payout of the asset pays, in 18-decimal asset units: the
   // destination's min_amount_e18, or its min_floor_e18 when that is higher
@@ -455,6 +527,35 @@ message AutoWithdrawPreviewAsset {
   // withdraw whitelist. Unset with hold_reason destination_cooling_down
   // when that time is not known yet.
   google.protobuf.Timestamp payable_from = 13;
+  // Set on an asset the rule converts into its payout asset: what converting
+  // its whole available balance is quoted to deliver now. Such an asset pays
+  // nothing in kind (payable_e18 zero); its hold_reason is converts, or why
+  // it would stay on the account.
+  AutoWithdrawPreviewConversion conversion = 14;
+}
+
+// AutoWithdrawPreviewConversion is the current quote for converting one
+// asset into the rule's payout asset through a Swap placed from the account.
+message AutoWithdrawPreviewConversion {
+  // Payout asset the conversion delivers.
+  uint32 payout_asset_id = 1;
+  // Expected payout asset after every leg's fee, estimated from the whole
+  // amount at the current book depth; a TWAP's slices execute at the prices
+  // of their own time.
+  polyester.type.v1.U128 expected_amount_out_e18 = 2;
+  // Least payout asset the conversion accepts: the expected amount less the
+  // 1% slippage protection, estimated the same way.
+  polyester.type.v1.U128 min_amount_out_e18 = 3;
+  // Quoted price impact of the whole amount, in basis points.
+  uint32 price_impact_bps = 4;
+  // How the run would execute the conversion: market, or TWAP over the
+  // rule's conversion duration when its USD value exceeds 10,000 or its
+  // price impact exceeds 0.5%. A TWAP whose slices would fall below the
+  // route's minimum runs in fewer, longer slices, never fewer than two;
+  // otherwise the asset is skipped with below_minimum.
+  swap.v1.Execution execution = 5;
+  // Why the asset would not be converted now (route_unsupported, below_minimum, above_maximum, conversion_unavailable, price_unavailable); empty when it would. Its balance stays on the account.
+  string skip_reason = 6;
 }
 
 // PreviewAutoWithdrawRunResponse previews the next run.

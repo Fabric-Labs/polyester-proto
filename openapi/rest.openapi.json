@@ -24,6 +24,11 @@
             "additionalProperties": false,
             "description": "The latest version; unset when the account never had a rule.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -119,6 +124,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -188,11 +200,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -237,6 +251,180 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "conversions": {
+                  "description": "Conversions into the rule's payout asset, ordered by source_asset_id; empty for an in-kind rule.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "description": "Amount the conversion spends, as a decimal string in whole units of the source asset.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "executedAmount": {
+                        "description": "Source asset spent, settled, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "execution": {
+                        "additionalProperties": false,
+                        "description": "Market or TWAP; unset when the asset was not converted.",
+                        "properties": {
+                          "market": {
+                            "additionalProperties": false,
+                            "description": "Execute immediately.",
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "twap": {
+                            "additionalProperties": false,
+                            "description": "Execute in equal time slices.",
+                            "properties": {
+                              "durationMs": {
+                                "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                                "pattern": "^[0-9]+$",
+                                "type": "string"
+                              },
+                              "sliceIntervalMs": {
+                                "description": "Interval between slices in milliseconds, from 10000 (10 seconds) up to duration_ms. The slice count is duration_ms / slice_interval_ms, rounded up.",
+                                "pattern": "^[0-9]+$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "durationMs",
+                              "sliceIntervalMs"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [],
+                        "type": "object"
+                      },
+                      "isTerminal": {
+                        "description": "Whether the conversion is over: its Swap is terminal, or it was skipped.",
+                        "type": "boolean"
+                      },
+                      "legs": {
+                        "description": "Per-leg spent, received and fee.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fee": {
+                              "description": "Fee the leg paid in the asset it received, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "feeAssetId": {
+                              "description": "Asset the leg's fee was charged in: the asset it received.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "leg": {
+                              "description": "Route leg: 0, or 1 for a route's second leg.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "received": {
+                              "description": "Asset the leg received after its fee, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "side": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.Side"
+                                }
+                              ],
+                              "description": "Whether the leg bought or sold the market's base asset."
+                            },
+                            "spent": {
+                              "description": "Asset the leg spent, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "symbolId": {
+                              "description": "Spot market the leg traded on.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "fee",
+                            "feeAssetId",
+                            "leg",
+                            "received",
+                            "side",
+                            "spent",
+                            "symbolId"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "reason": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.SwapReason"
+                          }
+                        ],
+                        "description": "Why a terminal Swap did not trade its whole amount; absent when it did or when the asset was not converted."
+                      },
+                      "receivedAmount": {
+                        "description": "Payout asset received after fees, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "skipReason": {
+                        "description": "Why the asset was not converted (route_unsupported, below_minimum, above_maximum, conversion_unavailable, price_unavailable, conversion_refused, rule_superseded or policy_denied); empty otherwise. Its balance stays on the account.",
+                        "type": "string"
+                      },
+                      "sourceAssetId": {
+                        "description": "Ledger asset converted.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "status": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.SwapStatus"
+                          }
+                        ],
+                        "description": "Where the Swap stands; absent when the asset was not converted (skipReason says why)."
+                      },
+                      "swapId": {
+                        "description": "The Swap that converts the asset; absent when the asset was not converted.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "unspentAmount": {
+                        "description": "Source asset left on the account, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "executedAmount",
+                      "isTerminal",
+                      "receivedAmount",
+                      "skipReason",
+                      "sourceAssetId",
+                      "unspentAmount"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "createdAt": {
                   "description": "When the run started.",
                   "format": "date-time",
@@ -317,7 +505,7 @@
                         "type": "string"
                       },
                       "reason": {
-                        "description": "Machine-readable reason for a skipped or failed step, such as below_minimum, price_unavailable (the rule has a USD minimum and no current price valued the asset; the funds stay for a later run), rule_superseded, destination_not_whitelisted, destination_cooling_down (a broker vault's destination added to its external withdraw whitelist less than 24 hours ago; the funds stay for a later run), route_suspended (withdrawals of the asset to the destination network are suspended, as its withdrawal_status SUSPENDED in the deposit and withdraw config shows; the funds stay for a later run), supply_unavailable (the destination route's supply_status in the deposit and withdraw config is MISSING or STALE; the funds stay for a later run), authority_revoked, gateway_capacity_insufficient (the funds stay for a later run), withdrawal_released or withdrawal_failed; empty otherwise.",
+                        "description": "Machine-readable reason for a skipped or failed step, such as below_minimum, price_unavailable (the rule has a USD minimum and no current price valued the asset; the funds stay for a later run), rule_superseded, destination_not_whitelisted, destination_cooling_down (a broker vault's destination added to its external withdraw whitelist less than 24 hours ago; the funds stay for a later run), route_suspended (withdrawals of the asset to the destination network are suspended, as its withdrawal_status SUSPENDED in the deposit and withdraw config shows; the funds stay for a later run), supply_unavailable (the destination route's supply_status in the deposit and withdraw config is MISSING or STALE; the funds stay for a later run), authority_revoked, gateway_capacity_insufficient (the funds stay for a later run), withdrawals_disabled (the environment does not allow withdrawals; the funds stay on the account), withdrawal_released or withdrawal_failed; empty otherwise.",
                         "type": "string"
                       },
                       "state": {
@@ -406,6 +594,84 @@
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
+                "conversion": {
+                  "additionalProperties": false,
+                  "description": "Set on an asset the rule converts into its payout asset: what converting its whole available balance is quoted to deliver now. Such an asset pays nothing in kind (payable_e18 zero); its hold_reason is converts, or why it would stay on the account.",
+                  "properties": {
+                    "execution": {
+                      "additionalProperties": false,
+                      "description": "How the run would execute the conversion: market, or TWAP over the rule's conversion duration when its USD value exceeds 10,000 or its price impact exceeds 0.5%. A TWAP whose slices would fall below the route's minimum runs in fewer, longer slices, never fewer than two; otherwise the asset is skipped with below_minimum.",
+                      "properties": {
+                        "market": {
+                          "additionalProperties": false,
+                          "description": "Execute immediately.",
+                          "properties": {},
+                          "required": [],
+                          "type": "object"
+                        },
+                        "twap": {
+                          "additionalProperties": false,
+                          "description": "Execute in equal time slices.",
+                          "properties": {
+                            "durationMs": {
+                              "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                              "pattern": "^[0-9]+$",
+                              "type": "string"
+                            },
+                            "sliceIntervalMs": {
+                              "description": "Interval between slices in milliseconds, from 10000 (10 seconds) up to duration_ms. The slice count is duration_ms / slice_interval_ms, rounded up.",
+                              "pattern": "^[0-9]+$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "durationMs",
+                            "sliceIntervalMs"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "expectedAmountOut": {
+                      "description": "Expected payout asset after every leg's fee, as a decimal string in whole units, estimated from the whole amount at the current book depth; a TWAP's slices execute at the prices of their own time.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "minAmountOut": {
+                      "description": "Least payout asset the conversion accepts, as a decimal string in whole units: the expected amount less the 1% slippage protection, estimated the same way.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "payoutAssetId": {
+                      "description": "Payout asset the conversion delivers.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "priceImpactBps": {
+                      "description": "Quoted price impact of the whole amount, in basis points.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "skipReason": {
+                      "description": "Why the asset would not be converted now (route_unsupported, below_minimum, above_maximum, conversion_unavailable, price_unavailable); empty when it would. Its balance stays on the account.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expectedAmountOut",
+                    "minAmountOut",
+                    "payoutAssetId",
+                    "priceImpactBps",
+                    "skipReason"
+                  ],
+                  "type": "object"
+                },
                 "destinationAddress": {
                   "description": "Canonical destination address; absent when the rule has no destination for the asset.",
                   "type": "string"
@@ -421,7 +687,7 @@
                   "type": "string"
                 },
                 "holdReason": {
-                  "description": "Why held_back_e18 stays, or why nothing pays: below_minimum (below minimum_e18 or the rule's min_usd_value_e18), price_unavailable (the rule has a USD minimum and no current price values the asset), no_destination (the rule pays no destination for the asset), destination_cooling_down (a broker vault pays a destination only once it has been on the vault's external withdraw whitelist for 24 hours; see payable_from), above_max (the balance above max_amount_e18 stays) or dust (less than one whole on-chain unit stays); empty when the whole balance pays.",
+                  "description": "Why held_back_e18 stays, or why nothing pays: below_minimum (below minimum_e18 or the rule's min_usd_value_e18), price_unavailable (the rule has a USD minimum and no current price values the asset), no_destination (the rule pays no destination for the asset), destination_cooling_down (a broker vault pays a destination only once it has been on the vault's external withdraw whitelist for 24 hours; see payable_from), above_max (the balance above max_amount_e18 stays), dust (less than one whole on-chain unit stays) or, on a rule with a payout asset, converts (the asset is converted into the payout asset instead; see conversion) or why it would not be converted (see conversion.skip_reason); empty when the whole balance pays.",
                   "type": "string"
                 },
                 "minimum": {
@@ -541,6 +807,11 @@
       "polyester.rest.AutoWithdrawService_SetAutoWithdrawRule.Request": {
         "additionalProperties": false,
         "properties": {
+          "conversionTwapDurationMs": {
+            "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string from '60000' to '3600000'; omit or '0' for 300000.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
           "destinations": {
             "description": "Destinations, one per asset, 1 to 32.",
             "items": {
@@ -595,6 +866,13 @@
             "description": "Least USD value one payout pays, as a decimal string in whole USD, for example '25'; omit or '0' for no USD minimum.",
             "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
+          },
+          "payoutAssetId": {
+            "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset. Creating or resuming a rule with a payout asset also needs the permission to swap on the account; on a broker vault that is the permission to manage its payouts (the Owner and Finance roles). Pausing it does not, and a run whose author lost it leaves the assets in kind (policy_denied).",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "schedule": {
             "additionalProperties": false,
@@ -666,6 +944,11 @@
             "additionalProperties": false,
             "description": "The created version.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -761,6 +1044,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -830,11 +1120,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -876,6 +1168,11 @@
             "additionalProperties": false,
             "description": "The created version, or the latest version unchanged when the rule was already in the requested state.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -971,6 +1268,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -1040,11 +1344,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -3312,7 +3618,7 @@
                   "type": "string"
                 },
                 "reserveFeeRatePercent": {
-                  "description": "Fee rate a new order on this market reserves its fee at when the fee is paid in the quote asset, encoded as a non-negative base-10 percentage string without a percent sign, between 0 and 100 inclusive. It is the highest maker or taker rate of every VIP tier under the fee schedule in force on this market, so it is at least the effective rates and discounts never lower it. A buy limit order that pays its fee in the quote asset reserves N + F, computed in units of 10^-18 of the quote asset whatever the quote asset's own decimals: N is its price times its quantity rounded up to 10^-18, and F is N times this rate rounded up to 10^-18. It has sufficient quote balance when N + F is at most the available quote balance, compared in the same 10^-18 units; other order validation and market limits still apply. A post-only limit order reserves at post_only_reserve_fee_rate_percent instead, and a buy sized by a quote amount reserves at the lower of this rate and taker_fee_rate_percent. Fills charge the effective rate, and the rest of the reserve is released as the order fills or ends.",
+                  "description": "Fee rate a new order on this market reserves its fee at when the fee is paid in the quote asset, encoded as a non-negative base-10 percentage string without a percent sign, between 0 and 100 inclusive. It is the highest maker or taker rate of every VIP tier under the fee schedule in force on this market, so it is at least the effective rates and discounts never lower it. A buy limit order that pays its fee in the quote asset reserves N + F, computed in units of 10^-18 of the quote asset whatever the quote asset's own decimals: N is its price times its quantity rounded up to 10^-18, and F is N times this rate rounded up to 10^-18. It has sufficient quote balance when N + F is at most the available quote balance, compared in the same 10^-18 units; other order validation and market limits still apply. A post-only limit order reserves at post_only_reserve_fee_rate_percent instead. An order that can only take, a market order or an IOC or FOK limit order such as a buy sized by a quote amount, fixes its fee cap when it is accepted: the lower of this rate and taker_fee_rate_percent in force then. A fixed-quantity buy among them that pays its fee in the quote asset reserves its fee at that cap; a buy sized by a quote amount holds its whole budget, which a lower cap lets buy more. A standalone stop-loss, take-profit or trailing stop whose order can only take fixes the cap when the stop is created, and each slice of a TWAP whose slices can only take when that slice is placed. Take-profit and stop-loss orders attached to an order or paired in an OCO, and orders that can rest, are capped at this rate, a post-only one at post_only_reserve_fee_rate_percent. Rates read before an order is sent are an estimate: a VIP tier or fee policy change before the order is accepted changes them. Each fill is charged the rate of the VIP tier and fee policy current when the fill is settled, never above the order's cap: in the quote asset on the fill's notional, or for a buy paying its fee in the base asset, in base on the quantity it receives. The cap is an upper bound on every fill, not a fixed rate: a VIP tier change after the order is accepted can move a later fill's rate up or down within it, but never above it. The rest of the reserve is released as the order fills or ends.",
                   "type": "string"
                 },
                 "symbol": {
@@ -3713,14 +4019,16 @@
       "polyester.rest.InternalTransferService_GetInternalTransferBatch.Request": {
         "additionalProperties": false,
         "properties": {
+          "idempotencyKey": {
+            "description": "Idempotency key the caller sent to BatchCreateInternalTransfers, scoped to the authenticated caller as that request scoped it: the session's account, or the API key. Reads the batch's stored outcome when its answer was lost.",
+            "type": "string"
+          },
           "requestId": {
             "description": "Batch request ID returned by BatchCreateInternalTransfers.",
             "type": "string"
           }
         },
-        "required": [
-          "requestId"
-        ],
+        "required": [],
         "type": "object"
       },
       "polyester.rest.InternalTransferService_GetInternalTransferBatch.Response": {
@@ -5631,12 +5939,12 @@
                   "type": "string"
                 },
                 "change24hBps": {
-                  "description": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%. Measured from the 24h open to the last price, at minute granularity: the 24h open is the price at the start of the minute that contains the time 24h ago or, for a market that first traded later, its first trade. 0 when the market has no trade yet (its last trade timestamp is 0 too) and until its first minute of trading has ended.",
+                  "description": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%. Measured from the 24h open to the last price, at minute granularity: the 24h open is the price at the start of the minute that contains the time 24h ago or, for a market that first traded later, its first trade. 0 while the 24h open is unavailable (open_24h_ticks is 0 then): the market has no trade yet (its last trade timestamp is 0 too), its first trade is a few seconds old, or its trade history is temporarily unavailable.",
                   "format": "int32",
                   "type": "integer"
                 },
                 "high24h": {
-                  "description": "Highest traded price in the rolling 24h window, as a decimal string in quote asset units.",
+                  "description": "Highest price in the rolling 24h window, counting its open and every trade, as a decimal string in quote asset units.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -5661,7 +5969,17 @@
                   "type": "string"
                 },
                 "low24h": {
-                  "description": "Lowest traded price in the rolling 24h window, as a decimal string in quote asset units.",
+                  "description": "Lowest price in the rolling 24h window, counting its open and every trade, as a decimal string in quote asset units.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "open24h": {
+                  "description": "The rolling 24h open that change24hBps is measured from, as a decimal string in quote asset units. Zero while the open is unavailable, including when history is temporarily unavailable: the market has no trade yet, its first trade is a few seconds old, or its trade history cannot be read for a while.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                "openUtcDay": {
+                  "description": "Price at the start of the current UTC day (00:00 UTC), as a decimal string in quote asset units. Zero while the open is unavailable, including when history is temporarily unavailable: the market has no trade yet, a new day's first price is still being recorded (a few seconds after 00:00 UTC), or its trade history cannot be read for a while.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
@@ -5824,8 +6142,112 @@
                   },
                   "type": "array"
                 },
+                "stats1h": {
+                  "additionalProperties": false,
+                  "description": "Rolling 1h stats, over the same minute-granular window as the 24h stats. Absent while the window's open is unavailable, including when history is temporarily unavailable: the market has no trade yet, its first trade is a few seconds old, or the window's trade history cannot be read for a while. Later fields may add volumes per window.",
+                  "properties": {
+                    "changeBps": {
+                      "description": "Change from the open to the last price in basis points (bp), truncated toward zero. Example: +123 = +1.23%.",
+                      "format": "int32",
+                      "type": "integer"
+                    },
+                    "high": {
+                      "description": "Highest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "low": {
+                      "description": "Lowest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "open": {
+                      "description": "Price at the start of the window as a decimal string in quote asset units: the last trade price before the window's first minute or, for a market that first traded later, its first trade.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "changeBps",
+                    "high",
+                    "low",
+                    "open"
+                  ],
+                  "type": "object"
+                },
+                "stats4h": {
+                  "additionalProperties": false,
+                  "description": "Rolling 4h stats. Absent under the same conditions as stats_1h.",
+                  "properties": {
+                    "changeBps": {
+                      "description": "Change from the open to the last price in basis points (bp), truncated toward zero. Example: +123 = +1.23%.",
+                      "format": "int32",
+                      "type": "integer"
+                    },
+                    "high": {
+                      "description": "Highest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "low": {
+                      "description": "Lowest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "open": {
+                      "description": "Price at the start of the window as a decimal string in quote asset units: the last trade price before the window's first minute or, for a market that first traded later, its first trade.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "changeBps",
+                    "high",
+                    "low",
+                    "open"
+                  ],
+                  "type": "object"
+                },
+                "stats7d": {
+                  "additionalProperties": false,
+                  "description": "Rolling 7-day stats. Absent under the same conditions as stats_1h.",
+                  "properties": {
+                    "changeBps": {
+                      "description": "Change from the open to the last price in basis points (bp), truncated toward zero. Example: +123 = +1.23%.",
+                      "format": "int32",
+                      "type": "integer"
+                    },
+                    "high": {
+                      "description": "Highest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "low": {
+                      "description": "Lowest price in the window, counting the open and every trade, as a decimal string in quote asset units.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "open": {
+                      "description": "Price at the start of the window as a decimal string in quote asset units: the last trade price before the window's first minute or, for a market that first traded later, its first trade.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "changeBps",
+                    "high",
+                    "low",
+                    "open"
+                  ],
+                  "type": "object"
+                },
                 "symbol": {
                   "description": "Trading pair symbol, e.g. BTC-USDT.",
+                  "type": "string"
+                },
+                "tradeCount24h": {
+                  "description": "Number of trades executed in the rolling 24h window, as an unsigned 64-bit decimal string.",
+                  "pattern": "^[0-9]+$",
                   "type": "string"
                 },
                 "volume24hBase": {
@@ -5842,6 +6264,11 @@
                   "description": "Rolling 24h USD volume as a decimal string in USD with up to 6 decimal places. Applies the current quote/USD conversion to the rolling quote volume. When conversion is unavailable, USDT and USDC are valued at USD parity. Omitted for other quote assets when a current conversion is unavailable.",
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
+                },
+                "vwap24h": {
+                  "description": "Rolling 24h volume-weighted average trade price as a decimal string in quote asset units, rounded down: the exact quote notional divided by the 24h base volume. The notional is not rounded to the quote scale, so dividing volume24hQuote by volume24hBase can differ slightly. The base volume is exact when the base asset's marketDataVolumeScale equals its quantityScale; otherwise each second with trades rounds its base volume by at most half a volume unit. Omitted when the window has no base volume or volume24hBase is omitted.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                  "type": "string"
                 }
               },
               "required": [
@@ -5856,8 +6283,11 @@
                 "lastTradeTsNs",
                 "listedTsNs",
                 "low24h",
+                "open24h",
+                "openUtcDay",
                 "sparklines",
-                "symbol"
+                "symbol",
+                "tradeCount24h"
               ],
               "type": "object"
             },
@@ -8949,7 +9379,7 @@
                   "properties": {
                     "error": {
                       "additionalProperties": false,
-                      "description": "Structured rejection detail.",
+                      "description": "Structured rejection detail. Its violations name the item's fields as a CreateOrderRequest carrying the item would, under order (for example order.limit_gtc.price_ticks), not under items; the item is this result's position in the response. REST names them as a REST create carrying the item would (for example order.limitGtc.price).",
                       "properties": {
                         "code": {
                           "allOf": [
@@ -9379,7 +9809,7 @@
                 },
                 "error": {
                   "additionalProperties": false,
-                  "description": "Structured rejection details. Present for rate-limit guidance and other typed failures.",
+                  "description": "Structured rejection details. Present for rate-limit guidance and other typed failures. Its violations name this item's own fields, as the request item names them, without its index (for example new_attached_risk.stop_loss or order_id); the item is item_index. REST names them by the REST request item's field names (for example newAttachedRisk.stopLoss).",
                   "properties": {
                     "code": {
                       "allOf": [
@@ -19297,7 +19727,7 @@
             "type": "string"
           },
           "referralCode": {
-            "description": "Optional referral partner code from a referral link, case-insensitive, at most 64 bytes; empty for none. Only a broker with a referral program may send one (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates. It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's current code (REFERRAL_CODE_UNKNOWN), and the partner must be active (REFERRAL_PARTNER_INACTIVE). The program's rates for the route are applied (quote.referral) and fixed at creation. It is part of the request: the same idempotency_key with another code, or with and without one, is IDEMPOTENCY_CONFLICT.",
+            "description": "Optional referral partner code from a referral link, case-insensitive, at most 64 bytes; empty for none. Only a broker with a referral program may send one (REFERRAL_NOT_SUPPORTED otherwise), never with affiliates. It must be a valid code (REFERRAL_CODE_INVALID) that is a partner's code (REFERRAL_CODE_UNKNOWN), and the partner must be active (REFERRAL_PARTNER_INACTIVE). A code the partner has since replaced with SetReferralCode keeps crediting that partner. The program's current rates for the route are applied (quote.referral) and fixed at creation. It is part of the request: the same idempotency_key with another code, or with and without one, is IDEMPOTENCY_CONFLICT.",
             "type": "string"
           },
           "refundAddress": {
@@ -24981,7 +25411,7 @@
             "description": "Trigger to admit. Required.",
             "properties": {
               "clientTriggerId": {
-                "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair and trigger type. While the trigger is active and for 60 seconds after it reaches a terminal status, retrying the create with the identical intent returns the same trigger, and a different intent with the same ID returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is free: a create that uses it is a new intent and creates a new trigger. To learn the outcome of an earlier create after that window, read the triggers with ListTriggers, which return each trigger's client_trigger_id, instead of retrying the create. After a create fails with INTERNAL_ERROR, the ID may already be used: a retry then returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID. 1 to 36 bytes in UTF-8 (up to 36 ASCII characters); empty or longer IDs are rejected with INVALID_ARGUMENT and CLIENT_TRIGGER_ID_INVALID.",
+                "description": "Client-provided trigger ID for idempotency, unique per sub-account, pair and trigger type. While the trigger is active and for 60 seconds after it reaches a terminal status, retrying the create with the identical intent returns the same trigger, and a different intent with the same ID returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID. After those 60 seconds the ID is free: a create that uses it is a new intent and creates a new trigger. To learn the outcome of an earlier create after that window, find it with the ListTriggers client_trigger_id filter instead of retrying the create. Use a new client trigger ID for every create, so a lookup never finds an older trigger that used the same ID. After a create fails with INTERNAL_ERROR, the ID may already be used: a retry then returns CONFLICT_DUPLICATE_CLIENT_TRIGGER_ID and needs a new client trigger ID. 1 to 36 bytes in UTF-8 (up to 36 ASCII characters); empty or longer IDs are rejected with INVALID_ARGUMENT and CLIENT_TRIGGER_ID_INVALID.",
                 "type": "string"
               },
               "feeAsset": {
@@ -28298,11 +28728,13 @@
           "COMPLETED",
           "PARTIALLY_FAILED",
           "FAILED",
-          "SKIPPED"
+          "SKIPPED",
+          "CONVERTING"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "COMPLETED": "Every payout completed or was skipped, and at least one paid.",
+          "CONVERTING": "The run's conversions into the payout asset are executing; payouts start once every conversion is final and settled.",
           "FAILED": "Every attempted payout failed. Each failed step says where its funds are (FAILED).",
           "PARTIALLY_FAILED": "Some payouts failed. Each failed step says where its funds are (FAILED).",
           "PAYING": "The run's payouts are in progress.",
@@ -28377,13 +28809,15 @@
           "UNSUPPORTED_CHAIN",
           "POLYESTER_SMART_ACCOUNT",
           "TOKEN_CONTRACT",
-          "DENYLISTED_ADDRESS"
+          "DENYLISTED_ADDRESS",
+          "SWAP_DEPOSIT_ADDRESS"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "DENYLISTED_ADDRESS": "The destination is blocked by Polyester's user-safety denylist.",
           "INVALID_ADDRESS": "The address is not valid for the selected destination chain.",
           "POLYESTER_SMART_ACCOUNT": "The destination is a Polyester smart account and cannot be used for an external-chain withdraw.",
+          "SWAP_DEPOSIT_ADDRESS": "The destination is a deposit address issued for a QuickSwap. A withdrawal could reach it after its swap stopped accepting deposits, and those funds could then be neither swapped nor returned, so it is never a withdrawal destination. A Polyester account's own deposit address is not affected.",
           "TOKEN_CONTRACT": "The destination is a token contract and cannot receive withdrawals.",
           "UNSUPPORTED_CHAIN": "The selected destination chain is not supported for withdraws.",
           "VALID": "The destination is valid and may be used for a withdraw."
@@ -29236,7 +29670,7 @@
           "CLIENT_LIST_ID_INVALID": "The OCO's client list ID is empty, longer than 36 characters, or has a character other than a letter, digit, period, underscore, colon, slash or hyphen. Answered by CreateOco and by the ListTriggers client_list_id filter. Nothing changed.",
           "CLIENT_ORDER_IDS_EXHAUSTED": "The account reserves its maximum number of client order IDs, including those of recently ended orders. Retry once they expire, or send the request without a client order ID.",
           "CLIENT_ORDER_ID_CAPACITY_REACHED": "The venue's capacity for reserved client order IDs is exhausted right now, so the trigger's child order could not reserve one. Retry later.",
-          "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID is empty, longer than 36 bytes or otherwise not valid.",
+          "CLIENT_TRIGGER_ID_INVALID": "The client trigger ID is empty, longer than 36 bytes or otherwise not valid. Answered by CreateTrigger and by the ListTriggers client_trigger_id filter.",
           "CONDITION_FLAGS_INVALID": "The trigger's condition flags were not valid.",
           "CONDITION_PARAMETER_SET": "The trigger set a condition parameter its condition does not take.",
           "CONFLICT_DUPLICATE_CLIENT_ORDER_ID": "Client order ID is already in use on this account, by an open order or by an order that ended recently; an ended order keeps its client order ID reserved for at least 60 seconds. Reuse returns this code even with the same payload. Use GetOrder to reconcile, then retry with a new client order ID.",
@@ -29394,13 +29828,13 @@
           "TRIGGER_PATCH_NOT_ALLOWED": "A trigger operation other than modify carried field changes.",
           "TRIGGER_PATCH_PRICE_MODE_INVALID": "The trigger modify's price mode is not a known mode.",
           "TRIGGER_PATCH_VALUE_UNMASKED": "The trigger modify carried a value for a field its change mask does not name.",
-          "TRIGGER_PRICE_INVALID": "Trigger-specific error codes (40-49 range). The trigger price is invalid: for example not positive, an attached take-profit or stop-loss at or past its limit parent's price (for a buy parent, a take-profit at or below it or a stop-loss at or above it), or a one-cancels-the-other take-profit that crosses its stop-loss.",
+          "TRIGGER_PRICE_INVALID": "Trigger-specific error codes (40-49 range). The trigger price is invalid: for example not positive, an attached take-profit or stop-loss at or past its limit parent's price (for a buy parent, a take-profit at or below it or a stop-loss at or above it), or a one-cancels-the-other take-profit that crosses its stop-loss. An attached leg past its parent's price is named by a field violation on its trigger price, as RiskPolicy describes.",
           "TRIGGER_PRICE_SOURCE_UNSUPPORTED": "Trigger price source not supported (e.g., INDEX_PRICE before it's available).",
           "TRIGGER_QTY_INVALID": "The trigger's child order quantity is not positive.",
           "TRIGGER_STATUS_INVALID": "Trigger status does not allow requested lifecycle operation.",
           "TRIGGER_SYMBOL_MISMATCH": "The request names a listed trading pair other than the trigger's own, so it was refused. Nothing changed; name the trigger's own pair, or omit the symbol. A pair that is not listed is UNKNOWN_SYMBOL.",
           "TRIGGER_TYPE_NOT_SUPPORTED": "The trigger type is valid but not supported on this venue yet.",
-          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The change would act on the trigger at once. The new trigger price of a stop-loss or take-profit, or the trigger price a new trailing distance gives an activated trailing stop, is already reached by the price the trigger watches (at or past it), so the trigger would fire at once and send its order; or the new activation price of a trailing stop not yet activated is already reached by that price, so it would activate at once. Nothing changed; the trigger keeps its previous settings. Returned by ModifyTrigger, and by an order modify that moves an attached take-profit, stop-loss or trailing stop of an order with a fill. Also returned when a market order is created or previewed with an attached take-profit or stop-loss on the last price that its own fill would trigger, at or past the best price the order takes (the best ask for a buy, the best bid for a sell); the order is not placed. A market order with an attached take-profit or stop-loss on the index price that the index has already reached is accepted, then rejected with this reason before it trades, and so is one whose last-price leg the market reaches before the order reaches the book; nothing is placed. Choose a price the market has not reached.",
+          "TRIGGER_WOULD_TRIGGER_IMMEDIATELY": "The change would act on the trigger at once. The new trigger price of a stop-loss or take-profit, or the trigger price a new trailing distance gives an activated trailing stop, is already reached by the price the trigger watches (at or past it), so the trigger would fire at once and send its order; or the new activation price of a trailing stop not yet activated is already reached by that price, so it would activate at once. Nothing changed; the trigger keeps its previous settings. Returned by ModifyTrigger, and by an order modify that moves an attached take-profit, stop-loss or trailing stop of an order with a fill. Also returned when a market order is created or previewed with an attached take-profit or stop-loss on the last price that its own fill would trigger, at or past the best price the order takes (the best ask for a buy, the best bid for a sell); the order is not placed, and a field violation on the leg's trigger price names it, as RiskPolicy describes. A market order with an attached take-profit or stop-loss on the index price that the index has already reached is accepted, then rejected with this reason before it trades, and so is one whose last-price leg the market reaches before the order reaches the book; nothing is placed. Choose a price the market has not reached.",
           "TWAP_CAPACITY_REACHED": "The market had no room for another TWAP order.",
           "TWAP_DURATION_INVALID": "The TWAP duration is shorter than 1 second or longer than about 292 years, the longest the venue's clock represents.",
           "TWAP_INTERVAL_INVALID": "The TWAP slice interval is shorter than 100 milliseconds or longer than its duration.",
@@ -30258,6 +30692,61 @@
           "NOT_SENT": "Final: no transaction was or will be made for this withdrawal, because its amount was below the withdrawal minimum of its asset and network (REFUND_BELOW_MINIMUM); unsent_amount is that amount.",
           "QUEUED": "Approved and waiting to be submitted.",
           "SUBMITTED": "Submitted to the recipient's network; not yet final."
+        }
+      },
+      "polyester.rest.enum.swap.v1.Side": {
+        "enum": [
+          "BUY",
+          "SELL"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "BUY": "Buy the market's base asset with its quote asset.",
+          "SELL": "Sell the market's base asset for its quote asset."
+        }
+      },
+      "polyester.rest.enum.swap.v1.SwapReason": {
+        "enum": [
+          "INSUFFICIENT_BALANCE",
+          "PRICE_PROTECTION",
+          "MARKET_UNAVAILABLE",
+          "ORDER_SIZE_OUT_OF_RANGE",
+          "RATE_LIMITED",
+          "ORDER_REJECTED",
+          "EXPIRED",
+          "MINIMUM_NOT_MET",
+          "MAX_ORDER_QUANTITY",
+          "INTERMEDIATE_BELOW_MINIMUM"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "EXPIRED": "The execution window ended before the order could be placed, or a TWAP's deadline ended it with slots left untraded.",
+          "INSUFFICIENT_BALANCE": "The Trading balance did not cover the amount when the order was placed.",
+          "INTERMEDIATE_BELOW_MINIMUM": "On a two-leg route, intermediate asset below the second market's minimum order, with later slices' intermediate added where a TWAP had slices left, stays on the account, unconverted (intermediate_remainder_e18).",
+          "MARKET_UNAVAILABLE": "The market was closed, halted, restricted or without liquidity.",
+          "MAX_ORDER_QUANTITY": "The order bought the market's maximum order quantity and stopped there; the rest of the amount stays on the account, unspent. The market's depth or maximum changed after the quote, which never quotes past it.",
+          "MINIMUM_NOT_MET": "A fill netted less than the accepted minimum rate. The Swap failed closed: the amounts show exactly what was traded and received.",
+          "ORDER_REJECTED": "The order was refused, for example by the sub-account's trading policy.",
+          "ORDER_SIZE_OUT_OF_RANGE": "The order was outside the market's size limits.",
+          "PRICE_PROTECTION": "The order books could not fill the rest at a price that meets min_amount_out.",
+          "RATE_LIMITED": "The account's order rate limit was reached."
+        }
+      },
+      "polyester.rest.enum.swap.v1.SwapStatus": {
+        "enum": [
+          "EXECUTING",
+          "COMPLETED",
+          "PARTIALLY_COMPLETED",
+          "FAILED",
+          "RECONCILING"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "COMPLETED": "The whole amount was traded and settled (a remainder smaller than one order step stays on the account, unspent).",
+          "EXECUTING": "The Swap is accepted and its orders are being placed, filled or settled.",
+          "FAILED": "Nothing was traded and the whole amount stays on the account, or, with reason MINIMUM_NOT_MET, a fill netted less than the accepted minimum rate; reason says why, and the amounts show what was traded.",
+          "PARTIALLY_COMPLETED": "Part of the amount was traded and settled; the rest stays on the account, unspent. reason says why.",
+          "RECONCILING": "An order's outcome is being established. Balances already reflect any settled fill; the Swap stays here until the outcome is confirmed."
         }
       },
       "polyester.rest.enum.transfer.v1.DustAssetEligibility": {
@@ -38370,7 +38859,7 @@
     },
     "/v1/spot/markets/overview": {
       "get": {
-        "description": "List ticker-style market overview rows with optional sparklines. Supports symbol filtering, sorting, and pagination controls.",
+        "description": "List ticker-style market overview rows with optional sparklines. Supports symbol filtering, last price, 24h change and 24h USD volume range filters, sorting, and pagination controls.",
         "operationId": "MarketOverviewService_ListMarketOverview",
         "parameters": [
           {
@@ -38397,6 +38886,72 @@
             }
           },
           {
+            "description": "Only markets whose signed change24hBps is at most this, inclusive; 1000 is +10%. Not below minChange24hBps. Omit for no upper bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "maxChange24hBps",
+            "required": false,
+            "schema": {
+              "example": 1000,
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only markets whose lastPrice is at most this, inclusive, as a decimal string in quote asset units with at most 9 decimal places; not below minLastPrice. Omit for no upper bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "maxLastPrice",
+            "required": false,
+            "schema": {
+              "example": "100000",
+              "pattern": "^[0-9]+(\\.[0-9]{1,9})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only markets whose volume24hUsd is at most this, inclusive, as a decimal string in USD with at most 6 decimal places; not below minVolume24hUsd. Omit for no upper bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "maxVolume24hUsd",
+            "required": false,
+            "schema": {
+              "example": "50000000.5",
+              "pattern": "^[0-9]+(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only markets whose signed change24hBps is at least this, inclusive; -500 is -5%. A market whose 24h change has no open (open24h is zero) never matches a change bound. Sorting by CHANGE_24H_BPS still uses the absolute change. Omit for no lower bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "minChange24hBps",
+            "required": false,
+            "schema": {
+              "example": -500,
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only markets whose lastPrice is at least this, inclusive, as a decimal string in quote asset units with at most 9 decimal places. A market with no trade yet never matches a price bound. Omit for no lower bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "minLastPrice",
+            "required": false,
+            "schema": {
+              "example": "0.5",
+              "pattern": "^[0-9]+(\\.[0-9]{1,9})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only markets whose volume24hUsd is at least this, inclusive, as a decimal string in USD with at most 6 decimal places. A market whose volume24hUsd is omitted never matches a volume bound. Omit for no lower bound; an empty, malformed or repeated value is refused with BAD_REQUEST.",
+            "in": "query",
+            "name": "minVolume24hUsd",
+            "required": false,
+            "schema": {
+              "example": "1000000",
+              "pattern": "^[0-9]+(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Sort key.",
             "in": "query",
             "name": "orderBy",
@@ -38410,7 +38965,7 @@
             }
           },
           {
-            "description": "Opaque cursor from the previous response.",
+            "description": "Opaque cursor from the previous response, bound to the symbol and range filters, the sort key and the sort direction: reuse it with the same filters. A cursor reused with other filters or another sort is refused with INVALID_ARGUMENT; request the first page again. Each page is cut from current values, so a market whose sort value or range membership changes between pages can appear twice or not at all across them. For a consistent list, request a single page with the maximum limit.",
             "in": "query",
             "name": "pageToken",
             "required": false,
@@ -39371,15 +39926,26 @@
     },
     "/v1/trading/internal-transfers/batch": {
       "get": {
-        "description": "Read a batch's current outcome and the state of every leg by the requestId that Batch Create Internal Transfers returned. The caller must be allowed to read the transfers of every source account of the batch.",
+        "description": "Read a batch's current outcome and the state of every leg by the requestId that Batch Create Internal Transfers returned, or by the idempotencyKey the caller sent it. Send exactly one of the two. The caller must be allowed to read the transfers of every source account of the batch.",
         "operationId": "InternalTransferService_GetInternalTransferBatch",
         "parameters": [
           {
-            "description": "Batch request ID returned by Batch Create Internal Transfers.",
+            "description": "Idempotency key the caller sent to Batch Create Internal Transfers, scoped to the caller. Send it or requestId.",
+            "example": null,
+            "in": "query",
+            "name": "idempotencyKey",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Batch request ID returned by Batch Create Internal Transfers. Send it or idempotencyKey.",
             "example": "92640625967207661803151833376978068587",
             "in": "query",
             "name": "requestId",
-            "required": true,
+            "required": false,
             "schema": {
               "pattern": "^[1-9][0-9]*$",
               "type": "string"
@@ -39592,6 +40158,15 @@
             "description": "OCO client ID: lists both legs of the OCO created with it. 1 to 36 ASCII characters using letters, digits, period, underscore, colon, slash, or hyphen.",
             "in": "query",
             "name": "clientListId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Client trigger ID: lists the triggers created with it, running or ended, newest first. 1 to 36 bytes. Add symbol and triggerType to keep one ID's scope, since an ID can be used again 60 seconds after its trigger ends.",
+            "in": "query",
+            "name": "clientTriggerId",
             "required": false,
             "schema": {
               "type": "string"

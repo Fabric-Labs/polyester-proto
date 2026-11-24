@@ -1,6 +1,40 @@
 {
   "types": [
     {
+      "name": "marketoverview.v1.BpsRange",
+      "kind": "message",
+      "doc": "BpsRange bounds a signed change in basis points (bp). Both bounds are\n inclusive; an omitted bound leaves that side unbounded.",
+      "message": {
+        "cel": [
+          {
+            "id": "bps_range.ordered",
+            "message": "min_bps must not exceed max_bps",
+            "expression": "!has(this.min_bps) || !has(this.max_bps) || this.min_bps \u003c= this.max_bps"
+          }
+        ],
+        "fields": [
+          {
+            "name": "min_bps",
+            "jsonName": "minBps",
+            "number": 1,
+            "doc": "Lowest matching change, inclusive, in basis points; may be negative.\n Example: -500 = -5%. Omit for no lower bound.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "max_bps",
+            "jsonName": "maxBps",
+            "number": 2,
+            "doc": "Highest matching change, inclusive, in basis points; may be negative.\n Example: 1000 = +10%. Omit for no upper bound.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
+          }
+        ]
+      }
+    },
+    {
       "name": "marketoverview.v1.CurrencyMetadata",
       "kind": "message",
       "doc": "CurrencyMetadata supplies stable defaults for display conversion. Clients may\n localize names, symbols, and number formatting for the user's locale.",
@@ -311,6 +345,7 @@
     {
       "name": "marketoverview.v1.ListMarketOverviewRequest",
       "kind": "message",
+      "doc": "ListMarketOverviewRequest lists market overview rows. The symbol_id\n filter and the range filters combine: a market is returned only when it\n matches every filter given. Filters apply before sorting and paging.\n A range whose minimum exceeds its maximum is refused as invalid, with a\n violation on the range field (last_price, change_24h or volume_24h); a\n negative price or volume bound is refused with a violation on the bound\n itself, such as last_price.max_ticks.",
       "message": {
         "fields": [
           {
@@ -347,7 +382,7 @@
             "name": "page_token",
             "jsonName": "pageToken",
             "number": 3,
-            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to symbol IDs, sort key, and sort direction. Sparkline options\n affect only response enrichment and may change between pages.",
+            "doc": "Opaque keyset cursor from a previous response. The cursor is exclusive and\n bound to symbol IDs, the range filters, sort key, and sort direction:\n reuse it with the same filters. A cursor reused with other filters or\n another sort is refused as invalid; request the first page again.\n Sparkline options affect only response enrichment and may change between\n pages. Each page is cut from current values, so a market whose sort value\n or range membership changes between pages can appear twice or not at all\n across them. For a consistent list, request a single page with the\n maximum limit.",
             "protoScalar": "string",
             "jsonType": "string",
             "validate": {
@@ -395,6 +430,27 @@
             "doc": "Which sparklines to include. If empty and include_sparklines is true,\n server defaults to 24h.",
             "repeated": true,
             "protoRef": "marketoverview.v1.SparklineInterval"
+          },
+          {
+            "name": "last_price",
+            "jsonName": "lastPrice",
+            "number": 8,
+            "doc": "Only markets whose last_price_ticks is within this range. When a bound is\n set, a market with no trade yet never matches. Omit for no price filter.",
+            "protoRef": "marketoverview.v1.PriceTicksRange"
+          },
+          {
+            "name": "change_24h",
+            "jsonName": "change24h",
+            "number": 9,
+            "doc": "Only markets whose signed change_24h_bps is within this range; sorting by\n ORDER_BY_CHANGE_24H_BPS still uses the absolute change. When a bound is\n set, a market whose 24h change has no open (open_24h_ticks is 0) never\n matches. Omit for no change filter.",
+            "protoRef": "marketoverview.v1.BpsRange"
+          },
+          {
+            "name": "volume_24h",
+            "jsonName": "volume24h",
+            "number": 10,
+            "doc": "Only markets whose volume_24h_usd_scaled is within this range. When a\n bound is set, a market whose USD volume is omitted never matches. Omit\n for no volume filter.",
+            "protoRef": "marketoverview.v1.UsdVolumeRange"
           }
         ]
       }
@@ -492,7 +548,7 @@
             "name": "change_24h_bps",
             "jsonName": "change24hBps",
             "number": 5,
-            "doc": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%.\n Measured from the 24h open to the last price, at minute granularity: the\n 24h open is the price at the start of the minute that contains the time\n 24h ago or, for a market that first traded later, its first trade. 0 when\n the market has no trade yet (its last trade timestamp is 0 too) and until\n its first minute of trading has ended.",
+            "doc": "Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%.\n Measured from the 24h open to the last price, at minute granularity: the\n 24h open is the price at the start of the minute that contains the time\n 24h ago or, for a market that first traded later, its first trade. 0 while\n the 24h open is unavailable (open_24h_ticks is 0 then): the market has no\n trade yet (its last trade timestamp is 0 too), its first trade is a few\n seconds old, or its trade history is temporarily unavailable.",
             "protoScalar": "int32",
             "jsonType": "integer",
             "format": "int32"
@@ -501,7 +557,7 @@
             "name": "high_24h_ticks",
             "jsonName": "high24hTicks",
             "number": 6,
-            "doc": "Rolling 24h stats.\n Highest traded price in the 24h window, in quote units scaled by 1e9.",
+            "doc": "Rolling 24h stats. The 24h window starts at the start of the minute that\n contains the time 24h ago and ends now; its prices, volumes and trade\n count cover the same window.\n Highest price in the 24h window, counting its open and every trade, in\n quote units scaled by 1e9.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
@@ -510,10 +566,67 @@
             "name": "low_24h_ticks",
             "jsonName": "low24hTicks",
             "number": 7,
-            "doc": "Lowest traded price in the 24h window, in quote units scaled by 1e9.",
+            "doc": "Lowest price in the 24h window, counting its open and every trade, in\n quote units scaled by 1e9.",
             "protoScalar": "int64",
             "jsonType": "string",
             "format": "int64"
+          },
+          {
+            "name": "open_24h_ticks",
+            "jsonName": "open24hTicks",
+            "number": 22,
+            "doc": "The 24h open that change_24h_bps is measured from, in quote units scaled\n by 1e9. 0 while the open is unavailable, including when history is\n temporarily unavailable: the market has no trade yet, its first trade is a\n few seconds old, or its trade history cannot be read for a while.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "trade_count_24h",
+            "jsonName": "tradeCount24h",
+            "number": 24,
+            "doc": "Number of trades executed in the 24h window.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "vwap_24h_ticks",
+            "jsonName": "vwap24hTicks",
+            "number": 25,
+            "doc": "24h volume-weighted average trade price in quote units scaled by 1e9,\n rounded down: the exact 24h quote notional divided by the 24h base volume.\n The notional is not rounded to the quote scale, so dividing the displayed\n volume_24h_quote_scaled by volume_24h_base_scaled can differ slightly;\n clients cannot reproduce this value from the displayed volumes. The base\n volume is exact when the base asset's market_data_volume_scale equals its\n quantity_scale in GetSpotConfig. Otherwise each second with trades rounds\n its base volume to the volume scale, by at most half of one volume unit,\n so the base volume can be off by that much per second with trades and the\n price error shrinks as the total base volume grows. Omitted when the\n window has no base volume or the 24h base volume is omitted.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "open_utc_day_ticks",
+            "jsonName": "openUtcDayTicks",
+            "number": 23,
+            "doc": "Price at the start of the current UTC day (00:00 UTC), in quote units\n scaled by 1e9: the last trade price before the day's first minute or, for\n a market that first traded later that day, its first trade. Change since\n the day open is last_price_ticks against this price. 0 while the open is\n unavailable, including when history is temporarily unavailable: the\n market has no trade yet, a new day's first price is still being recorded\n (a few seconds after 00:00 UTC), or its trade history cannot be read for a\n while.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "stats_1h",
+            "jsonName": "stats1h",
+            "number": 19,
+            "doc": "Rolling 1h stats, over the same minute-granular window as the 24h stats.\n Absent while the window's open is unavailable, including when history is\n temporarily unavailable: the market has no trade yet, its first trade is\n a few seconds old, or the window's trade history cannot be read for a\n while. Later fields may add volumes per window.",
+            "protoRef": "marketoverview.v1.RollingWindowStats"
+          },
+          {
+            "name": "stats_4h",
+            "jsonName": "stats4h",
+            "number": 20,
+            "doc": "Rolling 4h stats. Absent under the same conditions as stats_1h.",
+            "protoRef": "marketoverview.v1.RollingWindowStats"
+          },
+          {
+            "name": "stats_7d",
+            "jsonName": "stats7d",
+            "number": 21,
+            "doc": "Rolling 7-day stats. Absent under the same conditions as stats_1h.",
+            "protoRef": "marketoverview.v1.RollingWindowStats"
           },
           {
             "name": "volume_24h_base_scaled",
@@ -636,6 +749,95 @@
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketoverview.v1.PriceTicksRange",
+      "kind": "message",
+      "doc": "PriceTicksRange bounds a price in quote units scaled by 1e9. Both bounds\n are inclusive; an omitted bound leaves that side unbounded.",
+      "message": {
+        "cel": [
+          {
+            "id": "price_ticks_range.ordered",
+            "message": "min_ticks must not exceed max_ticks",
+            "expression": "!has(this.min_ticks) || !has(this.max_ticks) || this.min_ticks \u003c= this.max_ticks"
+          }
+        ],
+        "fields": [
+          {
+            "name": "min_ticks",
+            "jsonName": "minTicks",
+            "number": 1,
+            "doc": "Lowest matching price, inclusive, in quote units scaled by 1e9; at least\n 0. Omit for no lower bound.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
+          },
+          {
+            "name": "max_ticks",
+            "jsonName": "maxTicks",
+            "number": 2,
+            "doc": "Highest matching price, inclusive, in quote units scaled by 1e9; at least\n 0. Omit for no upper bound.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketoverview.v1.RollingWindowStats",
+      "kind": "message",
+      "doc": "RollingWindowStats summarizes executed trade prices over one rolling window\n that ends now. Like the rolling 24h stats, a window has minute granularity:\n it starts at the start of the minute that contains the time one window\n length ago. All prices are in quote units scaled by 1e9 and come from\n executed trades, never from the index price.",
+      "message": {
+        "fields": [
+          {
+            "name": "open_ticks",
+            "jsonName": "openTicks",
+            "number": 1,
+            "doc": "Price at the start of the window: the last trade price before the\n window's first minute or, for a market that first traded later, its\n first trade.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "high_ticks",
+            "jsonName": "highTicks",
+            "number": 2,
+            "doc": "Highest price in the window, counting the open and every trade.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "low_ticks",
+            "jsonName": "lowTicks",
+            "number": 3,
+            "doc": "Lowest price in the window, counting the open and every trade.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "change_bps",
+            "jsonName": "changeBps",
+            "number": 4,
+            "doc": "Change from the open to the last price in basis points (bp), truncated\n toward zero. Example: +123 = +1.23%.",
+            "protoScalar": "int32",
+            "jsonType": "integer",
+            "format": "int32"
           }
         ]
       }
@@ -785,6 +987,50 @@
             "doc": "True once this stablecoin's source observation is at least five seconds old.",
             "protoScalar": "bool",
             "jsonType": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marketoverview.v1.UsdVolumeRange",
+      "kind": "message",
+      "doc": "UsdVolumeRange bounds a USD volume scaled by 1e6 (one unit is 0.000001\n USD). Both bounds are inclusive; an omitted bound leaves that side\n unbounded.",
+      "message": {
+        "cel": [
+          {
+            "id": "usd_volume_range.ordered",
+            "message": "min_usd_scaled must not exceed max_usd_scaled",
+            "expression": "!has(this.min_usd_scaled) || !has(this.max_usd_scaled) || this.min_usd_scaled \u003c= this.max_usd_scaled"
+          }
+        ],
+        "fields": [
+          {
+            "name": "min_usd_scaled",
+            "jsonName": "minUsdScaled",
+            "number": 1,
+            "doc": "Lowest matching USD volume, inclusive, scaled by 1e6; at least 0. Omit\n for no lower bound.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
+          },
+          {
+            "name": "max_usd_scaled",
+            "jsonName": "maxUsdScaled",
+            "number": 2,
+            "doc": "Highest matching USD volume, inclusive, scaled by 1e6; at least 0. Omit\n for no upper bound.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64",
+            "validate": {
+              "number": {
+                "gte": "0"
+              }
+            }
           }
         ]
       }

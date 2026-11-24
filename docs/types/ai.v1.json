@@ -2062,6 +2062,13 @@
             "number": 3,
             "doc": "The account the conversation's latest message selected, from any client,\n as of this read: the same as Conversation.last_account, and current even\n when the conversation was listed earlier. Set on every page. A client that\n opens the conversation selects it before the next message.",
             "protoRef": "ai.v1.ConversationAccount"
+          },
+          {
+            "name": "subject",
+            "jsonName": "subject",
+            "number": 4,
+            "doc": "What the conversation is about: the same as Conversation.subject, fixed\n when the conversation started. Set on every page; omitted for a general\n conversation. A client that opens a conversation by its ID learns from it\n whether the conversation is about one of the caller's strategies.",
+            "protoRef": "ai.v1.Subject"
           }
         ]
       }
@@ -2446,6 +2453,76 @@
       }
     },
     {
+      "name": "ai.v1.OcoLegPreview",
+      "kind": "message",
+      "doc": "OcoLegPreview is one leg of an OCO: once the watched price reaches its\n trigger price, it places its order for the OCO's whole remaining quantity.",
+      "message": {
+        "fields": [
+          {
+            "name": "trigger_price",
+            "jsonName": "triggerPrice",
+            "number": 1,
+            "doc": "The price that fires the leg, an exact decimal string in the quote asset.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "trigger_price_source",
+            "jsonName": "triggerPriceSource",
+            "number": 2,
+            "doc": "The price it watches: LAST_PRICE or INDEX_PRICE.",
+            "protoRef": "orders.v1.TriggerPriceSource"
+          },
+          {
+            "name": "direction",
+            "jsonName": "direction",
+            "number": 3,
+            "doc": "Which way the watched price must move to reach trigger_price.",
+            "protoRef": "ai.v1.TriggerDirection"
+          },
+          {
+            "name": "limit_price",
+            "jsonName": "limitPrice",
+            "number": 4,
+            "doc": "The limit price of the good-till-canceled order it places, an exact\n decimal string in the quote asset. Omitted when it places a market order.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ai.v1.OcoPreview",
+      "kind": "message",
+      "doc": "OcoPreview is an OCO (one-cancels-the-other): a take-profit and a stop-loss\n that both trade the order's side for its whole quantity. A sell OCO sells\n base asset the account already holds: its take-profit fires when the price\n rises to its trigger price, its stop-loss when it falls to its own. A buy\n OCO buys the quantity of base asset with quote asset the account already\n holds, the other way round. Creating it reserves funds once, and both legs\n share them: a sell reserves the quantity of base asset, a buy the quote\n asset needed to buy the quantity, as the exchange computes it. Cancelling\n either leg cancels both.",
+      "message": {
+        "fields": [
+          {
+            "name": "take_profit",
+            "jsonName": "takeProfit",
+            "number": 1,
+            "doc": "The take-profit leg.",
+            "protoRef": "ai.v1.OcoLegPreview"
+          },
+          {
+            "name": "stop_loss",
+            "jsonName": "stopLoss",
+            "number": 2,
+            "doc": "The stop-loss leg.",
+            "protoRef": "ai.v1.OcoLegPreview"
+          },
+          {
+            "name": "reserved_asset",
+            "jsonName": "reservedAsset",
+            "number": 3,
+            "doc": "The asset creating the OCO reserves once for both legs: the base asset for\n a sell, the quote asset for a buy. OrderPreview.reserved_amount states the\n amount when it is set.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "ai.v1.OrderChange",
       "kind": "message",
       "doc": "OrderChange is one open limit order a modification changes, before and\n after.",
@@ -2583,7 +2660,9 @@
               "take_profit",
               "trailing_stop",
               "twap",
-              "ladder"
+              "ladder",
+              "oco",
+              "pegged_limit"
             ]
           }
         ],
@@ -2632,7 +2711,7 @@
             "name": "quantity",
             "jsonName": "quantity",
             "number": 6,
-            "doc": "Total quantity, an exact decimal string in the base asset. Omitted only\n for a buy sized by quote_amount.",
+            "doc": "Total quantity, an exact decimal string in the base asset. Omitted only\n for a buy sized by quote_amount and a sell sized by quote_proceeds.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -2640,7 +2719,15 @@
             "name": "quote_amount",
             "jsonName": "quoteAmount",
             "number": 7,
-            "doc": "A buy market order, or buy immediate-or-cancel limit order, sized by\n spend: the most quote asset it spends, an exact decimal string. Omitted\n when quantity is set.",
+            "doc": "A buy market order, or buy immediate-or-cancel limit order, sized by\n spend: the most quote asset it spends, an exact decimal string. Omitted\n when quantity or quote_proceeds is set.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "quote_proceeds",
+            "jsonName": "quoteProceeds",
+            "number": 20,
+            "doc": "A sell market order, or sell immediate-or-cancel limit order, sized by\n proceeds: it sells whole quantity steps until its proceeds before fees\n reach this amount of quote asset, an exact decimal string, and never\n receives more. The fee is charged in quote asset on those proceeds.\n Omitted when quantity or quote_amount is set.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -2648,7 +2735,7 @@
             "name": "estimated_value",
             "jsonName": "estimatedValue",
             "number": 8,
-            "doc": "Estimated order value in the quote asset, a decimal string rounded to at\n most 2 decimals. Valued at: quote_amount when set; a market order or TWAP\n of market slices at reference_price; a limit order, ladder level or limit\n slice at its price; a stop at its limit price, else its trigger price; a\n trailing stop at its limit price, else its activation price, else the last\n price. Omitted when it cannot be estimated.",
+            "doc": "Estimated order value in the quote asset, a decimal string rounded to at\n most 2 decimals. Valued at: quote_amount or quote_proceeds when set; a\n market order or TWAP of market slices at reference_price; a pegged limit\n order at its current_price; a limit order, ladder level or limit\n slice at its price; a stop at its limit price, else its trigger price; a\n trailing stop at its limit price, else its activation price, else the last\n price. Omitted for an OCO, and when it cannot be estimated.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -2656,7 +2743,7 @@
             "name": "reserved_amount",
             "jsonName": "reservedAmount",
             "number": 9,
-            "doc": "What the exchange reserves on the trading account when it creates a\n stop-loss, take-profit, trailing stop or ladder: an exact decimal string,\n in the base asset for a sell, in the quote asset (fee reserve included)\n for a buy. Omitted for market and limit orders, which reserve as they\n are placed, and for a TWAP, whose slices each use what is available when\n they are due.",
+            "doc": "What the exchange reserves on the trading account when it creates a\n stop-loss, take-profit, trailing stop, OCO or ladder: an exact decimal\n string, in the base asset for a sell, in the quote asset (fee reserve\n included) for a buy. Omitted for market and limit orders, which reserve as\n they are placed, for a TWAP, whose slices each use what is available when\n they are due, and for a buy OCO, whose reserve the exchange sets when it\n creates it.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -2664,7 +2751,7 @@
             "name": "reference_price",
             "jsonName": "referencePrice",
             "number": 10,
-            "doc": "The current market price to draw the order against: for a stop-loss,\n take-profit or trailing stop the price it watches (last or index), for\n the others the best ask for a buy or the best bid for a sell. Omitted\n when the market has no such price.",
+            "doc": "The current market price to draw the order against: for a stop-loss,\n take-profit, trailing stop or OCO the price it watches (last or index),\n for a pegged limit order the book side it is pegged to, for the others\n the best ask for a buy or the best bid for a sell. Omitted when the\n market has no such price.",
             "protoRef": "ai.v1.ReferencePrice"
           },
           {
@@ -2721,6 +2808,22 @@
             "number": 17,
             "doc": "A ladder.",
             "protoRef": "ai.v1.LadderPreview",
+            "oneof": "kind"
+          },
+          {
+            "name": "oco",
+            "jsonName": "oco",
+            "number": 19,
+            "doc": "An OCO: a take-profit and a stop-loss that sell base asset the account\n holds, or buy base asset with quote asset it holds.",
+            "protoRef": "ai.v1.OcoPreview",
+            "oneof": "kind"
+          },
+          {
+            "name": "pegged_limit",
+            "jsonName": "peggedLimit",
+            "number": 21,
+            "doc": "A limit order with a static peg.",
+            "protoRef": "ai.v1.PeggedLimitOrderPreview",
             "oneof": "kind"
           },
           {
@@ -2885,6 +2988,79 @@
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ai.v1.PeggedLimitOrderPreview",
+      "kind": "message",
+      "doc": "PeggedLimitOrderPreview is a limit order with a static peg: the exchange\n takes its price once, when it accepts the order, from one side of the book\n moved by a number of the pair's ticks, and never moves it with the book\n after. It never carries attached exits.",
+      "message": {
+        "fields": [
+          {
+            "name": "reference",
+            "jsonName": "reference",
+            "number": 1,
+            "doc": "The book side the price is taken from: BEST_BID or BEST_ASK.",
+            "protoRef": "orders.v1.PegReference"
+          },
+          {
+            "name": "offset_ticks",
+            "jsonName": "offsetTicks",
+            "number": 2,
+            "doc": "Signed number of the pair's ticks added to that side's best price: 2 is\n two ticks above it, -1 one tick below. Zero is the best price itself.",
+            "protoScalar": "int64",
+            "jsonType": "string",
+            "format": "int64"
+          },
+          {
+            "name": "tick_size",
+            "jsonName": "tickSize",
+            "number": 3,
+            "doc": "The pair's tick size, an exact decimal string in the quote asset.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "current_price",
+            "jsonName": "currentPrice",
+            "number": 4,
+            "doc": "The price the peg gives at reference_price, the side's best price when\n the preview read it: an exact decimal string in the quote asset. The\n exchange takes it again when it accepts the order, so the order's price\n can differ.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "bound_price",
+            "jsonName": "boundPrice",
+            "number": 5,
+            "doc": "The order's bound, an exact decimal string in the quote asset: the most\n a buy pays or the least a sell takes. The exchange checks the order's\n minimums, maximums and funds at it, and refuses the order when the\n price the peg gives passes it. It is not the order's price.",
+            "protoScalar": "string",
+            "jsonType": "string"
+          },
+          {
+            "name": "time_in_force",
+            "jsonName": "timeInForce",
+            "number": 6,
+            "doc": "GTC, GTD, IOC or FOK.",
+            "protoRef": "orders.v1.TimeInForce"
+          },
+          {
+            "name": "expire_at",
+            "jsonName": "expireAt",
+            "number": 7,
+            "doc": "When a GTD order expires. Omitted for other times in force.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
+          },
+          {
+            "name": "post_only",
+            "jsonName": "postOnly",
+            "number": 8,
+            "doc": "True when the order is refused instead of trading at once.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
           }
         ]
       }
