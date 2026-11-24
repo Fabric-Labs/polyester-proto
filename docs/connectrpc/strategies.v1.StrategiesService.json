@@ -2,7 +2,7 @@
   "services": [
     {
       "name": "strategies.v1.StrategiesService",
-      "doc": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call moves money,\n creates a subaccount or deploys a bot: deploying takes the user's MFA and\n wallet signature on the deploy page ProposeDeploy links. StopBot stops a\n bot, which only ever reduces what it does.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference and ListStrategyTemplates need no\n credentials. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot: deploying takes the user's MFA and wallet signature.\n Every call is safe to retry.",
+      "doc": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call moves money,\n creates a subaccount or deploys a bot: deploying takes the user's MFA and\n wallet signature on the deploy page ProposeDeploy links. StopBot stops a\n bot, which only ever reduces what it does.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference, ListStrategyTemplates,\n ListCommunityStrategies and GetCommunityStrategy need no credentials.\n PublishStrategyVersion and UnpublishStrategy take the user's own session:\n publishing makes a strategy's code public, so only the user does it, on\n the website. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot: deploying takes the user's MFA and wallet signature.\n Every call is safe to retry.",
       "methods": [
         {
           "name": "CreateStrategy",
@@ -37,6 +37,12 @@
                 },
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
+                "listing": {
+                  "listingId": "1",
+                  "publishedAt": "2025-01-01T00:00:00Z",
+                  "state": "PUBLIC",
+                  "versionId": "value"
+                },
                 "markets": [
                   "value"
                 ],
@@ -145,7 +151,7 @@
           "requestType": "strategies.v1.DeleteStrategyRequest",
           "responseType": "strategies.v1.DeleteStrategyResponse",
           "summary": "Delete Strategy",
-          "doc": "DeleteStrategy deletes one strategy of the caller and its revisions. It\n is refused while the strategy is in use: while a bot deployed from it\n hasn't stopped, whether deployed from one of its proposals or running\n one of its revisions' versions, and while a deploy proposal of it has\n neither expired, failed nor been deployed. Deleting never stops a bot. Proposals\n of the strategy stay, and show no strategy once it is deleted. A version\n only the strategy's revisions kept then expires like any other.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown or already deleted one.\n - FAILED_PRECONDITION: STRATEGY_IN_USE.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "DeleteStrategy deletes one strategy of the caller and its revisions. It\n is refused while the strategy is in use: while a bot deployed from it\n hasn't stopped, whether deployed from one of its proposals or running\n one of its revisions' versions, while a deploy proposal of it has\n neither expired, failed nor been deployed, and while its community\n listing is public. Deleting never stops a bot. Proposals of the strategy\n stay, and show no strategy once it is deleted. Its unpublished listing\n stays unpublished, with the versions it published. A version only the\n strategy's revisions kept then expires like any other.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown or already deleted one.\n - FAILED_PRECONDITION: STRATEGY_IN_USE.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -171,7 +177,7 @@
           "requestType": "strategies.v1.DeployBotRequest",
           "responseType": "strategies.v1.DeployBotResponse",
           "summary": "Deploy Bot",
-          "doc": "DeployBot deploys one deploy proposal of the caller: it checks the\n version again, prepares the bot's subaccount, sets the bot's limits and\n its trading key, and starts the bot. The steps run in the call; once the\n bot's start is recorded, the bot starts without the user.\n\n Only the user's own session may deploy, and it must be a recently\n MFA-elevated session (MFA_RECENT). API keys and sessions a connected app\n holds on the user's behalf are refused.\n\n A proposal is deployed at most once. Calling again, after an error, a\n timeout or from another tab, continues the same deploy from where it\n is, and answers its status; it never starts a second bot. A step that\n fails ends the deploy as FAILED, answered as a status, not an error:\n failure says why and what to do.\n\n A deploy that creates a subaccount needs the user's signed\n authorization: request a challenge with CreateSubaccountChallenge, have\n the user sign it, and pass it as subaccount_authorization.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: PROPOSAL_NOT_FOUND, for another account's proposal as for\n   an unknown one.\n - FAILED_PRECONDITION: PROPOSAL_EXPIRED, BOT_CAP_REACHED (nothing was\n   started), or SUBACCOUNT_AUTHORIZATION_REQUIRED (the deploy keeps its\n   progress).\n - PERMISSION_DENIED: MFA_ELEVATION_REQUIRED; or\n   AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a session a connected\n   app holds on the user's behalf.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "DeployBot deploys one deploy proposal of the caller: it checks the\n version again, prepares the bot's subaccount, sets the bot's limits and\n its trading key, and starts the bot. The steps run in the call; once the\n bot's start is recorded, the bot starts without the user.\n\n Only the user's own session may deploy, and it must be a recently\n MFA-elevated session (MFA_RECENT). API keys and sessions a connected app\n holds on the user's behalf are refused.\n\n A proposal is deployed at most once. Calling again, after an error, a\n timeout or from another tab, continues the same deploy from where it\n is, and answers its status; it never starts a second bot. A step that\n fails ends the deploy as FAILED, answered as a status, not an error:\n failure says why and what to do.\n\n Once the bot's limits are set, the call waits up to about 20 seconds for\n the exchange to apply the bot's limits, then answers SETTING_ACCESS:\n call again.\n\n A deploy that creates a subaccount needs the user's signed\n authorization: request a challenge with CreateSubaccountChallenge, have\n the user sign it, and pass it as subaccount_authorization.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: PROPOSAL_NOT_FOUND, for another account's proposal as for\n   an unknown one.\n - FAILED_PRECONDITION: PROPOSAL_EXPIRED, BOT_CAP_REACHED (nothing was\n   started), or SUBACCOUNT_AUTHORIZATION_REQUIRED (the deploy keeps its\n   progress).\n - PERMISSION_DENIED: MFA_ELEVATION_REQUIRED; or\n   AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a session a connected\n   app holds on the user's behalf.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -202,7 +208,11 @@
                 "state": "PROPOSED",
                 "step": "value",
                 "subaccountId": "6789012345678",
-                "updatedAt": "2025-01-01T00:00:00Z"
+                "updatedAt": "2025-01-01T00:00:00Z",
+                "wait": {
+                  "address": "0x3333333333333333333333333333333333333333",
+                  "reason": "WHITELIST_REQUIRED"
+                }
               }
             }
           }
@@ -635,6 +645,233 @@
           }
         },
         {
+          "name": "GetCommunityStrategy",
+          "path": "strategies.v1.StrategiesService/GetCommunityStrategy",
+          "requestType": "strategies.v1.GetCommunityStrategyRequest",
+          "responseType": "strategies.v1.GetCommunityStrategyResponse",
+          "summary": "Get Community Strategy",
+          "doc": "GetCommunityStrategy reads one public community listing: its title,\n description, types, markets and author, and its published version's\n code, manifest, settings form, money rules, flow and platform backtest.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an\n   unknown one.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": false,
+          "authenticationMethods": [],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "listingId": "1"
+            },
+            "response": {
+              "strategy": {
+                "authorUsername": "trader_alpha",
+                "backtest": {
+                  "failure": "value",
+                  "metrics": {
+                    "endEquity": "value",
+                    "exposurePercent": "value",
+                    "fees": {
+                      "amount": "123.45",
+                      "asset": "example"
+                    },
+                    "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                    "maxDrawdownPercent": "value",
+                    "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                    "realizedPnl": "value",
+                    "returnPercent": "value",
+                    "sharpeRatio": "value",
+                    "startEquity": "value",
+                    "trades": 1,
+                    "winRatePercent": "value"
+                  },
+                  "notBacktestableReason": "REACTS_TO_TRADES_OR_QUOTES",
+                  "report": {
+                    "baselines": [
+                      {
+                        "metrics": {},
+                        "name": "value"
+                      }
+                    ],
+                    "dataGaps": [
+                      {
+                        "affected": false,
+                        "market": "value",
+                        "timeframe": "1s",
+                        "window": {}
+                      }
+                    ],
+                    "equity": [
+                      {
+                        "buyAndHoldEquity": "value",
+                        "equity": "value",
+                        "time": "2025-01-01T00:00:00Z"
+                      }
+                    ],
+                    "evidenceGrade": "NOT_ENOUGH",
+                    "fidelity": "value",
+                    "heldBackBaselines": [
+                      {
+                        "metrics": {},
+                        "name": "value"
+                      }
+                    ],
+                    "heldBackMetrics": {
+                      "endEquity": "value",
+                      "exposurePercent": "value",
+                      "fees": {},
+                      "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                      "maxDrawdownPercent": "value",
+                      "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                      "realizedPnl": "value",
+                      "returnPercent": "value",
+                      "sharpeRatio": "value",
+                      "startEquity": "value",
+                      "trades": 1,
+                      "winRatePercent": "value"
+                    },
+                    "heldBackPeriod": {
+                      "endTime": "2025-01-02T00:00:00Z",
+                      "startTime": "2025-01-01T00:00:00Z"
+                    },
+                    "heldBackSeen": false,
+                    "heldBackStart": "2025-01-01T00:00:00Z",
+                    "metrics": {
+                      "endEquity": "value",
+                      "exposurePercent": "value",
+                      "fees": {},
+                      "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                      "maxDrawdownPercent": "value",
+                      "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                      "realizedPnl": "value",
+                      "returnPercent": "value",
+                      "sharpeRatio": "value",
+                      "startEquity": "value",
+                      "trades": 1,
+                      "winRatePercent": "value"
+                    },
+                    "period": {
+                      "endTime": "2025-01-02T00:00:00Z",
+                      "startTime": "2025-01-01T00:00:00Z"
+                    },
+                    "scenarios": [
+                      {
+                        "heldBackMetrics": {},
+                        "metrics": {},
+                        "name": "value",
+                        "slippageBps": 1
+                      }
+                    ],
+                    "trades": [
+                      {
+                        "afterGap": false,
+                        "fee": {},
+                        "market": "value",
+                        "price": "61000.25",
+                        "quantity": "100000",
+                        "realizedPnl": "value",
+                        "reason": "value",
+                        "side": "BUY",
+                        "time": "2025-01-01T00:00:00Z",
+                        "tradeIndex": "1"
+                      }
+                    ],
+                    "warnings": [
+                      "value"
+                    ],
+                    "windowMaxDrawdownEnd": "2025-01-01T00:00:00Z",
+                    "windowMaxDrawdownPercent": "value",
+                    "windowMaxDrawdownStart": "2025-01-01T00:00:00Z"
+                  },
+                  "status": "QUEUED",
+                  "window": {
+                    "endTime": "2025-01-02T00:00:00Z",
+                    "startTime": "2025-01-01T00:00:00Z"
+                  }
+                },
+                "code": "value",
+                "description": "Example configuration for the API playground.",
+                "flow": {
+                  "complete": false,
+                  "edges": [
+                    {
+                      "branch": "value",
+                      "fromNodeId": "value",
+                      "toNodeId": "value"
+                    }
+                  ],
+                  "nodes": [
+                    {
+                      "action": "value",
+                      "event": "value",
+                      "kind": "TRIGGER",
+                      "label": "Name Of My Subaccount",
+                      "nodeId": "value",
+                      "settings": [
+                        "value"
+                      ],
+                      "span": {
+                        "endLine": 86401,
+                        "startLine": 1
+                      }
+                    }
+                  ],
+                  "notes": [
+                    "value"
+                  ]
+                },
+                "listingId": "1",
+                "manifest": {
+                  "example": "data"
+                },
+                "markets": [
+                  "value"
+                ],
+                "moneyCard": {
+                  "budget": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  },
+                  "dailyLossThreshold": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  },
+                  "events": [
+                    "value"
+                  ],
+                  "markets": [
+                    "value"
+                  ],
+                  "maxOpenGtcOrders": 1,
+                  "maxOrder": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                },
+                "publishedAt": "2025-01-01T00:00:00Z",
+                "runtimeVersion": "value",
+                "settingsForm": [
+                  {
+                    "asset": "value",
+                    "defaultValue": "value",
+                    "description": "Example configuration for the API playground.",
+                    "kind": "value",
+                    "maximum": "value",
+                    "minimum": "value",
+                    "name": "value"
+                  }
+                ],
+                "tags": [
+                  "TREND"
+                ],
+                "title": "My Trading Board",
+                "versionId": "value"
+              }
+            }
+          }
+        },
+        {
           "name": "GetDeployProposal",
           "path": "strategies.v1.StrategiesService/GetDeployProposal",
           "requestType": "strategies.v1.GetDeployProposalRequest",
@@ -670,7 +907,11 @@
                 "state": "PROPOSED",
                 "step": "value",
                 "subaccountId": "6789012345678",
-                "updatedAt": "2025-01-01T00:00:00Z"
+                "updatedAt": "2025-01-01T00:00:00Z",
+                "wait": {
+                  "address": "0x3333333333333333333333333333333333333333",
+                  "reason": "WHITELIST_REQUIRED"
+                }
               },
               "summary": {
                 "backtest": {
@@ -792,7 +1033,11 @@
                 "state": "PROPOSED",
                 "step": "value",
                 "subaccountId": "6789012345678",
-                "updatedAt": "2025-01-01T00:00:00Z"
+                "updatedAt": "2025-01-01T00:00:00Z",
+                "wait": {
+                  "address": "0x3333333333333333333333333333333333333333",
+                  "reason": "WHITELIST_REQUIRED"
+                }
               }
             }
           }
@@ -970,6 +1215,12 @@
                 },
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
+                "listing": {
+                  "listingId": "1",
+                  "publishedAt": "2025-01-01T00:00:00Z",
+                  "state": "PUBLIC",
+                  "versionId": "value"
+                },
                 "markets": [
                   "value"
                 ],
@@ -1531,6 +1782,172 @@
           }
         },
         {
+          "name": "ListCommunityStrategies",
+          "path": "strategies.v1.StrategiesService/ListCommunityStrategies",
+          "requestType": "strategies.v1.ListCommunityStrategiesRequest",
+          "responseType": "strategies.v1.ListCommunityStrategiesResponse",
+          "summary": "List Community Strategies",
+          "doc": "ListCommunityStrategies lists the public community listings, most\n recently published first, optionally only those of some types or\n trading some markets.\n\n Errors:\n - INVALID_ARGUMENT: malformed request or page token.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": false,
+          "authenticationMethods": [],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "limit": 100,
+              "pageToken": "eyJvZmZzZXQiOjEwMH0",
+              "tags": [
+                "TREND"
+              ]
+            },
+            "response": {
+              "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
+              "strategies": [
+                {
+                  "authorUsername": "trader_alpha",
+                  "backtest": {
+                    "failure": "value",
+                    "metrics": {
+                      "endEquity": "value",
+                      "exposurePercent": "value",
+                      "fees": {
+                        "amount": "123.45",
+                        "asset": "example"
+                      },
+                      "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                      "maxDrawdownPercent": "value",
+                      "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                      "realizedPnl": "value",
+                      "returnPercent": "value",
+                      "sharpeRatio": "value",
+                      "startEquity": "value",
+                      "trades": 1,
+                      "winRatePercent": "value"
+                    },
+                    "notBacktestableReason": "REACTS_TO_TRADES_OR_QUOTES",
+                    "report": {
+                      "baselines": [
+                        {
+                          "metrics": {},
+                          "name": "value"
+                        }
+                      ],
+                      "dataGaps": [
+                        {
+                          "affected": false,
+                          "market": "value",
+                          "timeframe": "1s",
+                          "window": {}
+                        }
+                      ],
+                      "equity": [
+                        {
+                          "buyAndHoldEquity": "value",
+                          "equity": "value",
+                          "time": "2025-01-01T00:00:00Z"
+                        }
+                      ],
+                      "evidenceGrade": "NOT_ENOUGH",
+                      "fidelity": "value",
+                      "heldBackBaselines": [
+                        {
+                          "metrics": {},
+                          "name": "value"
+                        }
+                      ],
+                      "heldBackMetrics": {
+                        "endEquity": "value",
+                        "exposurePercent": "value",
+                        "fees": {},
+                        "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                        "maxDrawdownPercent": "value",
+                        "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                        "realizedPnl": "value",
+                        "returnPercent": "value",
+                        "sharpeRatio": "value",
+                        "startEquity": "value",
+                        "trades": 1,
+                        "winRatePercent": "value"
+                      },
+                      "heldBackPeriod": {
+                        "endTime": "2025-01-02T00:00:00Z",
+                        "startTime": "2025-01-01T00:00:00Z"
+                      },
+                      "heldBackSeen": false,
+                      "heldBackStart": "2025-01-01T00:00:00Z",
+                      "metrics": {
+                        "endEquity": "value",
+                        "exposurePercent": "value",
+                        "fees": {},
+                        "maxDrawdownEnd": "2025-01-01T00:00:00Z",
+                        "maxDrawdownPercent": "value",
+                        "maxDrawdownStart": "2025-01-01T00:00:00Z",
+                        "realizedPnl": "value",
+                        "returnPercent": "value",
+                        "sharpeRatio": "value",
+                        "startEquity": "value",
+                        "trades": 1,
+                        "winRatePercent": "value"
+                      },
+                      "period": {
+                        "endTime": "2025-01-02T00:00:00Z",
+                        "startTime": "2025-01-01T00:00:00Z"
+                      },
+                      "scenarios": [
+                        {
+                          "heldBackMetrics": {},
+                          "metrics": {},
+                          "name": "value",
+                          "slippageBps": 1
+                        }
+                      ],
+                      "trades": [
+                        {
+                          "afterGap": false,
+                          "fee": {},
+                          "market": "value",
+                          "price": "61000.25",
+                          "quantity": "100000",
+                          "realizedPnl": "value",
+                          "reason": "value",
+                          "side": "BUY",
+                          "time": "2025-01-01T00:00:00Z",
+                          "tradeIndex": "1"
+                        }
+                      ],
+                      "warnings": [
+                        "value"
+                      ],
+                      "windowMaxDrawdownEnd": "2025-01-01T00:00:00Z",
+                      "windowMaxDrawdownPercent": "value",
+                      "windowMaxDrawdownStart": "2025-01-01T00:00:00Z"
+                    },
+                    "status": "QUEUED",
+                    "window": {
+                      "endTime": "2025-01-02T00:00:00Z",
+                      "startTime": "2025-01-01T00:00:00Z"
+                    }
+                  },
+                  "listingId": "1",
+                  "markets": [
+                    "value"
+                  ],
+                  "publishedAt": "2025-01-01T00:00:00Z",
+                  "tags": [
+                    "TREND"
+                  ],
+                  "title": "My Trading Board"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "ListStrategies",
           "path": "strategies.v1.StrategiesService/ListStrategies",
           "requestType": "strategies.v1.ListStrategiesRequest",
@@ -1564,6 +1981,12 @@
                   },
                   "createdAt": "2025-01-01T00:00:00Z",
                   "headVersionId": "value",
+                  "listing": {
+                    "listingId": "1",
+                    "publishedAt": "2025-01-01T00:00:00Z",
+                    "state": "PUBLIC",
+                    "versionId": "value"
+                  },
                   "markets": [
                     "value"
                   ],
@@ -1847,6 +2270,45 @@
           }
         },
         {
+          "name": "PublishStrategyVersion",
+          "path": "strategies.v1.StrategiesService/PublishStrategyVersion",
+          "requestType": "strategies.v1.PublishStrategyVersionRequest",
+          "responseType": "strategies.v1.PublishStrategyVersionResponse",
+          "summary": "Publish Strategy Version",
+          "doc": "PublishStrategyVersion publishes one version of one of the caller's\n strategies as the strategy's community listing, with its title,\n description and types: its code, manifest and settings form become\n readable by everyone, its settings shown at their defaults. A strategy\n has one listing; publishing again shows the new version and makes an\n unpublished listing public again. The version must be one of the\n strategy's revisions' versions, valid, with every behaviour example\n passing. Each publish starts the platform backtest of the version\n (CommunityBacktest), whose results the listing shows once it finishes;\n a bot that can't be backtested on candles is published without\n results. An account has at most 20 public listings and publishes at\n most 20 times per UTC day. Publishing shows the author by username.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown one; VERSION_NOT_FOUND when no revision of the strategy\n   saved the version.\n - FAILED_PRECONDITION: VERSION_INVALID; SCENARIOS_FAILING;\n   WINDOW_HAS_NO_DATA when the default window holds no market data;\n   USERNAME_REQUIRED; LISTING_CAP_REACHED, listing_cap gives the cap;\n   PUBLISH_LIMIT_REACHED, retry_after says when the day resets.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original publish stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "description": "Example configuration for the API playground.",
+              "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
+              "strategyId": "1",
+              "tags": [
+                "TREND"
+              ],
+              "title": "My Trading Board",
+              "versionId": "example"
+            },
+            "response": {
+              "listing": {
+                "listingId": "1",
+                "publishedAt": "2025-01-01T00:00:00Z",
+                "state": "PUBLIC",
+                "versionId": "value"
+              }
+            }
+          }
+        },
+        {
           "name": "RenameStrategy",
           "path": "strategies.v1.StrategiesService/RenameStrategy",
           "requestType": "strategies.v1.RenameStrategyRequest",
@@ -1878,6 +2340,12 @@
                 },
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
+                "listing": {
+                  "listingId": "1",
+                  "publishedAt": "2025-01-01T00:00:00Z",
+                  "state": "PUBLIC",
+                  "versionId": "value"
+                },
                 "markets": [
                   "value"
                 ],
@@ -2217,6 +2685,38 @@
                 "versionId": "value"
               },
               "mode": "KEEP_ORDERS"
+            }
+          }
+        },
+        {
+          "name": "UnpublishStrategy",
+          "path": "strategies.v1.StrategiesService/UnpublishStrategy",
+          "requestType": "strategies.v1.UnpublishStrategyRequest",
+          "responseType": "strategies.v1.UnpublishStrategyResponse",
+          "summary": "Unpublish Strategy",
+          "doc": "UnpublishStrategy unpublishes one of the caller's community listings: it\n leaves the list, and GetCommunityStrategy answers LISTING_NOT_FOUND. The\n author's next publish makes it public again. Copies other users already\n made stay theirs. Unpublishing an unpublished listing changes nothing.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: LISTING_NOT_FOUND, for another account's listing as for an\n   unknown one.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "listingId": "1"
+            },
+            "response": {
+              "listing": {
+                "listingId": "1",
+                "publishedAt": "2025-01-01T00:00:00Z",
+                "state": "PUBLIC",
+                "versionId": "value"
+              }
             }
           }
         }

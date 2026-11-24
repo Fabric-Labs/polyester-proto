@@ -936,6 +936,36 @@ message LimitOrderPreview {
   AttachedExits attached = 5;
 }
 
+// PeggedLimitOrderPreview is a limit order with a static peg: the exchange
+// takes its price once, when it accepts the order, from one side of the book
+// moved by a number of the pair's ticks, and never moves it with the book
+// after. It never carries attached exits.
+message PeggedLimitOrderPreview {
+  // The book side the price is taken from: BEST_BID or BEST_ASK.
+  orders.v1.PegReference reference = 1;
+  // Signed number of the pair's ticks added to that side's best price: 2 is
+  // two ticks above it, -1 one tick below. Zero is the best price itself.
+  int64 offset_ticks = 2;
+  // The pair's tick size, an exact decimal string in the quote asset.
+  string tick_size = 3;
+  // The price the peg gives at reference_price, the side's best price when
+  // the preview read it: an exact decimal string in the quote asset. The
+  // exchange takes it again when it accepts the order, so the order's price
+  // can differ.
+  string current_price = 4;
+  // The order's bound, an exact decimal string in the quote asset: the most
+  // a buy pays or the least a sell takes. The exchange checks the order's
+  // minimums, maximums and funds at it, and refuses the order when the
+  // price the peg gives passes it. It is not the order's price.
+  string bound_price = 5;
+  // GTC, GTD, IOC or FOK.
+  orders.v1.TimeInForce time_in_force = 6;
+  // When a GTD order expires. Omitted for other times in force.
+  google.protobuf.Timestamp expire_at = 7;
+  // True when the order is refused instead of trading at once.
+  bool post_only = 8;
+}
+
 // StopOrderPreview is a stop-loss or take-profit: it places a market or limit
 // order once the watched price reaches the trigger price.
 message StopOrderPreview {
@@ -1055,6 +1085,40 @@ message LadderPreview {
   bool all_levels_at_once = 6;
 }
 
+// OcoLegPreview is one leg of an OCO: once the watched price reaches its
+// trigger price, it places its order for the OCO's whole remaining quantity.
+message OcoLegPreview {
+  // The price that fires the leg, an exact decimal string in the quote asset.
+  string trigger_price = 1;
+  // The price it watches: LAST_PRICE or INDEX_PRICE.
+  orders.v1.TriggerPriceSource trigger_price_source = 2;
+  // Which way the watched price must move to reach trigger_price.
+  TriggerDirection direction = 3;
+  // The limit price of the good-till-canceled order it places, an exact
+  // decimal string in the quote asset. Omitted when it places a market order.
+  optional string limit_price = 4;
+}
+
+// OcoPreview is an OCO (one-cancels-the-other): a take-profit and a stop-loss
+// that both trade the order's side for its whole quantity. A sell OCO sells
+// base asset the account already holds: its take-profit fires when the price
+// rises to its trigger price, its stop-loss when it falls to its own. A buy
+// OCO buys the quantity of base asset with quote asset the account already
+// holds, the other way round. Creating it reserves funds once, and both legs
+// share them: a sell reserves the quantity of base asset, a buy the quote
+// asset needed to buy the quantity, as the exchange computes it. Cancelling
+// either leg cancels both.
+message OcoPreview {
+  // The take-profit leg.
+  OcoLegPreview take_profit = 1;
+  // The stop-loss leg.
+  OcoLegPreview stop_loss = 2;
+  // The asset creating the OCO reserves once for both legs: the base asset for
+  // a sell, the quote asset for a buy. OrderPreview.reserved_amount states the
+  // amount when it is set.
+  string reserved_asset = 3;
+}
+
 // OrderPreview is the exact order an approval places, as typed values to
 // draw it: a TWAP's slices on a timeline, a ladder's levels on a price axis,
 // a stop's trigger price against the current price. It is computed from the
@@ -1074,30 +1138,39 @@ message OrderPreview {
   // BUY or SELL.
   orders.v1.Side side = 5;
   // Total quantity, an exact decimal string in the base asset. Omitted only
-  // for a buy sized by quote_amount.
+  // for a buy sized by quote_amount and a sell sized by quote_proceeds.
   optional string quantity = 6;
   // A buy market order, or buy immediate-or-cancel limit order, sized by
   // spend: the most quote asset it spends, an exact decimal string. Omitted
-  // when quantity is set.
+  // when quantity or quote_proceeds is set.
   optional string quote_amount = 7;
+  // A sell market order, or sell immediate-or-cancel limit order, sized by
+  // proceeds: it sells whole quantity steps until its proceeds before fees
+  // reach this amount of quote asset, an exact decimal string, and never
+  // receives more. The fee is charged in quote asset on those proceeds.
+  // Omitted when quantity or quote_amount is set.
+  optional string quote_proceeds = 20;
   // Estimated order value in the quote asset, a decimal string rounded to at
-  // most 2 decimals. Valued at: quote_amount when set; a market order or TWAP
-  // of market slices at reference_price; a limit order, ladder level or limit
+  // most 2 decimals. Valued at: quote_amount or quote_proceeds when set; a
+  // market order or TWAP of market slices at reference_price; a pegged limit
+  // order at its current_price; a limit order, ladder level or limit
   // slice at its price; a stop at its limit price, else its trigger price; a
   // trailing stop at its limit price, else its activation price, else the last
-  // price. Omitted when it cannot be estimated.
+  // price. Omitted for an OCO, and when it cannot be estimated.
   optional string estimated_value = 8;
   // What the exchange reserves on the trading account when it creates a
-  // stop-loss, take-profit, trailing stop or ladder: an exact decimal string,
-  // in the base asset for a sell, in the quote asset (fee reserve included)
-  // for a buy. Omitted for market and limit orders, which reserve as they
-  // are placed, and for a TWAP, whose slices each use what is available when
-  // they are due.
+  // stop-loss, take-profit, trailing stop, OCO or ladder: an exact decimal
+  // string, in the base asset for a sell, in the quote asset (fee reserve
+  // included) for a buy. Omitted for market and limit orders, which reserve as
+  // they are placed, for a TWAP, whose slices each use what is available when
+  // they are due, and for a buy OCO, whose reserve the exchange sets when it
+  // creates it.
   optional string reserved_amount = 9;
   // The current market price to draw the order against: for a stop-loss,
-  // take-profit or trailing stop the price it watches (last or index), for
-  // the others the best ask for a buy or the best bid for a sell. Omitted
-  // when the market has no such price.
+  // take-profit, trailing stop or OCO the price it watches (last or index),
+  // for a pegged limit order the book side it is pegged to, for the others
+  // the best ask for a buy or the best bid for a sell. Omitted when the
+  // market has no such price.
   ReferencePrice reference_price = 10;
   // The order type and its own values. A client that does not recognize the
   // kind, for example one added after it was built, shows the approval's
@@ -1117,6 +1190,11 @@ message OrderPreview {
     TwapPreview twap = 16;
     // A ladder.
     LadderPreview ladder = 17;
+    // An OCO: a take-profit and a stop-loss that sell base asset the account
+    // holds, or buy base asset with quote asset it holds.
+    OcoPreview oco = 19;
+    // A limit order with a static peg.
+    PeggedLimitOrderPreview pegged_limit = 21;
   }
   // The prices the user gave relative to another price, as resolved, in the
   // order they appear in the order. Empty when every price was given as an
@@ -1852,6 +1930,11 @@ message ListMessagesResponse {
   // when the conversation was listed earlier. Set on every page. A client that
   // opens the conversation selects it before the next message.
   ConversationAccount last_account = 3;
+  // What the conversation is about: the same as Conversation.subject, fixed
+  // when the conversation started. Set on every page; omitted for a general
+  // conversation. A client that opens a conversation by its ID learns from it
+  // whether the conversation is about one of the caller's strategies.
+  Subject subject = 4;
 }
 
 // GetMessageImageRequest selects one image of the caller's messages.

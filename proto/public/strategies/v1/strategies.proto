@@ -14,7 +14,7 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "Strategies Service"
-      description: "Write, test and propose trading bots: the bot format, validation, behaviour examples, backtests, deploy proposals, and reads of the caller's bots."
+      description: "Write, test and propose trading bots: the bot format, validation, behaviour examples, backtests, deploy proposals, reads of the caller's bots, and community listings."
     }
   ]
 };
@@ -68,9 +68,9 @@ enum ErrorCode {
   WINDOW_HAS_NO_DATA = 15;
   // The bot cannot be backtested on candles: it reacts to events candles do
   // not carry, such as top-of-book or trade updates, or social signals; it
-  // reads trading volume, which the reference price history does not
-  // include; its markets have different quote assets; or a market has no
-  // reference candles over the window. Only bots that trade with market orders,
+  // reads trading volume, which the price history does not include; its
+  // markets have different quote assets; or a market it needs has no
+  // available price history at all. Only bots that trade with market orders,
   // including exits on watched price levels, are backtested: a bot's first
   // limit order ends its backtest as NOT_BACKTESTABLE. ExplainStrategy says
   // so for what is known before a backtest runs: the events, markets and
@@ -117,8 +117,9 @@ enum ErrorCode {
   // No bot template has this ID. ListStrategyTemplates lists them.
   TEMPLATE_NOT_FOUND = 28;
   // The strategy is in use, so it can't be deleted: a bot deployed from it
-  // hasn't stopped, or a deploy proposal of it is waiting to be deployed.
-  // Stop the bot, or let the proposal expire, and delete it again.
+  // hasn't stopped, a deploy proposal of it is waiting to be deployed, or its
+  // community listing is public. Stop the bot, let the proposal expire, or
+  // unpublish the listing, and delete it again.
   STRATEGY_IN_USE = 29;
   // The strategy has no revision with this number. Revisions are numbered
   // from 1, so zero is never one.
@@ -142,6 +143,19 @@ enum ErrorCode {
   // Read the notes again, apply the change to them, and save with the new
   // revision.
   NOTES_REVISION_CONFLICT = 35;
+  // No public community listing has this ID. A listing its author
+  // unpublished is reported the same way, and so is another account's
+  // listing to UnpublishStrategy.
+  LISTING_NOT_FOUND = 37;
+  // The caller already has as many public community listings as allowed.
+  // listing_cap gives the cap. Unpublish a listing to publish another.
+  LISTING_CAP_REACHED = 38;
+  // Publishing shows the author by username, and the caller has none yet.
+  // Claim a username and publish again.
+  USERNAME_REQUIRED = 39;
+  // The caller published as many times as allowed in the current UTC day.
+  // retry_after says when the day resets (00:00 UTC).
+  PUBLISH_LIMIT_REACHED = 40;
 }
 
 // BotCapDetail explains BOT_CAP_REACHED.
@@ -166,6 +180,14 @@ message StrategyCapDetail {
   uint32 strategies = 2;
 }
 
+// ListingCapDetail explains LISTING_CAP_REACHED.
+message ListingCapDetail {
+  // The most public community listings an account may have.
+  uint32 listing_cap = 1;
+  // Public listings the caller has now.
+  uint32 listings = 2;
+}
+
 // RevisionConflictDetail explains DRAFT_REVISION_CONFLICT: the strategy's
 // current draft.
 message RevisionConflictDetail {
@@ -187,8 +209,8 @@ message ErrorDetail {
   // FUNDING_INVALID and MANIFEST_TOO_LARGE.
   string field_path = 2;
   // When the same request may succeed. Set only with
-  // SCENARIO_RUN_LIMIT_REACHED, and with BACKTEST_LIMIT_REACHED for the daily
-  // limit.
+  // SCENARIO_RUN_LIMIT_REACHED, PUBLISH_LIMIT_REACHED, and with
+  // BACKTEST_LIMIT_REACHED for the daily limit.
   google.protobuf.Timestamp retry_after = 3;
   // Set only with BOT_CAP_REACHED.
   BotCapDetail bot_cap = 4;
@@ -209,6 +231,8 @@ message ErrorDetail {
   BacktestLimitDetail backtest_limit = 10;
   // Set only with NOTES_REVISION_CONFLICT.
   NotesConflictDetail notes_conflict = 11;
+  // Set only with LISTING_CAP_REACHED.
+  ListingCapDetail listing_cap = 12;
 }
 
 // NotesConflictDetail explains NOTES_REVISION_CONFLICT.
@@ -245,12 +269,17 @@ enum NotBacktestableReason {
   READS_SOCIAL_SIGNALS = 2;
   // Its markets have different quote assets.
   MIXED_QUOTE_ASSETS = 3;
-  // A market has no reference candles over the window.
+  // A market the bot needs has no available price history at all, neither
+  // reference prices from before its listing nor its index price from it on,
+  // for a timeframe the bot reads. Only StartBacktest answers it, as the
+  // NOT_BACKTESTABLE error's reason; a backtest that started never ends with
+  // it. A window without data for a market that has history elsewhere is
+  // WINDOW_HAS_NO_DATA instead.
   NO_REFERENCE_CANDLES = 4;
   // It places limit orders, which are not backtested yet.
   PLACES_LIMIT_ORDERS = 5;
   // It reads trading volume, such as a candle's volume or the VWAP
-  // indicator, which the reference price history a backtest replays does
+  // indicator, which the price history a backtest replays does
   // not include.
   READS_VOLUME = 6;
 }
@@ -457,10 +486,10 @@ message MoneyCard {
   // Declared only: nothing pauses or stops a bot on it yet. Unset when the
   // manifest declares none.
   Money daily_loss_threshold = 4;
-  // Markets the bot trades, for example BTC/USDT.
+  // Markets the bot trades, for example BTC-USDT.
   repeated string markets = 5;
   // Events the bot handles, as the manifest declares them, for example
-  // "schedule mon 09:00 UTC" or "candles BTC/USDT 1h".
+  // "schedule mon 09:00 UTC" or "candles BTC-USDT 1h".
   repeated string events = 6;
 }
 
@@ -635,7 +664,7 @@ message Baseline {
 message BacktestTrade {
   // When the trade happened, in simulated time.
   google.protobuf.Timestamp time = 1;
-  // Market, for example BTC/USDT.
+  // Market, for example BTC-USDT.
   string market = 2;
   // Side.
   OrderSide side = 3;
@@ -661,7 +690,7 @@ message BacktestTrade {
 
 // DataGap is a span with missing market data.
 message DataGap {
-  // Market, for example BTC/USDT.
+  // Market, for example BTC-USDT.
   string market = 1;
   // Candle timeframe, for example 1h.
   string timeframe = 2;
@@ -789,7 +818,9 @@ message Backtest {
 // - effective window: start_time and end_time, each floored to a whole
 //   second; an unset end is the end of the longest window with data when
 //   the request arrives, and an unset start is 365 days before the window's
-//   end, or the start of that longest window when its data is shorter;
+//   end, or fewer for a bot whose candle, schedule and on_start calls would
+//   not fit a backtest's calls (see start_time), or the start of that
+//   longest window when its data is shorter;
 // - effective settings: every setting of the version's settings form, by
 //   name, with its default value where the request leaves it out;
 // - effective initial balances: initial_balances, or when it is empty,
@@ -805,7 +836,19 @@ message StartBacktestRequest {
   // Start of the window, inclusive, floored to a whole second. Unset means
   // the most recent 365 days of data: 365 days before the window's end, or
   // the start of the longest window with data for the bot's markets and
-  // timeframes when that is shorter.
+  // timeframes when that is shorter. A backtest holds at most 30,000 calls
+  // of the bot, across its three cost scenarios. When the bot's code
+  // handles candles, each close of a candle series it declares under
+  // candles is a call in each scenario; when it handles its schedule, each
+  // firing is one; and on_start, when the code defines it, is one at the
+  // start of each. Unset keeps 365 days only when all of those calls
+  // together, over 365 days, fit; otherwise it means the most whole days
+  // whose calls fit, at least one. The calls combine: a bot on one series of
+  // minute candles alone gets 6 days, on two 3, on a 15-minute schedule
+  // alone 104, and on an hourly series with an hourly schedule 208, though
+  // either of those alone keeps 365 days. Only those calls are sized: calls
+  // the bot gets from its orders and price levels can still take a backtest
+  // past its calls, as can a bot too busy for even one day.
   google.protobuf.Timestamp start_time = 2;
   // End of the window, exclusive, floored to a whole second. Unset means the
   // end of that longest window.
@@ -1052,8 +1095,8 @@ message DeployStatus {
     VALIDATING = 2;
     // Preparing the bot's subaccount.
     CREATING_SUBACCOUNT = 3;
-    // Setting the bot's limits and its trading key. Comes after
-    // CREATING_SUBACCOUNT and before FUNDING.
+    // Setting the bot's limits and its trading key, until the exchange
+    // applies them. Comes after CREATING_SUBACCOUNT and before FUNDING.
     SETTING_ACCESS = 9;
     // Moving the funding into the bot's subaccount.
     FUNDING = 4;
@@ -1089,6 +1132,28 @@ message DeployStatus {
   // SETTING_ACCESS, FUNDING or DEPLOYING. Set when a deploy fails, by the deploy flow, beside
   // failure; unset in any other state.
   State failed_at = 9;
+  // What a running deploy waits for from the user before it can go on.
+  // Unset when it waits for nothing. Calling DeployBot again once the user
+  // has done it continues the deploy.
+  DeployWait wait = 10;
+}
+
+// DeployWait is what a running deploy waits for from the user.
+message DeployWait {
+  // Reason is what the user has to do.
+  enum Reason {
+    // Not set. Never returned.
+    REASON_UNSPECIFIED = 0;
+    // Funding: the funding account's internal whitelist must list the bot's
+    // subaccount before funds can move into it. Add address to the internal
+    // whitelist, then call DeployBot again.
+    WHITELIST_REQUIRED = 1;
+  }
+  // What the user has to do.
+  Reason reason = 1;
+  // WHITELIST_REQUIRED: the bot's subaccount's smart account address, the
+  // one to add to the internal whitelist. Empty for any other reason.
+  string address = 2;
 }
 
 // GetDeployStatusRequest reads one deploy proposal of the caller.
@@ -1141,6 +1206,10 @@ message DeployBotRequest {
 message DeployBotResponse {
   // The status: DEPLOYING once the bot's start is recorded (the bot then
   // starts without the user), LIVE, or FAILED with failed_at and failure.
+  // SETTING_ACCESS means the exchange is still applying the bot's limits, and
+  // FUNDING without wait that the funding is still reaching the bot's
+  // subaccount: call again. FUNDING with wait: do what wait says, then call
+  // again.
   DeployStatus status = 1;
 }
 
@@ -1238,7 +1307,7 @@ message Bot {
   // Quote asset of the bot's markets, for example USDT.
   string quote_asset = 10;
   // Markets the bot trades, as its version's money card names them, for
-  // example BTC/USDT.
+  // example BTC-USDT.
   repeated string markets = 11;
   // Where the bot's initial funding came from, and how much. Absent until
   // the deploy flow records the deploy proposal the bot came from.
@@ -1540,7 +1609,7 @@ message FlowNode {
   // What it is.
   Kind kind = 2;
   // What the node shows: a plain description of the code, for example
-  // "RSI(BTC/USDT, 1d, 14) > 75" or "Buy BTC/USDT for budget". For a
+  // "RSI(BTC-USDT, 1d, 14) > 75" or "Buy BTC-USDT for budget". For a
   // trigger: a schedule in words, for example "Every Monday 09:00 UTC";
   // another manifest event as the money card names it (the same text as
   // event); otherwise what wakes the bot, for example "An order fills".
@@ -1608,7 +1677,7 @@ message Strategy {
   // rule, RenameStrategy and CreateStrategy included.
   StrategyBot bot = 9;
   // The markets of the current revision's version, as its money card names
-  // them, for example BTC/USDT. Empty for a strategy with no revision, or
+  // them, for example BTC-USDT. Empty for a strategy with no revision, or
   // whose current revision did not validate. Set only for a caller who may
   // read the strategy, under the same rule as bot.
   repeated string markets = 10;
@@ -1616,6 +1685,35 @@ message Strategy {
   // first save. Set only for a caller who may read the strategy, under the
   // same rule as bot.
   string summary = 11;
+  // The strategy's community listing, public or unpublished. Unset when it
+  // was never published. Set only for a caller who may read the strategy,
+  // under the same rule as bot.
+  StrategyListing listing = 12;
+}
+
+// StrategyListing is a strategy's community listing, as its author's
+// strategy shows it.
+message StrategyListing {
+  // State is whether the listing is shown.
+  enum State {
+    // Not set. Never returned.
+    LISTING_STATE_UNSPECIFIED = 0;
+    // Listed, and readable by everyone with GetCommunityStrategy.
+    PUBLIC = 1;
+    // Unpublished by its author: out of the list, and GetCommunityStrategy
+    // answers LISTING_NOT_FOUND. The author's next publish makes it public
+    // again.
+    HIDDEN = 2;
+  }
+
+  // Public listing ID.
+  fixed64 listing_id = 1;
+  // Whether it is shown.
+  State state = 2;
+  // The version it shows: the one last published.
+  string version_id = 3;
+  // When that version was published.
+  google.protobuf.Timestamp published_at = 4;
 }
 
 // StrategyBot is a bot deployed from a strategy, as the strategy shows it.
@@ -2051,6 +2149,226 @@ message ListBotLogsResponse {
   bool deployed_again = 4;
 }
 
+// StrategyTag is a community strategy's type, from a fixed list. Markets are
+// never tags: a listing's markets come from its version.
+enum StrategyTag {
+  // Not set. Never returned, and refused in a request.
+  TAG_UNSPECIFIED = 0;
+  // Follows a price trend.
+  TREND = 1;
+  // Trades a price back towards its average.
+  MEAN_REVERSION = 2;
+  // Buys and sells on a grid of price levels.
+  GRID = 3;
+  // Buys a fixed amount on a schedule (dollar-cost averaging).
+  DCA = 4;
+  // Quotes both sides of a market.
+  MARKET_MAKING = 5;
+  // Trades price differences between markets.
+  ARBITRAGE = 6;
+  // Trades on signals.
+  SIGNALS = 7;
+}
+
+// CommunityBacktest is a community listing's platform backtest: the backtest
+// the platform starts of the published version when it is published, over
+// the default window (the most recent 365 days of data), with the default
+// settings, 1,000 of the quote asset and the standard fee schedule. Its
+// author chooses none of these, so every listing's results compare alike.
+// It is pinned to the publish: publishing a later version starts a new one,
+// and nothing runs it again on a schedule. It is the platform's own run: it
+// shows nothing of the author's own backtests.
+message CommunityBacktest {
+  // Where it is. NOT_BACKTESTABLE when the bot can't be backtested on
+  // candles, which not_backtestable_reason explains; the listing then shows
+  // no results. FAILED when it ended without results, which failure
+  // explains: a backtest whose runs couldn't finish is run once more by the
+  // platform before it fails.
+  Backtest.Status status = 1;
+  // Why the bot can't be backtested. Set only when status is
+  // NOT_BACKTESTABLE.
+  NotBacktestableReason not_backtestable_reason = 2;
+  // The simulated window. Unset when status is NOT_BACKTESTABLE and the
+  // backtest never started.
+  TimeWindow window = 3;
+  // The results over the report's period, for the base cost scenario: the
+  // report's metrics. Set only when status is DONE.
+  BacktestMetrics metrics = 4;
+  // The whole result, as the platform's run made it. Set only by
+  // GetCommunityStrategy, when status is DONE.
+  BacktestReport report = 5;
+  // Why it failed. Set only when status is FAILED.
+  string failure = 6;
+}
+
+// CommunityStrategySummary is one public community listing, as lists show
+// it.
+message CommunityStrategySummary {
+  // Public listing ID. GetCommunityStrategy reads the listing.
+  fixed64 listing_id = 1;
+  // The listing's title.
+  string title = 2;
+  // The strategy's types.
+  repeated StrategyTag tags = 3;
+  // The markets the published version trades, for example BTC-USDT.
+  repeated string markets = 4;
+  // The author's current username.
+  string author_username = 5;
+  // The platform backtest of the published version, without its report.
+  CommunityBacktest backtest = 6;
+  // When the shown version was published.
+  google.protobuf.Timestamp published_at = 7;
+}
+
+// CommunityStrategy is one public community listing with its published
+// version: everything a reader needs to judge it, and nothing of its
+// author's account. The settings shown are the version's defaults, never
+// the author's own values.
+message CommunityStrategy {
+  // Public listing ID.
+  fixed64 listing_id = 1;
+  // The listing's title.
+  string title = 2;
+  // The listing's description.
+  string description = 3;
+  // The strategy's types.
+  repeated StrategyTag tags = 4;
+  // The markets the published version trades, for example BTC-USDT.
+  repeated string markets = 5;
+  // The author's current username.
+  string author_username = 6;
+  // When the shown version was published.
+  google.protobuf.Timestamp published_at = 7;
+  // The published version's ID.
+  string version_id = 8;
+  // The runtime version it was checked against.
+  string runtime_version = 9;
+  // The published version's manifest.
+  google.protobuf.Struct manifest = 10;
+  // The published version's code.
+  string code = 11;
+  // The settings a user may change, with their defaults.
+  repeated SettingField settings_form = 12;
+  // The published version's money rules.
+  MoneyCard money_card = 13;
+  // The published version's flow: what wakes the bot, what it checks and
+  // what it may do. Unset for a version stored before flows existed.
+  StrategyFlow flow = 14;
+  // The platform backtest of the published version, with its report.
+  CommunityBacktest backtest = 15;
+}
+
+// PublishStrategyVersionRequest publishes one version of one of the caller's
+// strategies as the strategy's community listing.
+message PublishStrategyVersionRequest {
+  // Public strategy ID.
+  fixed64 strategy_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // The version to publish: the version of one of the strategy's revisions.
+  string version_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // The listing's title.
+  string title = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 80
+  }];
+  // The listing's description. At most 2,000 characters.
+  string description = 4 [(buf.validate.field).string.max_len = 2000];
+  // The strategy's types, each at most once.
+  repeated StrategyTag tags = 5 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 7
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // Client-chosen key, unique per caller among publishes, that makes the
+  // call idempotent: the same key and request return the listing as it
+  // stands now and never publish again; another request with the same key
+  // is IDEMPOTENCY_CONFLICT. Required.
+  string idempotency_key = 6 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+}
+
+// PublishStrategyVersionResponse is the published listing.
+message PublishStrategyVersionResponse {
+  // The listing, as the author's strategy shows it.
+  StrategyListing listing = 1;
+}
+
+// UnpublishStrategyRequest unpublishes one of the caller's community
+// listings.
+message UnpublishStrategyRequest {
+  // Public listing ID.
+  fixed64 listing_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// UnpublishStrategyResponse is the unpublished listing.
+message UnpublishStrategyResponse {
+  // The listing, as the author's strategy shows it: HIDDEN.
+  StrategyListing listing = 1;
+}
+
+// ListCommunityStrategiesRequest lists the public community listings.
+message ListCommunityStrategiesRequest {
+  // Only listings with any of these types. Empty lists every type.
+  repeated StrategyTag tags = 1 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 7
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // Only listings trading any of these markets, each by its symbol, for
+  // example BTC-USDT. Empty lists every market. A name that isn't a symbol
+  // is refused, never matched against no listing.
+  repeated string markets = 2 [
+    (buf.validate.field).repeated = {
+      unique: true
+      max_items: 20
+    },
+    (buf.validate.field).repeated.items.string = {
+      min_len: 1
+      max_len: 32
+      pattern: "^[A-Z0-9]+-[A-Z0-9]+$"
+    }
+  ];
+  // Maximum number of listings to return: default 20, max 100.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 100];
+  // Opaque, keyset-backed and exclusive cursor from a previous response's
+  // next_page_token. It is bound to tags and markets; reuse it only with the
+  // same values.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListCommunityStrategiesResponse returns one page of public community
+// listings.
+message ListCommunityStrategiesResponse {
+  // Listings, most recently published first, then by listing ID,
+  // descending.
+  repeated CommunityStrategySummary strategies = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
+// GetCommunityStrategyRequest reads one public community listing.
+message GetCommunityStrategyRequest {
+  // Public listing ID.
+  fixed64 listing_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetCommunityStrategyResponse is the listing.
+message GetCommunityStrategyResponse {
+  // The listing and its published version.
+  CommunityStrategy strategy = 1;
+}
+
 // StrategiesService writes, tests and proposes the caller's trading bots and
 // reads them. Bots belong to the caller's main account, and each runs on its
 // own subaccount, created when the user deploys it. No call moves money,
@@ -2066,8 +2384,11 @@ message ListBotLogsResponse {
 // save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to
 // propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused
 // (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants
-// the permission. GetStrategyReference and ListStrategyTemplates need no
-// credentials. A session a connected app holds on the user's behalf makes
+// the permission. GetStrategyReference, ListStrategyTemplates,
+// ListCommunityStrategies and GetCommunityStrategy need no credentials.
+// PublishStrategyVersion and UnpublishStrategy take the user's own session:
+// publishing makes a strategy's code public, so only the user does it, on
+// the website. A session a connected app holds on the user's behalf makes
 // the reads with the account:read scope, and creates, saves, renames and
 // deletes strategies, tests versions, proposes deploys and stops bots with
 // strategies:manage; a call outside the session's scopes refuses it
@@ -2265,10 +2586,12 @@ service StrategiesService {
   // DeleteStrategy deletes one strategy of the caller and its revisions. It
   // is refused while the strategy is in use: while a bot deployed from it
   // hasn't stopped, whether deployed from one of its proposals or running
-  // one of its revisions' versions, and while a deploy proposal of it has
-  // neither expired, failed nor been deployed. Deleting never stops a bot. Proposals
-  // of the strategy stay, and show no strategy once it is deleted. A version
-  // only the strategy's revisions kept then expires like any other.
+  // one of its revisions' versions, while a deploy proposal of it has
+  // neither expired, failed nor been deployed, and while its community
+  // listing is public. Deleting never stops a bot. Proposals of the strategy
+  // stay, and show no strategy once it is deleted. Its unpublished listing
+  // stays unpublished, with the versions it published. A version only the
+  // strategy's revisions kept then expires like any other.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
@@ -2285,7 +2608,7 @@ service StrategiesService {
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Delete Strategy"
-      description: "Delete a strategy and its revisions, unless a bot deployed from it is still running or a deploy proposal of it is waiting. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      description: "Delete a strategy and its revisions, unless a bot deployed from it is still running, a deploy proposal of it is waiting or its community listing is public. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -2569,6 +2892,10 @@ service StrategiesService {
   // fails ends the deploy as FAILED, answered as a status, not an error:
   // failure says why and what to do.
   //
+  // Once the bot's limits are set, the call waits up to about 20 seconds for
+  // the exchange to apply the bot's limits, then answers SETTING_ACCESS:
+  // call again.
+  //
   // A deploy that creates a subaccount needs the user's signed
   // authorization: request a challenge with CreateSubaccountChallenge, have
   // the user sign it, and pass it as subaccount_authorization.
@@ -2796,6 +3123,104 @@ service StrategiesService {
       summary: "Stop Bot"
       description: "Stop a bot, handing its open orders to its subaccount or cancelling them. It reads stopping until the stop is reported complete, then stopped. An API key needs STOP_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
+    };
+  }
+
+  // PublishStrategyVersion publishes one version of one of the caller's
+  // strategies as the strategy's community listing, with its title,
+  // description and types: its code, manifest and settings form become
+  // readable by everyone, its settings shown at their defaults. A strategy
+  // has one listing; publishing again shows the new version and makes an
+  // unpublished listing public again. The version must be one of the
+  // strategy's revisions' versions, valid, with every behaviour example
+  // passing. Each publish starts the platform backtest of the version
+  // (CommunityBacktest), whose results the listing shows once it finishes;
+  // a bot that can't be backtested on candles is published without
+  // results. An account has at most 20 public listings and publishes at
+  // most 20 times per UTC day. Publishing shows the author by username.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
+  //   an unknown one; VERSION_NOT_FOUND when no revision of the strategy
+  //   saved the version.
+  // - FAILED_PRECONDITION: VERSION_INVALID; SCENARIOS_FAILING;
+  //   WINDOW_HAS_NO_DATA when the default window holds no market data;
+  //   USERNAME_REQUIRED; LISTING_CAP_REACHED, listing_cap gives the cap;
+  //   PUBLISH_LIMIT_REACHED, retry_after says when the day resets.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original publish stands.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a
+  //   session a connected app holds on the user's behalf.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc PublishStrategyVersion(PublishStrategyVersionRequest) returns (PublishStrategyVersionResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Publish Strategy Version"
+      description: "Publish a version of a strategy as its community listing, with a title, a description and types, and start its platform backtest. Session only."
+      tags: "Strategies Service"
+    };
+  }
+
+  // UnpublishStrategy unpublishes one of the caller's community listings: it
+  // leaves the list, and GetCommunityStrategy answers LISTING_NOT_FOUND. The
+  // author's next publish makes it public again. Copies other users already
+  // made stay theirs. Unpublishing an unpublished listing changes nothing.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: LISTING_NOT_FOUND, for another account's listing as for an
+  //   unknown one.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  // - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a
+  //   session a connected app holds on the user's behalf.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc UnpublishStrategy(UnpublishStrategyRequest) returns (UnpublishStrategyResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Unpublish Strategy"
+      description: "Unpublish one of the caller's community listings. Copies already made stay. Session only."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ListCommunityStrategies lists the public community listings, most
+  // recently published first, optionally only those of some types or
+  // trading some markets.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page token.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  rpc ListCommunityStrategies(ListCommunityStrategiesRequest) returns (ListCommunityStrategiesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Community Strategies"
+      description: "List the public community listings, most recently published first, optionally only those of some types or trading some markets."
+      tags: "Strategies Service"
+      security: [{}]
+    };
+  }
+
+  // GetCommunityStrategy reads one public community listing: its title,
+  // description, types, markets and author, and its published version's
+  // code, manifest, settings form, money rules, flow and platform backtest.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an
+  //   unknown one.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
+  rpc GetCommunityStrategy(GetCommunityStrategyRequest) returns (GetCommunityStrategyResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.public) = true;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Community Strategy"
+      description: "Read a public community listing with its published version's code, manifest, settings form, flow and platform backtest."
+      tags: "Strategies Service"
+      security: [{}]
     };
   }
 }

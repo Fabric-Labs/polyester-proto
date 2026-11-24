@@ -81,6 +81,25 @@ message Sparkline {
   repeated int64 close_ticks = 2;
 }
 
+// RollingWindowStats summarizes executed trade prices over one rolling window
+// that ends now. Like the rolling 24h stats, a window has minute granularity:
+// it starts at the start of the minute that contains the time one window
+// length ago. All prices are in quote units scaled by 1e9 and come from
+// executed trades, never from the index price.
+message RollingWindowStats {
+  // Price at the start of the window: the last trade price before the
+  // window's first minute or, for a market that first traded later, its
+  // first trade.
+  int64 open_ticks = 1;
+  // Highest price in the window, counting the open and every trade.
+  int64 high_ticks = 2;
+  // Lowest price in the window, counting the open and every trade.
+  int64 low_ticks = 3;
+  // Change from the open to the last price in basis points (bp), truncated
+  // toward zero. Example: +123 = +1.23%.
+  int32 change_bps = 4;
+}
+
 message MarketOverview {
   // Numeric spot market identifier.
   uint32 symbol_id = 1;
@@ -93,16 +112,61 @@ message MarketOverview {
   // Rolling 24h change expressed in basis points (bp). Example: +123 = +1.23%.
   // Measured from the 24h open to the last price, at minute granularity: the
   // 24h open is the price at the start of the minute that contains the time
-  // 24h ago or, for a market that first traded later, its first trade. 0 when
-  // the market has no trade yet (its last trade timestamp is 0 too) and until
-  // its first minute of trading has ended.
+  // 24h ago or, for a market that first traded later, its first trade. 0 while
+  // the 24h open is unavailable (open_24h_ticks is 0 then): the market has no
+  // trade yet (its last trade timestamp is 0 too), its first trade is a few
+  // seconds old, or its trade history is temporarily unavailable.
   int32 change_24h_bps = 5;
 
-  // Rolling 24h stats.
-  // Highest traded price in the 24h window, in quote units scaled by 1e9.
+  // Rolling 24h stats. The 24h window starts at the start of the minute that
+  // contains the time 24h ago and ends now; its prices, volumes and trade
+  // count cover the same window.
+  // Highest price in the 24h window, counting its open and every trade, in
+  // quote units scaled by 1e9.
   int64 high_24h_ticks = 6;
-  // Lowest traded price in the 24h window, in quote units scaled by 1e9.
+  // Lowest price in the 24h window, counting its open and every trade, in
+  // quote units scaled by 1e9.
   int64 low_24h_ticks = 7;
+  // The 24h open that change_24h_bps is measured from, in quote units scaled
+  // by 1e9. 0 while the open is unavailable, including when history is
+  // temporarily unavailable: the market has no trade yet, its first trade is a
+  // few seconds old, or its trade history cannot be read for a while.
+  int64 open_24h_ticks = 22;
+  // Number of trades executed in the 24h window.
+  uint64 trade_count_24h = 24;
+  // 24h volume-weighted average trade price in quote units scaled by 1e9,
+  // rounded down: the exact 24h quote notional divided by the 24h base volume.
+  // The notional is not rounded to the quote scale, so dividing the displayed
+  // volume_24h_quote_scaled by volume_24h_base_scaled can differ slightly;
+  // clients cannot reproduce this value from the displayed volumes. The base
+  // volume is exact when the base asset's market_data_volume_scale equals its
+  // quantity_scale in GetSpotConfig. Otherwise each second with trades rounds
+  // its base volume to the volume scale, by at most half of one volume unit,
+  // so the base volume can be off by that much per second with trades and the
+  // price error shrinks as the total base volume grows. Omitted when the
+  // window has no base volume or the 24h base volume is omitted.
+  optional int64 vwap_24h_ticks = 25;
+
+  // Price at the start of the current UTC day (00:00 UTC), in quote units
+  // scaled by 1e9: the last trade price before the day's first minute or, for
+  // a market that first traded later that day, its first trade. Change since
+  // the day open is last_price_ticks against this price. 0 while the open is
+  // unavailable, including when history is temporarily unavailable: the
+  // market has no trade yet, a new day's first price is still being recorded
+  // (a few seconds after 00:00 UTC), or its trade history cannot be read for a
+  // while.
+  int64 open_utc_day_ticks = 23;
+
+  // Rolling 1h stats, over the same minute-granular window as the 24h stats.
+  // Absent while the window's open is unavailable, including when history is
+  // temporarily unavailable: the market has no trade yet, its first trade is
+  // a few seconds old, or the window's trade history cannot be read for a
+  // while. Later fields may add volumes per window.
+  RollingWindowStats stats_1h = 19;
+  // Rolling 4h stats. Absent under the same conditions as stats_1h.
+  RollingWindowStats stats_4h = 20;
+  // Rolling 7-day stats. Absent under the same conditions as stats_1h.
+  RollingWindowStats stats_7d = 21;
   // Rolling 24h base volume scaled by the base asset's
   // market_data_volume_scale from GetSpotConfig. Omitted if the amount exceeds
   // the signed 64-bit range.
@@ -149,6 +213,65 @@ message MarketOverview {
   marketdata.v1.LivePriceBand price_band = 18;
 }
 
+// PriceTicksRange bounds a price in quote units scaled by 1e9. Both bounds
+// are inclusive; an omitted bound leaves that side unbounded.
+message PriceTicksRange {
+  // The minimum may not exceed the maximum.
+  option (buf.validate.message).cel = {
+    id: "price_ticks_range.ordered"
+    message: "min_ticks must not exceed max_ticks"
+    expression: "!has(this.min_ticks) || !has(this.max_ticks) || this.min_ticks <= this.max_ticks"
+  };
+  // Lowest matching price, inclusive, in quote units scaled by 1e9; at least
+  // 0. Omit for no lower bound.
+  optional int64 min_ticks = 1 [(buf.validate.field).int64.gte = 0];
+  // Highest matching price, inclusive, in quote units scaled by 1e9; at least
+  // 0. Omit for no upper bound.
+  optional int64 max_ticks = 2 [(buf.validate.field).int64.gte = 0];
+}
+
+// BpsRange bounds a signed change in basis points (bp). Both bounds are
+// inclusive; an omitted bound leaves that side unbounded.
+message BpsRange {
+  // The minimum may not exceed the maximum.
+  option (buf.validate.message).cel = {
+    id: "bps_range.ordered"
+    message: "min_bps must not exceed max_bps"
+    expression: "!has(this.min_bps) || !has(this.max_bps) || this.min_bps <= this.max_bps"
+  };
+  // Lowest matching change, inclusive, in basis points; may be negative.
+  // Example: -500 = -5%. Omit for no lower bound.
+  optional int32 min_bps = 1;
+  // Highest matching change, inclusive, in basis points; may be negative.
+  // Example: 1000 = +10%. Omit for no upper bound.
+  optional int32 max_bps = 2;
+}
+
+// UsdVolumeRange bounds a USD volume scaled by 1e6 (one unit is 0.000001
+// USD). Both bounds are inclusive; an omitted bound leaves that side
+// unbounded.
+message UsdVolumeRange {
+  // The minimum may not exceed the maximum.
+  option (buf.validate.message).cel = {
+    id: "usd_volume_range.ordered"
+    message: "min_usd_scaled must not exceed max_usd_scaled"
+    expression: "!has(this.min_usd_scaled) || !has(this.max_usd_scaled) || this.min_usd_scaled <= this.max_usd_scaled"
+  };
+  // Lowest matching USD volume, inclusive, scaled by 1e6; at least 0. Omit
+  // for no lower bound.
+  optional int64 min_usd_scaled = 1 [(buf.validate.field).int64.gte = 0];
+  // Highest matching USD volume, inclusive, scaled by 1e6; at least 0. Omit
+  // for no upper bound.
+  optional int64 max_usd_scaled = 2 [(buf.validate.field).int64.gte = 0];
+}
+
+// ListMarketOverviewRequest lists market overview rows. The symbol_id
+// filter and the range filters combine: a market is returned only when it
+// matches every filter given. Filters apply before sorting and paging.
+// A range whose minimum exceeds its maximum is refused as invalid, with a
+// violation on the range field (last_price, change_24h or volume_24h); a
+// negative price or volume bound is refused with a violation on the bound
+// itself, such as last_price.max_ticks.
 message ListMarketOverviewRequest {
   // Filter by stable numeric pair IDs from GetSpotConfig. When empty, returns
   // every configured market, including disabled ones. An ID that names no
@@ -166,8 +289,14 @@ message ListMarketOverviewRequest {
   // is 2000.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 2000];
   // Opaque keyset cursor from a previous response. The cursor is exclusive and
-  // bound to symbol IDs, sort key, and sort direction. Sparkline options
-  // affect only response enrichment and may change between pages.
+  // bound to symbol IDs, the range filters, sort key, and sort direction:
+  // reuse it with the same filters. A cursor reused with other filters or
+  // another sort is refused as invalid; request the first page again.
+  // Sparkline options affect only response enrichment and may change between
+  // pages. Each page is cut from current values, so a market whose sort value
+  // or range membership changes between pages can appear twice or not at all
+  // across them. For a consistent list, request a single page with the
+  // maximum limit.
   string page_token = 3 [(buf.validate.field).string.max_len = 512];
 
   // Sort key. When unset/UNSPECIFIED, defaults to descending 24h USD volume.
@@ -180,6 +309,19 @@ message ListMarketOverviewRequest {
   // Which sparklines to include. If empty and include_sparklines is true,
   // server defaults to 24h.
   repeated SparklineInterval sparkline_intervals = 7 [(buf.validate.field).repeated.items.enum.defined_only = true];
+
+  // Only markets whose last_price_ticks is within this range. When a bound is
+  // set, a market with no trade yet never matches. Omit for no price filter.
+  PriceTicksRange last_price = 8;
+  // Only markets whose signed change_24h_bps is within this range; sorting by
+  // ORDER_BY_CHANGE_24H_BPS still uses the absolute change. When a bound is
+  // set, a market whose 24h change has no open (open_24h_ticks is 0) never
+  // matches. Omit for no change filter.
+  BpsRange change_24h = 9;
+  // Only markets whose volume_24h_usd_scaled is within this range. When a
+  // bound is set, a market whose USD volume is omitted never matches. Omit
+  // for no volume filter.
+  UsdVolumeRange volume_24h = 10;
 }
 
 message ListMarketOverviewResponse {
@@ -366,7 +508,8 @@ service MarketOverviewService {
       summary: "List Market Overviews"
       description:
         "List ticker-style market overview rows with optional sparklines. "
-        "Supports symbol filtering, sorting, and pagination controls."
+        "Supports symbol filtering, last price, 24h change and 24h USD "
+        "volume range filters, sorting, and pagination controls."
       tags: "Market Overview Service"
     };
   }

@@ -8,6 +8,11 @@
             "additionalProperties": false,
             "description": "The latest version; unset when the account never had a rule.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -103,6 +108,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -172,11 +184,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -198,6 +212,180 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "conversions": {
+                  "description": "Conversions into the rule's payout asset, ordered by source_asset_id; empty for an in-kind rule.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "description": "Amount the conversion spends, as a decimal string in whole units of the source asset.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "executedAmount": {
+                        "description": "Source asset spent, settled, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "execution": {
+                        "additionalProperties": false,
+                        "description": "Market or TWAP; unset when the asset was not converted.",
+                        "properties": {
+                          "market": {
+                            "additionalProperties": false,
+                            "description": "Execute immediately.",
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "twap": {
+                            "additionalProperties": false,
+                            "description": "Execute in equal time slices.",
+                            "properties": {
+                              "durationMs": {
+                                "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                                "pattern": "^[0-9]+$",
+                                "type": "string"
+                              },
+                              "sliceIntervalMs": {
+                                "description": "Interval between slices in milliseconds, from 10000 (10 seconds) up to duration_ms. The slice count is duration_ms / slice_interval_ms, rounded up.",
+                                "pattern": "^[0-9]+$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "durationMs",
+                              "sliceIntervalMs"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [],
+                        "type": "object"
+                      },
+                      "isTerminal": {
+                        "description": "Whether the conversion is over: its Swap is terminal, or it was skipped.",
+                        "type": "boolean"
+                      },
+                      "legs": {
+                        "description": "Per-leg spent, received and fee.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fee": {
+                              "description": "Fee the leg paid in the asset it received, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "feeAssetId": {
+                              "description": "Asset the leg's fee was charged in: the asset it received.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "leg": {
+                              "description": "Route leg: 0, or 1 for a route's second leg.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "received": {
+                              "description": "Asset the leg received after its fee, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "side": {
+                              "allOf": [
+                                {
+                                  "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.Side"
+                                }
+                              ],
+                              "description": "Whether the leg bought or sold the market's base asset."
+                            },
+                            "spent": {
+                              "description": "Asset the leg spent, as a decimal string in whole units.",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                              "type": "string"
+                            },
+                            "symbolId": {
+                              "description": "Spot market the leg traded on.",
+                              "format": "int64",
+                              "maximum": 4294967295,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "fee",
+                            "feeAssetId",
+                            "leg",
+                            "received",
+                            "side",
+                            "spent",
+                            "symbolId"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "reason": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.SwapReason"
+                          }
+                        ],
+                        "description": "Why a terminal Swap did not trade its whole amount; absent when it did or when the asset was not converted."
+                      },
+                      "receivedAmount": {
+                        "description": "Payout asset received after fees, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      },
+                      "skipReason": {
+                        "description": "Why the asset was not converted (route_unsupported, below_minimum, above_maximum, conversion_unavailable, price_unavailable, conversion_refused, rule_superseded or policy_denied); empty otherwise. Its balance stays on the account.",
+                        "type": "string"
+                      },
+                      "sourceAssetId": {
+                        "description": "Ledger asset converted.",
+                        "format": "int64",
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "status": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/polyester.rest.enum.swap.v1.SwapStatus"
+                          }
+                        ],
+                        "description": "Where the Swap stands; absent when the asset was not converted (skipReason says why)."
+                      },
+                      "swapId": {
+                        "description": "The Swap that converts the asset; absent when the asset was not converted.",
+                        "pattern": "^[0-9]+$",
+                        "type": "string"
+                      },
+                      "unspentAmount": {
+                        "description": "Source asset left on the account, as a decimal string in whole units.",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "executedAmount",
+                      "isTerminal",
+                      "receivedAmount",
+                      "skipReason",
+                      "sourceAssetId",
+                      "unspentAmount"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "createdAt": {
                   "description": "When the run started.",
                   "format": "date-time",
@@ -278,7 +466,7 @@
                         "type": "string"
                       },
                       "reason": {
-                        "description": "Machine-readable reason for a skipped or failed step, such as below_minimum, price_unavailable (the rule has a USD minimum and no current price valued the asset; the funds stay for a later run), rule_superseded, destination_not_whitelisted, destination_cooling_down (a broker vault's destination added to its external withdraw whitelist less than 24 hours ago; the funds stay for a later run), route_suspended (withdrawals of the asset to the destination network are suspended, as its withdrawal_status SUSPENDED in the deposit and withdraw config shows; the funds stay for a later run), supply_unavailable (the destination route's supply_status in the deposit and withdraw config is MISSING or STALE; the funds stay for a later run), authority_revoked, gateway_capacity_insufficient (the funds stay for a later run), withdrawal_released or withdrawal_failed; empty otherwise.",
+                        "description": "Machine-readable reason for a skipped or failed step, such as below_minimum, price_unavailable (the rule has a USD minimum and no current price valued the asset; the funds stay for a later run), rule_superseded, destination_not_whitelisted, destination_cooling_down (a broker vault's destination added to its external withdraw whitelist less than 24 hours ago; the funds stay for a later run), route_suspended (withdrawals of the asset to the destination network are suspended, as its withdrawal_status SUSPENDED in the deposit and withdraw config shows; the funds stay for a later run), supply_unavailable (the destination route's supply_status in the deposit and withdraw config is MISSING or STALE; the funds stay for a later run), authority_revoked, gateway_capacity_insufficient (the funds stay for a later run), withdrawals_disabled (the environment does not allow withdrawals; the funds stay on the account), withdrawal_released or withdrawal_failed; empty otherwise.",
                         "type": "string"
                       },
                       "state": {
@@ -355,6 +543,84 @@
                   "pattern": "^[0-9]+(\\.[0-9]+)?$",
                   "type": "string"
                 },
+                "conversion": {
+                  "additionalProperties": false,
+                  "description": "Set on an asset the rule converts into its payout asset: what converting its whole available balance is quoted to deliver now. Such an asset pays nothing in kind (payable_e18 zero); its hold_reason is converts, or why it would stay on the account.",
+                  "properties": {
+                    "execution": {
+                      "additionalProperties": false,
+                      "description": "How the run would execute the conversion: market, or TWAP over the rule's conversion duration when its USD value exceeds 10,000 or its price impact exceeds 0.5%. A TWAP whose slices would fall below the route's minimum runs in fewer, longer slices, never fewer than two; otherwise the asset is skipped with below_minimum.",
+                      "properties": {
+                        "market": {
+                          "additionalProperties": false,
+                          "description": "Execute immediately.",
+                          "properties": {},
+                          "required": [],
+                          "type": "object"
+                        },
+                        "twap": {
+                          "additionalProperties": false,
+                          "description": "Execute in equal time slices.",
+                          "properties": {
+                            "durationMs": {
+                              "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                              "pattern": "^[0-9]+$",
+                              "type": "string"
+                            },
+                            "sliceIntervalMs": {
+                              "description": "Interval between slices in milliseconds, from 10000 (10 seconds) up to duration_ms. The slice count is duration_ms / slice_interval_ms, rounded up.",
+                              "pattern": "^[0-9]+$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "durationMs",
+                            "sliceIntervalMs"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "expectedAmountOut": {
+                      "description": "Expected payout asset after every leg's fee, as a decimal string in whole units, estimated from the whole amount at the current book depth; a TWAP's slices execute at the prices of their own time.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "minAmountOut": {
+                      "description": "Least payout asset the conversion accepts, as a decimal string in whole units: the expected amount less the 1% slippage protection, estimated the same way.",
+                      "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                      "type": "string"
+                    },
+                    "payoutAssetId": {
+                      "description": "Payout asset the conversion delivers.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "priceImpactBps": {
+                      "description": "Quoted price impact of the whole amount, in basis points.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "skipReason": {
+                      "description": "Why the asset would not be converted now (route_unsupported, below_minimum, above_maximum, conversion_unavailable, price_unavailable); empty when it would. Its balance stays on the account.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expectedAmountOut",
+                    "minAmountOut",
+                    "payoutAssetId",
+                    "priceImpactBps",
+                    "skipReason"
+                  ],
+                  "type": "object"
+                },
                 "destinationAddress": {
                   "description": "Canonical destination address; absent when the rule has no destination for the asset.",
                   "type": "string"
@@ -370,7 +636,7 @@
                   "type": "string"
                 },
                 "holdReason": {
-                  "description": "Why held_back_e18 stays, or why nothing pays: below_minimum (below minimum_e18 or the rule's min_usd_value_e18), price_unavailable (the rule has a USD minimum and no current price values the asset), no_destination (the rule pays no destination for the asset), destination_cooling_down (a broker vault pays a destination only once it has been on the vault's external withdraw whitelist for 24 hours; see payable_from), above_max (the balance above max_amount_e18 stays) or dust (less than one whole on-chain unit stays); empty when the whole balance pays.",
+                  "description": "Why held_back_e18 stays, or why nothing pays: below_minimum (below minimum_e18 or the rule's min_usd_value_e18), price_unavailable (the rule has a USD minimum and no current price values the asset), no_destination (the rule pays no destination for the asset), destination_cooling_down (a broker vault pays a destination only once it has been on the vault's external withdraw whitelist for 24 hours; see payable_from), above_max (the balance above max_amount_e18 stays), dust (less than one whole on-chain unit stays) or, on a rule with a payout asset, converts (the asset is converted into the payout asset instead; see conversion) or why it would not be converted (see conversion.skip_reason); empty when the whole balance pays.",
                   "type": "string"
                 },
                 "minimum": {
@@ -490,6 +756,11 @@
       "polyester.rest.AutoWithdrawService_SetAutoWithdrawRule.Request": {
         "additionalProperties": false,
         "properties": {
+          "conversionTwapDurationMs": {
+            "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string from '60000' to '3600000'; omit or '0' for 300000.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
           "destinations": {
             "description": "Destinations, one per asset, 1 to 32.",
             "items": {
@@ -544,6 +815,13 @@
             "description": "Least USD value one payout pays, as a decimal string in whole USD, for example '25'; omit or '0' for no USD minimum.",
             "pattern": "^[0-9]+(\\.[0-9]+)?$",
             "type": "string"
+          },
+          "payoutAssetId": {
+            "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset. Creating or resuming a rule with a payout asset also needs the permission to swap on the account; on a broker vault that is the permission to manage its payouts (the Owner and Finance roles). Pausing it does not, and a run whose author lost it leaves the assets in kind (policy_denied).",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "schedule": {
             "additionalProperties": false,
@@ -615,6 +893,11 @@
             "additionalProperties": false,
             "description": "The created version.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -710,6 +993,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -779,11 +1069,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -825,6 +1117,11 @@
             "additionalProperties": false,
             "description": "The created version, or the latest version unchanged when the rule was already in the requested state.",
             "properties": {
+              "conversionTwapDurationMs": {
+                "description": "Duration of a conversion that runs as TWAP, in milliseconds, as a decimal string; '0' when the rule pays in kind.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
               "createdAt": {
                 "description": "When this version was created.",
                 "format": "date-time",
@@ -920,6 +1217,13 @@
                 ],
                 "type": "object"
               },
+              "payoutAssetId": {
+                "description": "Ledger asset every other asset with a balance is converted into, through a Swap placed from the account, before the run pays it; zero pays every asset in kind. When set, destinations has exactly one entry, for this asset.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
               "schedule": {
                 "additionalProperties": false,
                 "description": "When the rule runs.",
@@ -989,11 +1293,13 @@
               }
             },
             "required": [
+              "conversionTwapDurationMs",
               "createdAt",
               "createdByAccountId",
               "destinations",
               "enabled",
               "minUsdValue",
+              "payoutAssetId",
               "schedule",
               "version"
             ],
@@ -1044,11 +1350,13 @@
           "COMPLETED",
           "PARTIALLY_FAILED",
           "FAILED",
-          "SKIPPED"
+          "SKIPPED",
+          "CONVERTING"
         ],
         "type": "string",
         "x-poly-enum-descriptions": {
           "COMPLETED": "Every payout completed or was skipped, and at least one paid.",
+          "CONVERTING": "The run's conversions into the payout asset are executing; payouts start once every conversion is final and settled.",
           "FAILED": "Every attempted payout failed. Each failed step says where its funds are (FAILED).",
           "PARTIALLY_FAILED": "Some payouts failed. Each failed step says where its funds are (FAILED).",
           "PAYING": "The run's payouts are in progress.",
@@ -1094,6 +1402,61 @@
           "THURSDAY": "Thursday.",
           "TUESDAY": "Tuesday.",
           "WEDNESDAY": "Wednesday."
+        }
+      },
+      "polyester.rest.enum.swap.v1.Side": {
+        "enum": [
+          "BUY",
+          "SELL"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "BUY": "Buy the market's base asset with its quote asset.",
+          "SELL": "Sell the market's base asset for its quote asset."
+        }
+      },
+      "polyester.rest.enum.swap.v1.SwapReason": {
+        "enum": [
+          "INSUFFICIENT_BALANCE",
+          "PRICE_PROTECTION",
+          "MARKET_UNAVAILABLE",
+          "ORDER_SIZE_OUT_OF_RANGE",
+          "RATE_LIMITED",
+          "ORDER_REJECTED",
+          "EXPIRED",
+          "MINIMUM_NOT_MET",
+          "MAX_ORDER_QUANTITY",
+          "INTERMEDIATE_BELOW_MINIMUM"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "EXPIRED": "The execution window ended before the order could be placed, or a TWAP's deadline ended it with slots left untraded.",
+          "INSUFFICIENT_BALANCE": "The Trading balance did not cover the amount when the order was placed.",
+          "INTERMEDIATE_BELOW_MINIMUM": "On a two-leg route, intermediate asset below the second market's minimum order, with later slices' intermediate added where a TWAP had slices left, stays on the account, unconverted (intermediate_remainder_e18).",
+          "MARKET_UNAVAILABLE": "The market was closed, halted, restricted or without liquidity.",
+          "MAX_ORDER_QUANTITY": "The order bought the market's maximum order quantity and stopped there; the rest of the amount stays on the account, unspent. The market's depth or maximum changed after the quote, which never quotes past it.",
+          "MINIMUM_NOT_MET": "A fill netted less than the accepted minimum rate. The Swap failed closed: the amounts show exactly what was traded and received.",
+          "ORDER_REJECTED": "The order was refused, for example by the sub-account's trading policy.",
+          "ORDER_SIZE_OUT_OF_RANGE": "The order was outside the market's size limits.",
+          "PRICE_PROTECTION": "The order books could not fill the rest at a price that meets min_amount_out.",
+          "RATE_LIMITED": "The account's order rate limit was reached."
+        }
+      },
+      "polyester.rest.enum.swap.v1.SwapStatus": {
+        "enum": [
+          "EXECUTING",
+          "COMPLETED",
+          "PARTIALLY_COMPLETED",
+          "FAILED",
+          "RECONCILING"
+        ],
+        "type": "string",
+        "x-poly-enum-descriptions": {
+          "COMPLETED": "The whole amount was traded and settled (a remainder smaller than one order step stays on the account, unspent).",
+          "EXECUTING": "The Swap is accepted and its orders are being placed, filled or settled.",
+          "FAILED": "Nothing was traded and the whole amount stays on the account, or, with reason MINIMUM_NOT_MET, a fill netted less than the accepted minimum rate; reason says why, and the amounts show what was traded.",
+          "PARTIALLY_COMPLETED": "Part of the amount was traded and settled; the rest stays on the account, unspent. reason says why.",
+          "RECONCILING": "An order's outcome is being established. Balances already reflect any settled fill; the Swap stays here until the outcome is confirmed."
         }
       }
     },
@@ -1161,6 +1524,16 @@
                     {
                       "assetId": 100,
                       "available": "18.446744073709551617",
+                      "conversion": {
+                        "execution": {
+                          "market": {}
+                        },
+                        "expectedAmountOut": "18.446744073709551617",
+                        "minAmountOut": "18.446744073709551617",
+                        "payoutAssetId": 100,
+                        "priceImpactBps": 1,
+                        "skipReason": "value"
+                      },
                       "destinationAddress": "0x3333333333333333333333333333333333333333",
                       "destinationChainId": "1",
                       "heldBack": "18.446744073709551617",
@@ -1243,6 +1616,7 @@
               "application/json": {
                 "example": {
                   "rule": {
+                    "conversionTwapDurationMs": "1",
                     "createdAt": "2025-01-01T00:00:00Z",
                     "createdByAccountId": "4Rh4iXdT",
                     "destinations": [
@@ -1262,6 +1636,7 @@
                       "pausedAt": "2025-01-01T00:00:00Z",
                       "reason": "value"
                     },
+                    "payoutAssetId": 100,
                     "schedule": {
                       "anchorDate": "",
                       "cadence": "DAILY",
@@ -1315,6 +1690,7 @@
           "content": {
             "application/json": {
               "example": {
+                "conversionTwapDurationMs": "60000",
                 "destinations": [
                   {
                     "assetId": 100,
@@ -1326,6 +1702,7 @@
                 ],
                 "expectedVersion": 1,
                 "minUsdValue": "18.446744073709551617",
+                "payoutAssetId": 100,
                 "schedule": {
                   "anchorDate": "",
                   "cadence": "DAILY",
@@ -1349,6 +1726,7 @@
               "application/json": {
                 "example": {
                   "rule": {
+                    "conversionTwapDurationMs": "1",
                     "createdAt": "2025-01-01T00:00:00Z",
                     "createdByAccountId": "4Rh4iXdT",
                     "destinations": [
@@ -1368,6 +1746,7 @@
                       "pausedAt": "2025-01-01T00:00:00Z",
                       "reason": "value"
                     },
+                    "payoutAssetId": 100,
                     "schedule": {
                       "anchorDate": "",
                       "cadence": "DAILY",
@@ -1434,6 +1813,7 @@
               "application/json": {
                 "example": {
                   "rule": {
+                    "conversionTwapDurationMs": "1",
                     "createdAt": "2025-01-01T00:00:00Z",
                     "createdByAccountId": "4Rh4iXdT",
                     "destinations": [
@@ -1453,6 +1833,7 @@
                       "pausedAt": "2025-01-01T00:00:00Z",
                       "reason": "value"
                     },
+                    "payoutAssetId": 100,
                     "schedule": {
                       "anchorDate": "",
                       "cadence": "DAILY",
@@ -1542,6 +1923,34 @@
                   "nextPageToken": "eyJvZmZzZXQiOjIwMH0",
                   "runs": [
                     {
+                      "conversions": [
+                        {
+                          "amount": "18.446744073709551617",
+                          "executedAmount": "18.446744073709551617",
+                          "execution": {
+                            "market": {}
+                          },
+                          "isTerminal": false,
+                          "legs": [
+                            {
+                              "fee": "18.446744073709551617",
+                              "feeAssetId": 100,
+                              "leg": 1,
+                              "received": "18.446744073709551617",
+                              "side": "BUY",
+                              "spent": "18.446744073709551617",
+                              "symbolId": 1
+                            }
+                          ],
+                          "reason": "INSUFFICIENT_BALANCE",
+                          "receivedAmount": "18.446744073709551617",
+                          "skipReason": "value",
+                          "sourceAssetId": 100,
+                          "status": "EXECUTING",
+                          "swapId": "1",
+                          "unspentAmount": "18.446744073709551617"
+                        }
+                      ],
                       "createdAt": "2025-01-01T00:00:00Z",
                       "finishedAt": "2025-01-01T00:00:00Z",
                       "reason": "value",
