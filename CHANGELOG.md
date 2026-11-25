@@ -3,6 +3,19 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-25 — develop-20261125T131445Z
+
+0.93.11: Swap cancel and listing, order controls, read-model and reference updates.
+
+- [2026-11-23T0028Z-orders-v1](changes/2026-11-23T0028Z-orders-v1.md): changed `orders.v1.OrdersService`.
+- [2026-11-23T0626Z-orders-v1](changes/2026-11-23T0626Z-orders-v1.md): changed `orders.v1.OrdersService`, `triggers.v1.TriggersService`.
+- [2026-11-24T0725Z-transfer-v1](changes/2026-11-24T0725Z-transfer-v1.md): added `transfer.v1.InternalTransferService`.
+- [2026-11-24T0811Z-swap-v1](changes/2026-11-24T0811Z-swap-v1.md): added `swap.v1.SwapService`, `auth.v1.SubaccountService`. **Breaking.**
+- [2026-11-24T1001Z-swap-v1](changes/2026-11-24T1001Z-swap-v1.md): changed `swap.v1.SwapService`.
+- [2026-11-24T1434Z-swap-v1](changes/2026-11-24T1434Z-swap-v1.md): added `swap.v1.SwapService`.
+- [2026-11-24T2204Z-swap-v1](changes/2026-11-24T2204Z-swap-v1.md): changed `swap.v1.SwapService`.
+- [2026-11-25T0635Z-orders-v1](changes/2026-11-25T0635Z-orders-v1.md): changed `orders.v1.OrdersReadService`, `ai.v1.AssistantService`.
+
 ## 2026-11-24 — develop-20261124T155755Z
 
 two-leg and scheduled swaps, strategy community listings, auto-withdraw payout assets and market overview statistics.

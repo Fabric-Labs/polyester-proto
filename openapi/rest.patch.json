@@ -74,6 +74,10 @@
     "FeeService_GetSpotFeeRates": {
       "responseSchema": "polyester.rest.FeeService_GetSpotFeeRates.Response"
     },
+    "InternalTransferService_AbandonInternalTransferBatch": {
+      "requestSchema": "polyester.rest.InternalTransferService_AbandonInternalTransferBatch.Request",
+      "responseSchema": "polyester.rest.InternalTransferService_AbandonInternalTransferBatch.Response"
+    },
     "InternalTransferService_BatchCreateInternalTransfers": {
       "requestSchema": "polyester.rest.InternalTransferService_BatchCreateInternalTransfers.Request",
       "responseSchema": "polyester.rest.InternalTransferService_BatchCreateInternalTransfers.Response"
@@ -734,7 +738,7 @@
                           "description": "Execute in equal time slices.",
                           "properties": {
                             "durationMs": {
-                              "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                              "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 86400000 (24 hours). The duration starts when execution starts, not when the Swap is created.",
                               "pattern": "^[0-9]+$",
                               "type": "string"
                             },
@@ -1066,7 +1070,7 @@
                         "description": "Execute in equal time slices.",
                         "properties": {
                           "durationMs": {
-                            "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 3600000 (60 minutes). The duration starts when execution starts.",
+                            "description": "Total execution duration in milliseconds, from 60000 (1 minute) to 86400000 (24 hours). The duration starts when execution starts, not when the Swap is created.",
                             "pattern": "^[0-9]+$",
                             "type": "string"
                           },
@@ -4105,6 +4109,139 @@
       },
       "required": [
         "feeRates"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.InternalTransferService_AbandonInternalTransferBatch.Request": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotencyKey": {
+          "description": "Idempotency key the caller sends, or may have sent, to BatchCreateInternalTransfers, scoped to the authenticated caller as that request scopes it: the session's account, or the API key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotencyKey"
+      ],
+      "type": "object"
+    },
+    "polyester.rest.InternalTransferService_AbandonInternalTransferBatch.Response": {
+      "additionalProperties": false,
+      "properties": {
+        "legs": {
+          "description": "One result per leg, in request order; empty for ABANDONED.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Echoed transfer amount as a decimal string in whole units of the asset, trailing zeros trimmed, for example '0.5'.",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              "assetCode": {
+                "description": "Resolved asset code, set once the leg passed its checks.",
+                "type": "string"
+              },
+              "assetId": {
+                "description": "Echoed canonical public unified asset id.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "creditedAtTsNs": {
+                "description": "Credit timestamp in nanoseconds since epoch (server time), set once the leg is credited.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "destination": {
+                "additionalProperties": false,
+                "description": "Server-resolved destination summary, set once the leg passed its checks.",
+                "properties": {
+                  "rootAccountPublicId": {
+                    "description": "Destination root account public id.",
+                    "type": "string"
+                  },
+                  "smartAccountAddress": {
+                    "description": "Destination smart-account address resolved by the server.",
+                    "type": "string"
+                  },
+                  "subaccountPublicId": {
+                    "description": "Destination subaccount public id when the destination targets a subaccount.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "rootAccountPublicId",
+                  "smartAccountAddress",
+                  "subaccountPublicId"
+                ],
+                "type": "object"
+              },
+              "errorCode": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.transfer.v1.ErrorCode"
+                  }
+                ],
+                "description": "Why the leg caused its batch's refusal. Unset for every other leg."
+              },
+              "errorMessage": {
+                "description": "Human-readable description of error_code.",
+                "type": "string"
+              },
+              "flowId": {
+                "description": "Lifecycle flow of the leg, readable by its sender and its recipient with GetAccountFlow. Set once the leg is credited.",
+                "type": "string"
+              },
+              "legIndex": {
+                "description": "Zero-based position of the leg in the request.",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/polyester.rest.enum.transfer.v1.InternalTransferBatchLegStatus"
+                  }
+                ],
+                "description": "State of the leg."
+              },
+              "transferId": {
+                "description": "Stable transfer identifier of the leg, set once the batch is accepted for processing.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "assetCode",
+              "assetId",
+              "legIndex",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "description": "Stable server-owned identifier of the batch; empty for ABANDONED.",
+          "type": "string"
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/polyester.rest.enum.transfer.v1.InternalTransferBatchStatus"
+            }
+          ],
+          "description": "Outcome of the batch, or ABANDONED."
+        }
+      },
+      "required": [
+        "legs",
+        "requestId",
+        "status"
       ],
       "type": "object"
     },
@@ -7867,7 +8004,7 @@
               "description": "Order type. Absent only for the replacement order of a batch item refused when it applied (REJECTED with a batchRequestId), which never existed and carries no order terms: read them from the batch you sent."
             },
             "origQty": {
-              "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'. '0' as a placeholder for the replacement order of a batch item refused when it applied, which carries no order terms: take them from the batch you sent.",
+              "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'. Equals cumQty, so '0' when the order had no fill, on a base-quantity order that self-trade prevention decremented to its end (cancelReason STP_DECREMENT) and on an order that a modify ended at or below its filled quantity (cancelReason QTY_AT_OR_BELOW_FILLED). A quote-sized buy never ends at '0' through STP: with no fill it keeps its original quantity. '0' as a placeholder for the replacement order of a batch item refused when it applied, which carries no order terms: take them from the batch you sent.",
               "pattern": "^[0-9]+(\\.[0-9]+)?$",
               "type": "string"
             },
@@ -8657,7 +8794,7 @@
                 "description": "Order type. Unset for the replacement order of a batch item refused when it applied (REJECTED with batch_request_id set), which never existed and carries no order terms: the client knows them from the batch it sent."
               },
               "origQty": {
-                "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'.",
+                "description": "Current accepted total order quantity, updated by successful modifies, as a decimal string in base asset units, for example '0.001'. Equals cumQty, so '0' when the order had no fill, on a base-quantity order that self-trade prevention decremented to its end (cancelReason STP_DECREMENT) and on an order that a modify ended at or below its filled quantity (cancelReason QTY_AT_OR_BELOW_FILLED). A quote-sized buy never ends at '0' through STP: with no fill it keeps its original quantity.",
                 "pattern": "^[0-9]+(\\.[0-9]+)?$",
                 "type": "string"
               },
@@ -30373,7 +30510,8 @@
         "EXPIRED",
         "MINIMUM_NOT_MET",
         "MAX_ORDER_QUANTITY",
-        "INTERMEDIATE_BELOW_MINIMUM"
+        "INTERMEDIATE_BELOW_MINIMUM",
+        "USER_CANCELED"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -30386,7 +30524,8 @@
         "ORDER_REJECTED": "The order was refused, for example by the sub-account's trading policy.",
         "ORDER_SIZE_OUT_OF_RANGE": "The order was outside the market's size limits.",
         "PRICE_PROTECTION": "The order books could not fill the rest at a price that meets min_amount_out.",
-        "RATE_LIMITED": "The account's order rate limit was reached."
+        "RATE_LIMITED": "The account's order rate limit was reached.",
+        "USER_CANCELED": "The Swap's owner canceled it (CancelSwap) before its whole amount traded."
       }
     },
     "polyester.rest.enum.swap.v1.SwapStatus": {
@@ -30395,15 +30534,19 @@
         "COMPLETED",
         "PARTIALLY_COMPLETED",
         "FAILED",
-        "RECONCILING"
+        "RECONCILING",
+        "CANCELING",
+        "CANCELED"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
+        "CANCELED": "The Swap's owner canceled it (CancelSwap) before its whole amount traded. The amounts show exactly what traded and settled; the unspent amount and any intermediate_remainder_e18 stay on the account. reason is USER_CANCELED.",
+        "CANCELING": "The Swap's owner canceled it (CancelSwap) and the cancel is taking effect: no new slice or first-leg order is sent. An order already sent finishes, and a slice whose first leg traded still sends its second leg. The Swap then becomes terminal: CANCELED, or the outcome it would have had when the cancel came too late to stop anything. This usually takes seconds. While an order's outcome is being confirmed the Swap is RECONCILING instead, and CANCELING again once it is, until it ends.",
         "COMPLETED": "The whole amount was traded and settled (a remainder smaller than one order step stays on the account, unspent).",
         "EXECUTING": "The Swap is accepted and its orders are being placed, filled or settled.",
         "FAILED": "Nothing was traded and the whole amount stays on the account, or, with reason MINIMUM_NOT_MET, a fill netted less than the accepted minimum rate; reason says why, and the amounts show what was traded.",
         "PARTIALLY_COMPLETED": "Part of the amount was traded and settled; the rest stays on the account, unspent. reason says why.",
-        "RECONCILING": "An order's outcome is being established. Balances already reflect any settled fill; the Swap stays here until the outcome is confirmed."
+        "RECONCILING": "An order's outcome is being established. Balances already reflect any settled fill; the Swap stays here until the outcome is confirmed. A canceled Swap shows RECONCILING too while it waits for such an outcome (see CancelSwap)."
       }
     },
     "polyester.rest.enum.transfer.v1.DustAssetEligibility": {
@@ -30478,7 +30621,8 @@
         "DUST_TARGET_UNAVAILABLE",
         "DUST_BALANCE_CHANGED",
         "DUST_CONVERSION_FAILED",
-        "BATCH_TOO_MANY_SOURCES"
+        "BATCH_TOO_MANY_SOURCES",
+        "IDEMPOTENCY_KEY_ABANDONED"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
@@ -30501,6 +30645,7 @@
         "FAILED_PRECONDITION": "A required precondition was not satisfied.",
         "FUNDS_LOCK_CONFLICT": "The funds lock conflicts with an existing or finalized reservation.",
         "IDEMPOTENCY_CONFLICT": "The idempotency key was reused with different request data.",
+        "IDEMPOTENCY_KEY_ABANDONED": "The idempotency key was abandoned with AbandonInternalTransferBatch before any batch was submitted under it. Nothing moved under the key, and nothing ever will: submit the batch under a new idempotency key.",
         "INSUFFICIENT_FUNDS": "The source account does not have enough available Trading balance.",
         "INTERNAL_ERROR": "The request failed because of an unexpected server error.",
         "INVALID_AMOUNT": "The transfer amount is invalid.",
@@ -30538,10 +30683,12 @@
       "enum": [
         "REFUSED",
         "PROCESSING",
-        "ACCEPTED"
+        "ACCEPTED",
+        "ABANDONED"
       ],
       "type": "string",
       "x-poly-enum-descriptions": {
+        "ABANDONED": "The idempotency key was abandoned before any batch was submitted under it (AbandonInternalTransferBatch). This is final: no funds moved under the key, and none ever will; a later batch under it is refused. The answer carries no request ID and no legs.",
         "ACCEPTED": "Every leg is credited to its destination.",
         "PROCESSING": "The outcome is not known yet: the batch completes without the caller, ending accepted or refused. Retry with the same idempotency key to read it.",
         "REFUSED": "Nothing moved, and nothing will under this idempotency key: a leg failed its checks, a source could not cover its legs, or the batch could not complete. Legs that caused it carry their reason; the others are NOT_MOVED without one."
@@ -30658,7 +30805,7 @@
         "CANCELED": "Trigger was canceled.",
         "FAILED": "Trigger became terminal after its next child order could not be admitted.",
         "FIRED": "Trigger fired and may have created a child order.",
-        "FIRE_REFUSED": "A fire of the trigger was refused and the trigger stayed live: an attached take-profit, stop-loss or trailing stop waits for the next price through its trigger price, or, refused because its order would be below the market's minimums, waits until its position changes; a trigger refused for a rate limit or an account repair fires again shortly. An attached take-profit, stop-loss or trailing stop whose order self-trade prevention expired against another of the account's resting orders stays live too (SELF_TRADE_PREVENTED), reported once while that order blocks it. New trades and price updates do not fire it while the other order is first in line at the best price; once that order is gone or no longer first there, it fires again if its trigger condition still holds. Not terminal: the trigger keeps its status. child_seq names the refused attempt, which placed no child order, and fire_refusal_reason says why; the next fire takes the next child_seq. With SELF_TRADE_PREVENTED, child_seq names the expired child order instead, which was placed and canceled by self-trade prevention. A ladder level the order book rejected when it arrived (for example POST_ONLY_CROSS) is reported the same way while the ladder keeps working its other levels: child_seq names that level, whose FIRED came first with its child order, now rejected for that reason, and fire_price_ticks is the level's price. A rejected level that was the ladder's last open level ends the ladder instead and has no FIRE_REFUSED, whatever the end: FAILED, naming the first rejected level, when every level was rejected; CANCELED with USER_REQUEST when no level filled and the user canceled a level (directly, by canceling all orders, or by the dead-man switch); otherwise COMPLETED with no event, whether a level filled or the other levels ended unfilled for another reason, such as expiry or self-trade prevention. Read each level's own child order for its rejection.",
+        "FIRE_REFUSED": "A fire of the trigger was refused and the trigger stayed live: an attached take-profit, stop-loss or trailing stop waits for the next price through its trigger price, or, refused because its order would be below the market's minimums while its parent order is still open, waits until its position grows; a trigger refused for a rate limit or an account repair fires again shortly. An attached take-profit, stop-loss or trailing stop whose order self-trade prevention expired against another of the account's resting orders stays live too (SELF_TRADE_PREVENTED), reported once while that order blocks it. New trades and price updates do not fire it while the other order is first in line at the best price; once that order is gone or no longer first there, it fires again if its trigger condition still holds. Once the parent order has ended, the position can no longer grow: an attached leg whose exit is then below the minimums ends with FAILED and MIN_NOTIONAL or MIN_QUANTITY instead (orders.v1.RiskPolicy). Not terminal: the trigger keeps its status. child_seq names the refused attempt, which placed no child order, and fire_refusal_reason says why; the next fire takes the next child_seq. With SELF_TRADE_PREVENTED, child_seq names the expired child order instead, which was placed and canceled by self-trade prevention. A ladder level the order book rejected when it arrived (for example POST_ONLY_CROSS) is reported the same way while the ladder keeps working its other levels: child_seq names that level, whose FIRED came first with its child order, now rejected for that reason, and fire_price_ticks is the level's price. A rejected level that was the ladder's last open level ends the ladder instead and has no FIRE_REFUSED, whatever the end: FAILED, naming the first rejected level, when every level was rejected; CANCELED with USER_REQUEST when no level filled and the user canceled a level (directly, by canceling all orders, or by the dead-man switch); otherwise COMPLETED with no event, whether a level filled or the other levels ended unfilled for another reason, such as expiry or self-trade prevention. Read each level's own child order for its rejection.",
         "UPDATED": "Trigger configuration or lifecycle state was updated."
       }
     },
@@ -30809,7 +30956,7 @@
         "MAX_OPEN_ORDERS_TOTAL": "The account had its maximum number of open orders.",
         "MAX_QUANTITY": "The child order quantity was above the pair's maximum.",
         "MAX_SLIPPAGE_INVALID": "The maximum slippage could not produce a valid execution price bound.",
-        "MIN_NOTIONAL": "The child order value was below the pair's minimum notional.",
+        "MIN_NOTIONAL": "The child order value was below the pair's minimum notional. An attached take-profit, stop-loss or trailing stop also ends with it, without firing, when its parent order ends with a filled quantity whose exit would be below the minimum order value (orders.v1.RiskPolicy).",
         "MIN_QUANTITY": "The child order quantity was below the pair's minimum quantity.",
         "MISSING_REASON_CODE": "The terminal state did not contain a failure reason.",
         "MODE_NOT_SUPPORTED": "The market does not support a trigger of this shape, including a trailing stop whose child order is not a market order when it fires.",
