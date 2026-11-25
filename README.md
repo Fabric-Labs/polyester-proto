@@ -23,3 +23,7 @@ buf lint
 
 This repository is maintained by Fabric Labs and updated as the public API
 evolves.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE); see also [NOTICE](NOTICE).
