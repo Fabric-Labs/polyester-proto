@@ -158,6 +158,10 @@ enum ErrorCode {
   ERROR_CODE_DUST_CONVERSION_FAILED = 36;
   // The batch debits more distinct source accounts than its limit of 10.
   ERROR_CODE_BATCH_TOO_MANY_SOURCES = 37;
+  // The idempotency key was abandoned with AbandonInternalTransferBatch
+  // before any batch was submitted under it. Nothing moved under the key,
+  // and nothing ever will: submit the batch under a new idempotency key.
+  ERROR_CODE_IDEMPOTENCY_KEY_ABANDONED = 38;
 }
 
 // ErrorDetail is attached to ConnectRPC errors for structured error handling.
@@ -288,6 +292,12 @@ enum InternalTransferBatchStatus {
 
   // Every leg is credited to its destination.
   BATCH_ACCEPTED = 4;
+
+  // The idempotency key was abandoned before any batch was submitted under
+  // it (AbandonInternalTransferBatch). This is final: no funds moved under
+  // the key, and none ever will; a later batch under it is refused. The
+  // answer carries no request ID and no legs.
+  BATCH_ABANDONED = 8;
 }
 
 // InternalTransferBatchLegStatus is the state of one leg of a batch.
@@ -380,6 +390,31 @@ message GetInternalTransferBatchResponse {
   // Outcome of the batch as a whole.
   InternalTransferBatchStatus status = 2;
   // One result per leg, in request order.
+  repeated InternalTransferBatchLegResult legs = 3;
+}
+
+// AbandonInternalTransferBatchRequest names the idempotency key to abandon.
+message AbandonInternalTransferBatchRequest {
+  // Idempotency key the caller sends, or may have sent, to
+  // BatchCreateInternalTransfers, scoped to the authenticated caller as that
+  // request scopes it: the session's account, or the API key.
+  string idempotency_key = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 128,
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+// AbandonInternalTransferBatchResponse is the key's current outcome: the
+// batch submitted under it, as GetInternalTransferBatch reads it by key,
+// which may still be BATCH_PROCESSING, or BATCH_ABANDONED, which is final and
+// guarantees that no funds moved under the key.
+message AbandonInternalTransferBatchResponse {
+  // Stable server-owned identifier of the batch; empty for BATCH_ABANDONED.
+  string request_id = 1;
+  // Outcome of the batch, or BATCH_ABANDONED.
+  InternalTransferBatchStatus status = 2;
+  // One result per leg, in request order; empty for BATCH_ABANDONED.
   repeated InternalTransferBatchLegResult legs = 3;
 }
 
@@ -511,7 +546,8 @@ service InternalTransferService {
   // both: a batch its checks refused reads its refusal, and a caller who may
   // not read one of its sources is refused PERMISSION_DENIED, or UNAVAILABLE
   // while that permission cannot be decided yet (retry). NOT_FOUND means the
-  // caller submitted no batch under that key.
+  // caller submitted no batch under that key. A key the caller abandoned
+  // (AbandonInternalTransferBatch) reads BATCH_ABANDONED.
   //
   // This read does not submit or retry the batch and requires no fresh MFA.
   rpc GetInternalTransferBatch(GetInternalTransferBatchRequest) returns (GetInternalTransferBatchResponse) {
@@ -526,6 +562,40 @@ service InternalTransferService {
         "or by the idempotency key the caller sent it. The caller must be "
         "allowed to read the transfers of every source account of the "
         "batch."
+      tags: "Internal Transfers"
+    };
+  }
+
+  // Make the absence of a batch under an idempotency key final. If a batch
+  // was submitted under the key, this answers its outcome exactly as
+  // GetInternalTransferBatch reads it by key, and changes nothing. Otherwise
+  // it records the key as abandoned and answers BATCH_ABANDONED: no funds
+  // moved under the key and none ever will. Every later
+  // BatchCreateInternalTransfers under it, a retry included, is refused
+  // FAILED_PRECONDITION with ERROR_CODE_IDEMPOTENCY_KEY_ABANDONED, and every
+  // later read or abandon under it answers BATCH_ABANDONED. A create and an
+  // abandon racing on one key end in exactly one of the two outcomes.
+  //
+  // The key is scoped to the caller as BatchCreateInternalTransfers scopes
+  // it: the session's account, or the API key. The caller needs the
+  // INTERNAL_TRANSFER permission, and to answer an existing batch also the
+  // read permission on every source account of the batch, refused as the
+  // read is. It requires no MFA, as it never moves funds, and is charged as
+  // one BatchCreateInternalTransfers admission.
+  rpc AbandonInternalTransferBatch(AbandonInternalTransferBatchRequest) returns (AbandonInternalTransferBatchResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (google.api.http) = {
+      post: "/v1/trading/internal-transfers/batch/abandon"
+      body: "*"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Abandon Internal Transfer Batch"
+      description:
+        "Make the absence of a batch under an idempotency key final: "
+        "answer the batch submitted under the key, or record the key as "
+        "abandoned, after which no batch is ever accepted under it and "
+        "no funds move under it."
       tags: "Internal Transfers"
     };
   }

@@ -1,6 +1,45 @@
 {
   "types": [
     {
+      "name": "swap.v1.CancelSwapRequest",
+      "kind": "message",
+      "doc": "CancelSwapRequest cancels one of the caller's Swaps.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 1,
+            "doc": "Swap ID.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.CancelSwapResponse",
+      "kind": "message",
+      "doc": "CancelSwapResponse is the Swap as the cancel left it.",
+      "message": {
+        "fields": [
+          {
+            "name": "swap",
+            "jsonName": "swap",
+            "number": 1,
+            "doc": "The Swap: CANCELING until what was already placed finishes, or\n RECONCILING while an order's outcome is being confirmed; already\n terminal; or, after the Swap's deadline, unchanged (EXECUTING or\n RECONCILING, without cancel_requested_at).",
+            "protoRef": "swap.v1.Swap"
+          }
+        ]
+      }
+    },
+    {
       "name": "swap.v1.CreateSwapRequest",
       "kind": "message",
       "doc": "CreateSwapRequest creates and executes a Swap.",
@@ -140,6 +179,16 @@
             "name": "DIRECTION_UNSUPPORTED",
             "number": 13,
             "doc": "A market of the route trades its two assets but cannot execute a Swap in\n this direction: a buy there would pay its fee in the asset it spends."
+          },
+          {
+            "name": "SWAP_ALREADY_FINAL",
+            "number": 14,
+            "doc": "The Swap ended before it was canceled; the error carries its swap_id.\n Read it with GetSwap."
+          },
+          {
+            "name": "SWAP_NOT_CANCELABLE",
+            "number": 15,
+            "doc": "The Swap converts an auto-withdraw payout and ends only with its\n auto-withdraw run."
           }
         ]
       }
@@ -161,7 +210,7 @@
             "name": "swap_id",
             "jsonName": "swapId",
             "number": 2,
-            "doc": "IDEMPOTENCY_CONFLICT only: the Swap bound to the idempotency key.",
+            "doc": "IDEMPOTENCY_CONFLICT and SWAP_ALREADY_FINAL only: the Swap bound to the\n idempotency key, or the Swap that ended.",
             "protoScalar": "fixed64",
             "jsonType": "string",
             "format": "fixed64"
@@ -278,6 +327,89 @@
             "number": 1,
             "doc": "The Swap.",
             "protoRef": "swap.v1.Swap"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.ListSwapsRequest",
+      "kind": "message",
+      "doc": "ListSwapsRequest lists the caller's Swaps funded by one account, newest\n first.",
+      "message": {
+        "fields": [
+          {
+            "name": "subaccount_id",
+            "jsonName": "subaccountId",
+            "number": 1,
+            "doc": "Optional sub-account public ID whose Swaps to list. When omitted, the\n Swaps funded by the caller's root account are listed, or those of the\n sub-account an API key is bound to.\n\nPublic ID. ConnectRPC carries it as fixed64 (a decimal string in JSON).",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64",
+            "validate": {
+              "number": {
+                "gt": "0"
+              }
+            }
+          },
+          {
+            "name": "open_only",
+            "jsonName": "openOnly",
+            "number": 2,
+            "doc": "When true, only Swaps that have not ended (is_terminal false) are listed.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "limit",
+            "jsonName": "limit",
+            "number": 3,
+            "doc": "Maximum number of Swaps to return: 0 means 20, at most 50.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32",
+            "validate": {
+              "number": {
+                "lte": "50"
+              }
+            }
+          },
+          {
+            "name": "page_token",
+            "jsonName": "pageToken",
+            "number": 4,
+            "doc": "Opaque, exclusive, keyset-backed cursor from a previous response's\n next_page_token. It is bound to the caller, subaccount_id and open_only,\n and to the newest-first creation order with a stable tie-breaker for\n Swaps created at the same instant; reuse it only with the same values.\n Empty for the first page.",
+            "protoScalar": "string",
+            "jsonType": "string",
+            "validate": {
+              "string": {
+                "maxLen": 256
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.v1.ListSwapsResponse",
+      "kind": "message",
+      "doc": "ListSwapsResponse returns one page of Swaps, newest first.",
+      "message": {
+        "fields": [
+          {
+            "name": "swaps",
+            "jsonName": "swaps",
+            "number": 1,
+            "doc": "Swaps ordered by creation time, newest first, each as GetSwap returns\n it.",
+            "repeated": true,
+            "protoRef": "swap.v1.Swap"
+          },
+          {
+            "name": "next_page_token",
+            "jsonName": "nextPageToken",
+            "number": 2,
+            "doc": "Cursor for the next page. Empty when no more results exist.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -434,14 +566,14 @@
             "name": "reason",
             "jsonName": "reason",
             "number": 9,
-            "doc": "Why the Swap did not trade its whole amount; set with PARTIALLY_COMPLETED\n and FAILED.",
+            "doc": "Why the Swap did not trade its whole amount; set with\n PARTIALLY_COMPLETED, FAILED and CANCELED.",
             "protoRef": "swap.v1.SwapReason"
           },
           {
             "name": "is_terminal",
             "jsonName": "isTerminal",
             "number": 10,
-            "doc": "True once the status is final: COMPLETED, PARTIALLY_COMPLETED or FAILED.",
+            "doc": "True once the status is final: COMPLETED, PARTIALLY_COMPLETED, FAILED or\n CANCELED.",
             "protoScalar": "bool",
             "jsonType": "boolean"
           },
@@ -520,6 +652,15 @@
             "number": 21,
             "doc": "Execution schedule and slices; unset before execution is planned.",
             "protoRef": "swap.v1.SwapProgress"
+          },
+          {
+            "name": "cancel_requested_at",
+            "jsonName": "cancelRequestedAt",
+            "number": 22,
+            "doc": "When the Swap's owner first canceled it (CancelSwap); unset when it was\n never canceled. Set once and never changed. A cancel that came when\n nothing was left to stop leaves the Swap's outcome as it would have been\n (for example COMPLETED), with this set.",
+            "protoRef": "google.protobuf.Timestamp",
+            "jsonType": "string",
+            "format": "date-time"
           }
         ]
       }
@@ -976,6 +1117,11 @@
             "name": "INTERMEDIATE_BELOW_MINIMUM",
             "number": 10,
             "doc": "On a two-leg route, intermediate asset below the second market's minimum\n order, with later slices' intermediate added where a TWAP had slices\n left, stays on the account, unconverted (intermediate_remainder_e18)."
+          },
+          {
+            "name": "USER_CANCELED",
+            "number": 11,
+            "doc": "The Swap's owner canceled it (CancelSwap) before its whole amount\n traded."
           }
         ]
       }
@@ -1111,7 +1257,17 @@
           {
             "name": "RECONCILING",
             "number": 5,
-            "doc": "An order's outcome is being established. Balances already reflect any\n settled fill; the Swap stays here until the outcome is confirmed."
+            "doc": "An order's outcome is being established. Balances already reflect any\n settled fill; the Swap stays here until the outcome is confirmed. A\n canceled Swap shows RECONCILING too while it waits for such an outcome\n (see CancelSwap)."
+          },
+          {
+            "name": "CANCELING",
+            "number": 6,
+            "doc": "The Swap's owner canceled it (CancelSwap) and the cancel is taking\n effect: no new slice or first-leg order is sent. An order already sent\n finishes, and a slice whose first leg traded still sends its second\n leg. The Swap then becomes terminal: CANCELED, or the outcome it would\n have had when the cancel came too late to stop anything. This usually\n takes seconds. While an order's outcome is being confirmed the Swap is\n RECONCILING instead, and CANCELING again once it is, until it ends."
+          },
+          {
+            "name": "CANCELED",
+            "number": 7,
+            "doc": "The Swap's owner canceled it (CancelSwap) before its whole amount\n traded. The amounts show exactly what traded and settled; the unspent\n amount and any intermediate_remainder_e18 stay on the account. reason is\n USER_CANCELED."
           }
         ]
       }
@@ -1201,7 +1357,7 @@
     {
       "name": "swap.v1.TwapExecution",
       "kind": "message",
-      "doc": "TwapExecution spreads the Swap evenly over a duration, one slice per slot.\n Slot k starts k slice intervals after execution starts. Each slice trades\n what is left of the amount over the slots left, and each slice nets at\n least the Swap's minimum rate (min_amount_out_e18 over amount_e18) on what\n it converts, judged slice by slice; slices whose intermediate one later\n second leg converts together (below) are judged together. Each order's\n price limit allows for the taker fee in force when the order can match\n within its window, the highest rate scheduled from when the order is\n prepared until it can last be accepted, some minutes after its sending\n window since a resent copy of it can still be accepted then. An order the\n exchange first accepts after that window (only under severe delay) may pay\n a later scheduled fee, and a slice it takes below the minimum fails the\n Swap closed (MINIMUM_NOT_MET). A slice's first order is sent only within\n its slot: a slot missed is skipped, never sent late. On a two-leg route, a\n slice's second leg is sent once its first leg has settled, at any time\n before the deadline, even after the slice's slot, and the next slice\n starts only once it is over. When no second-leg order can meet the\n protection or the second market's order limits, the slice's intermediate\n asset is added to the next slice's second leg. What a second-leg order\n leaves unfilled, and what is still unconverted when execution ends, stays\n on the account (intermediate_remainder_e18), and the Swap then ends\n PARTIALLY_COMPLETED; a rest smaller than one order step of the second\n market is ordinary residue and the Swap can still end COMPLETED. A TWAP\n needs a larger amount than a market execution, since every slice must be a\n valid order.",
+      "doc": "TwapExecution spreads the Swap evenly over a duration, one slice per slot.\n Slot k starts k slice intervals after execution starts. Each slice trades\n what is left of the amount over the slots left, and each slice nets at\n least the Swap's minimum rate (min_amount_out_e18 over amount_e18) on what\n it converts, judged slice by slice; slices whose intermediate one later\n second leg converts together (below) are judged together. Each order's\n price limit allows for the taker fee in force when the order can match\n within its window, the highest rate scheduled from when the order is\n prepared until it can last be accepted, some minutes after its sending\n window since a delayed order can still be accepted then. An order the\n exchange first accepts after that window (only under severe delay) may pay\n a later scheduled fee, and a slice it takes below the minimum fails the\n Swap closed (MINIMUM_NOT_MET). A slice's first order is sent only within\n its slot: a slot missed is skipped, never sent late. On a two-leg route, a\n slice's second leg is sent once its first leg has settled, at any time\n before the deadline, even after the slice's slot, and the next slice\n starts only once it is over. When no second-leg order can meet the\n protection or the second market's order limits, the slice's intermediate\n asset is added to the next slice's second leg. What a second-leg order\n leaves unfilled, and what is still unconverted when execution ends, stays\n on the account (intermediate_remainder_e18), and the Swap then ends\n PARTIALLY_COMPLETED; a rest smaller than one order step of the second\n market is ordinary residue and the Swap can still end COMPLETED. A TWAP\n needs a larger amount than a market execution, since every slice must be a\n valid order.",
       "message": {
         "cel": [
           {
@@ -1215,14 +1371,14 @@
             "name": "duration_ms",
             "jsonName": "durationMs",
             "number": 1,
-            "doc": "Total execution duration in milliseconds, from 60000 (1 minute) to\n 3600000 (60 minutes). The duration starts when execution starts.",
+            "doc": "Total execution duration in milliseconds, from 60000 (1 minute) to\n 86400000 (24 hours). The duration starts when execution starts, not when\n the Swap is created.",
             "protoScalar": "uint64",
             "jsonType": "string",
             "format": "uint64",
             "validate": {
               "number": {
                 "gte": "60000",
-                "lte": "3600000"
+                "lte": "86400000"
               }
             }
           },

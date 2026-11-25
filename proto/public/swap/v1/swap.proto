@@ -67,7 +67,7 @@ message MarketExecution {}
 // price limit allows for the taker fee in force when the order can match
 // within its window, the highest rate scheduled from when the order is
 // prepared until it can last be accepted, some minutes after its sending
-// window since a resent copy of it can still be accepted then. An order the
+// window since a delayed order can still be accepted then. An order the
 // exchange first accepts after that window (only under severe delay) may pay
 // a later scheduled fee, and a slice it takes below the minimum fails the
 // Swap closed (MINIMUM_NOT_MET). A slice's first order is sent only within
@@ -91,10 +91,11 @@ message TwapExecution {
   };
 
   // Total execution duration in milliseconds, from 60000 (1 minute) to
-  // 3600000 (60 minutes). The duration starts when execution starts.
+  // 86400000 (24 hours). The duration starts when execution starts, not when
+  // the Swap is created.
   uint64 duration_ms = 1 [(buf.validate.field).uint64 = {
     gte: 60000
-    lte: 3600000
+    lte: 86400000
   }];
   // Interval between slices in milliseconds, from 10000 (10 seconds) up to
   // duration_ms. The slice count is duration_ms / slice_interval_ms, rounded
@@ -204,8 +205,23 @@ enum SwapStatus {
   // reason says why, and the amounts show what was traded.
   FAILED = 4;
   // An order's outcome is being established. Balances already reflect any
-  // settled fill; the Swap stays here until the outcome is confirmed.
+  // settled fill; the Swap stays here until the outcome is confirmed. A
+  // canceled Swap shows RECONCILING too while it waits for such an outcome
+  // (see CancelSwap).
   RECONCILING = 5;
+  // The Swap's owner canceled it (CancelSwap) and the cancel is taking
+  // effect: no new slice or first-leg order is sent. An order already sent
+  // finishes, and a slice whose first leg traded still sends its second
+  // leg. The Swap then becomes terminal: CANCELED, or the outcome it would
+  // have had when the cancel came too late to stop anything. This usually
+  // takes seconds. While an order's outcome is being confirmed the Swap is
+  // RECONCILING instead, and CANCELING again once it is, until it ends.
+  CANCELING = 6;
+  // The Swap's owner canceled it (CancelSwap) before its whole amount
+  // traded. The amounts show exactly what traded and settled; the unspent
+  // amount and any intermediate_remainder_e18 stay on the account. reason is
+  // USER_CANCELED.
+  CANCELED = 7;
 }
 
 // SwapReason says why a Swap did not trade its whole amount.
@@ -239,6 +255,9 @@ enum SwapReason {
   // order, with later slices' intermediate added where a TWAP had slices
   // left, stays on the account, unconverted (intermediate_remainder_e18).
   INTERMEDIATE_BELOW_MINIMUM = 10;
+  // The Swap's owner canceled it (CancelSwap) before its whole amount
+  // traded.
+  USER_CANCELED = 11;
 }
 
 // SwapOrderStatus is the state of a Swap's spot order.
@@ -351,6 +370,9 @@ message SwapSlice {
     INSUFFICIENT_LIQUIDITY = 8;
     // The execution ended before this slot was used.
     EXECUTION_ENDED = 9;
+    // The Swap was canceled (CancelSwap) before this slot was used, or before
+    // a later slice could convert this slice's intermediate.
+    CANCELED = 10;
   }
   // Zero-based position in the Swap's frozen schedule.
   uint32 index = 1;
@@ -431,10 +453,11 @@ message Swap {
   polyester.type.v1.U128 min_amount_out_e18 = 7;
   // Current status.
   SwapStatus status = 8;
-  // Why the Swap did not trade its whole amount; set with PARTIALLY_COMPLETED
-  // and FAILED.
+  // Why the Swap did not trade its whole amount; set with
+  // PARTIALLY_COMPLETED, FAILED and CANCELED.
   SwapReason reason = 9;
-  // True once the status is final: COMPLETED, PARTIALLY_COMPLETED or FAILED.
+  // True once the status is final: COMPLETED, PARTIALLY_COMPLETED, FAILED or
+  // CANCELED.
   bool is_terminal = 10;
   // Source amount spent in settled fills, in 18-decimal units.
   polyester.type.v1.U128 executed_amount_e18 = 11;
@@ -460,6 +483,11 @@ message Swap {
   repeated SwapLeg legs = 20;
   // Execution schedule and slices; unset before execution is planned.
   SwapProgress progress = 21;
+  // When the Swap's owner first canceled it (CancelSwap); unset when it was
+  // never canceled. Set once and never changed. A cancel that came when
+  // nothing was left to stop leaves the Swap's outcome as it would have been
+  // (for example COMPLETED), with this set.
+  google.protobuf.Timestamp cancel_requested_at = 22;
 }
 
 // QuoteSwapRequest asks for a quote of terms.
@@ -526,6 +554,52 @@ message GetSwapResponse {
   Swap swap = 1;
 }
 
+// CancelSwapRequest cancels one of the caller's Swaps.
+message CancelSwapRequest {
+  // Swap ID.
+  fixed64 swap_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// CancelSwapResponse is the Swap as the cancel left it.
+message CancelSwapResponse {
+  // The Swap: CANCELING until what was already placed finishes, or
+  // RECONCILING while an order's outcome is being confirmed; already
+  // terminal; or, after the Swap's deadline, unchanged (EXECUTING or
+  // RECONCILING, without cancel_requested_at).
+  Swap swap = 1;
+}
+
+// ListSwapsRequest lists the caller's Swaps funded by one account, newest
+// first.
+message ListSwapsRequest {
+  // Optional sub-account public ID whose Swaps to list. When omitted, the
+  // Swaps funded by the caller's root account are listed, or those of the
+  // sub-account an API key is bound to.
+  fixed64 subaccount_id = 1 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).fixed64.gt = 0
+  ];
+  // When true, only Swaps that have not ended (is_terminal false) are listed.
+  bool open_only = 2;
+  // Maximum number of Swaps to return: 0 means 20, at most 50.
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 50];
+  // Opaque, exclusive, keyset-backed cursor from a previous response's
+  // next_page_token. It is bound to the caller, subaccount_id and open_only,
+  // and to the newest-first creation order with a stable tie-breaker for
+  // Swaps created at the same instant; reuse it only with the same values.
+  // Empty for the first page.
+  string page_token = 4 [(buf.validate.field).string.max_len = 256];
+}
+
+// ListSwapsResponse returns one page of Swaps, newest first.
+message ListSwapsResponse {
+  // Swaps ordered by creation time, newest first, each as GetSwap returns
+  // it.
+  repeated Swap swaps = 1;
+  // Cursor for the next page. Empty when no more results exist.
+  string next_page_token = 2;
+}
+
 // ErrorCode identifies a Swap API error.
 enum ErrorCode {
   // No code.
@@ -563,6 +637,12 @@ enum ErrorCode {
   // A market of the route trades its two assets but cannot execute a Swap in
   // this direction: a buy there would pay its fee in the asset it spends.
   DIRECTION_UNSUPPORTED = 13;
+  // The Swap ended before it was canceled; the error carries its swap_id.
+  // Read it with GetSwap.
+  SWAP_ALREADY_FINAL = 14;
+  // The Swap converts an auto-withdraw payout and ends only with its
+  // auto-withdraw run.
+  SWAP_NOT_CANCELABLE = 15;
 }
 
 // ErrorDetail is attached to Swap errors as an error detail of type
@@ -570,7 +650,8 @@ enum ErrorCode {
 message ErrorDetail {
   // Stable error code.
   ErrorCode code = 1;
-  // IDEMPOTENCY_CONFLICT only: the Swap bound to the idempotency key.
+  // IDEMPOTENCY_CONFLICT and SWAP_ALREADY_FINAL only: the Swap bound to the
+  // idempotency key, or the Swap that ended.
   fixed64 swap_id = 2;
   // AMOUNT_OUT_OF_RANGE only: the smallest amount that currently quotes, in
   // 18-decimal units of the source asset. Guidance, not a guarantee.
@@ -584,7 +665,7 @@ message ErrorDetail {
 
 // SwapService converts one asset of an account's Trading balance into another
 // through Polyester's spot order books, on the direct market or through USDT
-// or USDC, at market or as a TWAP over up to 60 minutes. A Swap
+// or USDC, at market or as a TWAP over up to 24 hours. A Swap
 // executes as immediate-or-cancel spot orders on the account, at the
 // account's spot taker fee on each market and with no other fee, protected by
 // the end-to-end min_amount_out the caller accepts: each order's price limit
@@ -602,7 +683,10 @@ message ErrorDetail {
 // trading policy.
 //
 // Follow a Swap with GetSwap until is_terminal is true; a market Swap usually
-// completes within seconds, a TWAP by its deadline.
+// completes within seconds, a TWAP by its deadline. CancelSwap stops a Swap
+// that has not ended: no further slice starts, and what already traded
+// stays traded. ListSwaps finds an account's Swaps again, those that have
+// not ended among them.
 service SwapService {
   option (polyester.api.docs_group) = "trading";
 
@@ -658,6 +742,8 @@ service SwapService {
   }
 
   // GetSwap returns one of the caller's Swaps by swap_id or idempotency key.
+  // It needs the SWAP permission on the Swap's funding account; the Swaps of
+  // a sub-account that is not active can still be read.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed selector.
@@ -671,6 +757,86 @@ service SwapService {
     option (gnostic.openapi.v3.operation) = {
       summary: "Get Swap"
       description: "Get one Swap by identifier or by idempotency key."
+      tags: "Swap"
+    };
+  }
+
+  // CancelSwap cancels one of the caller's Swaps that has not ended. From
+  // the cancel on, no new slice starts and no further first-leg order is
+  // placed. A first-leg order placed just before the cancel arrives may
+  // still be accepted, once; it is immediate-or-cancel and finishes. A
+  // slice whose first leg traded still sends its second leg for that slice's
+  // own intermediate asset; intermediate asset carried from earlier slices
+  // is not converted and stays on the account. Nothing that traded is
+  // undone. Until that work ends the Swap is CANCELING, or RECONCILING
+  // while an order's outcome is being confirmed (it can move between the
+  // two); it then becomes terminal: CANCELED with reason USER_CANCELED; or,
+  // when the cancel came too late to stop anything, the outcome it would
+  // have had (COMPLETED, PARTIALLY_COMPLETED or FAILED); or FAILED with
+  // MINIMUM_NOT_MET, which still applies to what traded. A cancel usually
+  // takes effect within seconds; confirming an order's outcome can take
+  // longer, and the Swap stays non-terminal until it is confirmed. A cancel
+  // after the Swap's deadline changes nothing: a Swap that has not ended is
+  // returned as it is, EXECUTING or RECONCILING, without
+  // cancel_requested_at, and one that has ended answers SWAP_ALREADY_FINAL.
+  // Keep polling GetSwap until is_terminal is true.
+  //
+  // The cancel is idempotent: repeating a cancel that was recorded in time,
+  // before or after the Swap ends, returns the Swap with its original
+  // cancel_requested_at, so an unknown outcome is resolved by repeating the
+  // request. Canceling needs the SWAP
+  // permission on the funding account, through the caller's role or the API
+  // key's policy; the sub-account's policy does not restrict it, and it
+  // works on a sub-account that is not active, since a cancel only stops
+  // trading.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: SWAP_NOT_FOUND.
+  // - FAILED_PRECONDITION: SWAP_ALREADY_FINAL when the Swap ended with no
+  //   cancel recorded (also after its deadline); SWAP_NOT_CANCELABLE for an
+  //   auto-withdraw conversion.
+  // - PERMISSION_DENIED: SWAP_NOT_PERMITTED.
+  // - UNAVAILABLE, DEADLINE_EXCEEDED: SERVICE_UNAVAILABLE or an unknown
+  //   outcome; retry the same request.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc CancelSwap(CancelSwapRequest) returns (CancelSwapResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Cancel Swap"
+      description: "Cancel a Swap that has not ended: no further slice starts, and what already traded stays traded."
+      tags: "Swap"
+    };
+  }
+
+  // ListSwaps lists the caller's Swaps funded by one account, the root
+  // account or a sub-account, newest first, each as GetSwap returns it. With
+  // open_only it lists only the Swaps that have not ended, so a client can
+  // find the Swaps it still follows. A sub-account that is not active is
+  // listed too, so its open Swaps can be found and canceled. Each page
+  // continues strictly after the last Swap of the page before it, in the
+  // listing order, and holds the Swaps as they are when it is read: a
+  // listing never repeats a Swap and never skips one that existed when the
+  // listing started and still matches the filter. A Swap created while a
+  // listing is under way is listed on a later page only if it sorts after
+  // the last Swap already listed; otherwise it appears only when listing
+  // starts again. With open_only, a Swap that ends between pages is left out
+  // of the later ones.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request or page_token, or
+  //   INVALID_SUBACCOUNT_ID.
+  // - NOT_FOUND: SUBACCOUNT_NOT_FOUND.
+  // - PERMISSION_DENIED: SWAP_NOT_PERMITTED.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry later.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ListSwaps(ListSwapsRequest) returns (ListSwapsResponse) {
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List Swaps"
+      description: "List the Swaps funded by one account, newest first, optionally only those that have not ended."
       tags: "Swap"
     };
   }
