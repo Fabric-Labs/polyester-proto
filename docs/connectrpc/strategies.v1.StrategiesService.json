@@ -2,7 +2,7 @@
   "services": [
     {
       "name": "strategies.v1.StrategiesService",
-      "doc": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call moves money,\n creates a subaccount or deploys a bot: deploying takes the user's MFA and\n wallet signature on the deploy page ProposeDeploy links. StopBot stops a\n bot, which only ever reduces what it does.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference, ListStrategyTemplates,\n ListCommunityStrategies and GetCommunityStrategy need no credentials.\n PublishStrategyVersion and UnpublishStrategy take the user's own session:\n publishing makes a strategy's code public, so only the user does it, on\n the website. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot: deploying takes the user's MFA and wallet signature.\n Every call is safe to retry.",
+      "doc": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call creates a\n subaccount or deploys a bot: deploying takes the user's MFA and wallet\n signature on the deploy page ProposeDeploy links. StopBot stops a bot,\n which only ever reduces what it does. The one call that moves money,\n ReturnBotFunds, moves a stopped bot's available balances only to its\n owner's own main account.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots, FORK_STRATEGIES to fork community\n listings, RETURN_STRATEGY_BOT_FUNDS to return a stopped bot's funds. An API\n key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference, ListStrategyTemplates,\n ListCommunityStrategies and GetCommunityStrategy need no credentials.\n PublishStrategyVersion, UnpublishStrategy and ReportCommunityStrategy take\n the user's own session: publishing makes a strategy's code public, and a\n report is the user's own, so only the user does them, on the website. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot, forks a community listing or returns a bot's funds:\n deploying takes the user's MFA and wallet signature, forking starts on the\n website or with an API key, and a return is the owner's own. Every call is\n safe to retry.",
       "methods": [
         {
           "name": "CreateStrategy",
@@ -38,6 +38,7 @@
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
                 "listing": {
+                  "holdReason": "value",
                   "listingId": "1",
                   "publishedAt": "2025-01-01T00:00:00Z",
                   "state": "PUBLIC",
@@ -151,7 +152,7 @@
           "requestType": "strategies.v1.DeleteStrategyRequest",
           "responseType": "strategies.v1.DeleteStrategyResponse",
           "summary": "Delete Strategy",
-          "doc": "DeleteStrategy deletes one strategy of the caller and its revisions. It\n is refused while the strategy is in use: while a bot deployed from it\n hasn't stopped, whether deployed from one of its proposals or running\n one of its revisions' versions, while a deploy proposal of it has\n neither expired, failed nor been deployed, and while its community\n listing is public. Deleting never stops a bot. Proposals of the strategy\n stay, and show no strategy once it is deleted. Its unpublished listing\n stays unpublished, with the versions it published. A version only the\n strategy's revisions kept then expires like any other.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown or already deleted one.\n - FAILED_PRECONDITION: STRATEGY_IN_USE.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "DeleteStrategy deletes one strategy of the caller and its revisions. It\n is refused while the strategy is in use: while a bot deployed from it\n hasn't stopped, whether deployed from one of its proposals or running\n one of its revisions' versions, while a deploy proposal of it has\n neither expired, failed nor been deployed, and while its community\n listing is public or held by moderation. Deleting never stops a bot. Proposals of the strategy\n stay, and show no strategy once it is deleted. Its unpublished listing\n stays unpublished, with the versions it published. A version only the\n strategy's revisions kept then expires like any other.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown or already deleted one.\n - FAILED_PRECONDITION: STRATEGY_IN_USE; LISTING_HELD while moderation\n   holds the strategy's listing.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -326,6 +327,148 @@
               "warnings": [
                 "value"
               ]
+            }
+          }
+        },
+        {
+          "name": "ForkStrategy",
+          "path": "strategies.v1.StrategiesService/ForkStrategy",
+          "requestType": "strategies.v1.ForkStrategyRequest",
+          "responseType": "strategies.v1.ForkStrategyResponse",
+          "summary": "Fork Strategy",
+          "doc": "ForkStrategy copies a public community listing's published version into\n a new strategy of the caller, as its revision 1, and records the\n listing as its origin. The copy is the caller's own: its behaviour\n examples and backtests are the caller's to run, and nothing the\n listing's author does later changes it. Forking one's own listing makes\n a copy as a duplicate does, and isn't counted as a fork. An account has\n at most 100 strategies.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an\n   unknown one.\n - FAILED_PRECONDITION: STRATEGY_CAP_REACHED; strategy_cap gives the cap.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original strategy stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant FORK_STRATEGIES or the key is scoped to a subaccount;\n   AUTH_SESSION_KIND_NOT_ALLOWED for a session a connected app holds on\n   the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token",
+            "api_key"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
+              "listingId": "1",
+              "name": "example"
+            },
+            "response": {
+              "strategy": {
+                "bot": {
+                  "botId": "1",
+                  "status": "DEPLOYING"
+                },
+                "createdAt": "2025-01-01T00:00:00Z",
+                "headVersionId": "value",
+                "listing": {
+                  "holdReason": "value",
+                  "listingId": "1",
+                  "publishedAt": "2025-01-01T00:00:00Z",
+                  "state": "PUBLIC",
+                  "versionId": "value"
+                },
+                "markets": [
+                  "value"
+                ],
+                "name": "value",
+                "origin": {
+                  "templateId": "value"
+                },
+                "revision": "1",
+                "strategyId": "1",
+                "summary": "value",
+                "updatedAt": "2025-01-01T00:00:00Z",
+                "valid": false
+              },
+              "version": {
+                "errors": [
+                  {
+                    "column": 1,
+                    "hint": "value",
+                    "line": 1,
+                    "manifestPath": "value",
+                    "message": "value",
+                    "rule": "value"
+                  }
+                ],
+                "flow": {
+                  "complete": false,
+                  "edges": [
+                    {
+                      "branch": "value",
+                      "fromNodeId": "value",
+                      "toNodeId": "value"
+                    }
+                  ],
+                  "nodes": [
+                    {
+                      "action": "value",
+                      "event": "value",
+                      "kind": "TRIGGER",
+                      "label": "Name Of My Subaccount",
+                      "nodeId": "value",
+                      "settings": [
+                        "value"
+                      ],
+                      "span": {
+                        "endLine": 86401,
+                        "startLine": 1
+                      }
+                    }
+                  ],
+                  "notes": [
+                    "value"
+                  ]
+                },
+                "moneyCard": {
+                  "budget": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  },
+                  "dailyLossThreshold": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  },
+                  "events": [
+                    "value"
+                  ],
+                  "markets": [
+                    "value"
+                  ],
+                  "maxOpenGtcOrders": 1,
+                  "maxOrder": {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                },
+                "runtimeVersion": "value",
+                "settingsForm": [
+                  {
+                    "asset": "value",
+                    "defaultValue": "value",
+                    "description": "Example configuration for the API playground.",
+                    "kind": "value",
+                    "maximum": "value",
+                    "minimum": "value",
+                    "name": "value"
+                  }
+                ],
+                "valid": false,
+                "versionId": "value",
+                "warnings": [
+                  {
+                    "column": 1,
+                    "hint": "value",
+                    "line": 1,
+                    "manifestPath": "value",
+                    "message": "value",
+                    "rule": "value"
+                  }
+                ]
+              }
             }
           }
         },
@@ -583,9 +726,11 @@
                 "name": "value",
                 "pauseReason": "BOT_DECIDED",
                 "quoteAsset": "USDT",
+                "revision": "1",
                 "runningSince": "2025-01-01T00:00:00Z",
                 "status": "DEPLOYING",
                 "statusReason": "accepted",
+                "strategyId": "1",
                 "subaccountId": "6789012345678",
                 "uptimeRatio": "value",
                 "versionId": "value"
@@ -641,6 +786,52 @@
                   "value": "value"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "GetBotFundsReturn",
+          "path": "strategies.v1.StrategiesService/GetBotFundsReturn",
+          "requestType": "strategies.v1.GetBotFundsReturnRequest",
+          "responseType": "strategies.v1.GetBotFundsReturnResponse",
+          "summary": "Get Bot Funds Return",
+          "doc": "GetBotFundsReturn reads one of the caller's returns of a stopped bot's\n funds, by the return ID ReturnBotFunds answered.\n\n Errors:\n - NOT_FOUND: the caller has no such return.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant READ_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token",
+            "api_key"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "returnId": "1"
+            },
+            "response": {
+              "fundsReturn": {
+                "assets": [
+                  {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                ],
+                "botId": "1",
+                "finishedAt": "2025-01-01T00:00:00Z",
+                "held": [
+                  {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                ],
+                "requestedAt": "2025-01-01T00:00:00Z",
+                "returnId": "1",
+                "status": "RETURN_PROCESSING"
+              }
             }
           }
         },
@@ -821,6 +1012,12 @@
                     "value"
                   ]
                 },
+                "forkedFrom": {
+                  "authorUsername": "trader_alpha",
+                  "listingId": "1",
+                  "title": "My Trading Board"
+                },
+                "forks": 1,
                 "listingId": "1",
                 "manifest": {
                   "example": "data"
@@ -1216,6 +1413,7 @@
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
                 "listing": {
+                  "holdReason": "value",
                   "listingId": "1",
                   "publishedAt": "2025-01-01T00:00:00Z",
                   "state": "PUBLIC",
@@ -1700,9 +1898,11 @@
               "versions": [
                 {
                   "name": "value",
+                  "revision": "1",
                   "runtimeVersion": "value",
                   "startedAt": "2025-01-01T00:00:00Z",
                   "stoppedAt": "2025-01-01T00:00:00Z",
+                  "strategyId": "1",
                   "versionId": "value"
                 }
               ]
@@ -1763,9 +1963,11 @@
                   "name": "value",
                   "pauseReason": "BOT_DECIDED",
                   "quoteAsset": "USDT",
+                  "revision": "1",
                   "runningSince": "2025-01-01T00:00:00Z",
                   "status": "DEPLOYING",
                   "statusReason": "accepted",
+                  "strategyId": "1",
                   "subaccountId": "6789012345678",
                   "uptimeRatio": "value",
                   "versionId": "value"
@@ -1933,6 +2135,7 @@
                       "startTime": "2025-01-01T00:00:00Z"
                     }
                   },
+                  "forks": 1,
                   "listingId": "1",
                   "markets": [
                     "value"
@@ -1982,6 +2185,7 @@
                   "createdAt": "2025-01-01T00:00:00Z",
                   "headVersionId": "value",
                   "listing": {
+                    "holdReason": "value",
                     "listingId": "1",
                     "publishedAt": "2025-01-01T00:00:00Z",
                     "state": "PUBLIC",
@@ -2142,7 +2346,7 @@
           "requestType": "strategies.v1.ProposeDeployRequest",
           "responseType": "strategies.v1.ProposeDeployResponse",
           "summary": "Propose Deploy",
-          "doc": "ProposeDeploy records an immutable deploy proposal of one revision of\n the caller's strategy and returns the link to the deploy page, where the\n user deploys it with MFA and a wallet signature. It never deploys,\n creates a subaccount or moves funds. The proposal records the strategy\n and revision it came from, and the revision's version. The version must\n be valid and have passed every behaviour example\n (RunScenarios); its markets must be open to bots; the funding account\n must hold the funding; and the caller must be under their bot cap. A\n finished backtest will be required once backtests are available. A\n proposal expires 24 hours after it is recorded.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, SETTINGS_INVALID or\n   FUNDING_INVALID.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown one; REVISION_NOT_FOUND; or FUNDING_SUBACCOUNT_NOT_FOUND.\n - FAILED_PRECONDITION: VERSION_INVALID, SCENARIOS_FAILING,\n   BACKTEST_MISSING, MARKET_NOT_ALLOWED, INSUFFICIENT_FUNDS or\n   BOT_CAP_REACHED.\n - RESOURCE_EXHAUSTED: INDICATOR_SETTINGS_LIMIT_REACHED.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original proposal stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant PROPOSE_STRATEGY_DEPLOY or the key is scoped to a\n   subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "ProposeDeploy records an immutable deploy proposal of one revision of\n the caller's strategy and returns the link to the deploy page, where the\n user deploys it with MFA and a wallet signature. It never deploys,\n creates a subaccount or moves funds. The proposal records the strategy\n and revision it came from, and the revision's version. The version must\n be valid and have passed every behaviour example\n (RunScenarios); its markets must be open to bots; the funding account\n must hold the funding; and the caller must be under their bot cap. A\n finished backtest will be required once backtests are available. A\n proposal expires 24 hours after it is recorded.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, SETTINGS_INVALID or\n   FUNDING_INVALID.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown one; REVISION_NOT_FOUND; or FUNDING_SUBACCOUNT_NOT_FOUND.\n - FAILED_PRECONDITION: VERSION_INVALID, SCENARIOS_FAILING,\n   BACKTEST_MISSING, MARKET_NOT_ALLOWED, INSUFFICIENT_FUNDS,\n   FUNDING_SOURCE_IS_BOT or BOT_CAP_REACHED.\n - RESOURCE_EXHAUSTED: INDICATOR_SETTINGS_LIMIT_REACHED.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original proposal stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant PROPOSE_STRATEGY_DEPLOY or the key is scoped to a\n   subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -2275,7 +2479,7 @@
           "requestType": "strategies.v1.PublishStrategyVersionRequest",
           "responseType": "strategies.v1.PublishStrategyVersionResponse",
           "summary": "Publish Strategy Version",
-          "doc": "PublishStrategyVersion publishes one version of one of the caller's\n strategies as the strategy's community listing, with its title,\n description and types: its code, manifest and settings form become\n readable by everyone, its settings shown at their defaults. A strategy\n has one listing; publishing again shows the new version and makes an\n unpublished listing public again. The version must be one of the\n strategy's revisions' versions, valid, with every behaviour example\n passing. Each publish starts the platform backtest of the version\n (CommunityBacktest), whose results the listing shows once it finishes;\n a bot that can't be backtested on candles is published without\n results. An account has at most 20 public listings and publishes at\n most 20 times per UTC day. Publishing shows the author by username.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown one; VERSION_NOT_FOUND when no revision of the strategy\n   saved the version.\n - FAILED_PRECONDITION: VERSION_INVALID; SCENARIOS_FAILING;\n   WINDOW_HAS_NO_DATA when the default window holds no market data;\n   USERNAME_REQUIRED; LISTING_CAP_REACHED, listing_cap gives the cap;\n   PUBLISH_LIMIT_REACHED, retry_after says when the day resets.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original publish stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "PublishStrategyVersion publishes one version of one of the caller's\n strategies as the strategy's community listing, with its title,\n description and types: its code, manifest and settings form become\n readable by everyone, its settings shown at their defaults. A strategy\n has one listing; publishing again shows the new version and makes an\n unpublished listing public again. The version must be one of the\n strategy's revisions' versions, valid, with every behaviour example\n passing. Each publish starts the platform backtest of the version\n (CommunityBacktest), whose results the listing shows once it finishes;\n a bot that can't be backtested on candles is published without\n results. An account has at most 20 public listings and publishes at\n most 20 times per UTC day. Publishing shows the author by username.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for\n   an unknown one; VERSION_NOT_FOUND when no revision of the strategy\n   saved the version.\n - FAILED_PRECONDITION: VERSION_INVALID; SCENARIOS_FAILING;\n   WINDOW_HAS_NO_DATA when the default window holds no market data;\n   USERNAME_REQUIRED; LISTING_CAP_REACHED, listing_cap gives the cap;\n   PUBLISH_LIMIT_REACHED, retry_after says when the day resets;\n   LISTING_HELD while moderation holds the listing.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original publish stands.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -2300,6 +2504,7 @@
             },
             "response": {
               "listing": {
+                "holdReason": "value",
                 "listingId": "1",
                 "publishedAt": "2025-01-01T00:00:00Z",
                 "state": "PUBLIC",
@@ -2341,6 +2546,7 @@
                 "createdAt": "2025-01-01T00:00:00Z",
                 "headVersionId": "value",
                 "listing": {
+                  "holdReason": "value",
                   "listingId": "1",
                   "publishedAt": "2025-01-01T00:00:00Z",
                   "state": "PUBLIC",
@@ -2363,12 +2569,89 @@
           }
         },
         {
+          "name": "ReportCommunityStrategy",
+          "path": "strategies.v1.StrategiesService/ReportCommunityStrategy",
+          "requestType": "strategies.v1.ReportCommunityStrategyRequest",
+          "responseType": "strategies.v1.ReportCommunityStrategyResponse",
+          "summary": "Report Community Strategy",
+          "doc": "ReportCommunityStrategy reports a public community listing to\n moderation: what is wrong with the version the reader saw, from a fixed\n list of reasons, with a note. One report per reader, listing and\n version, even after the version is published again: reporting it again\n answers the first report and doesn't count toward the day's reports. A\n reader makes at most 20 reports per UTC day. A report changes nothing of the listing by\n itself; moderation reviews it.\n\n Errors:\n - INVALID_ARGUMENT: malformed request, or a reason of OTHER without a\n   note.\n - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an\n   unknown one; VERSION_NOT_FOUND when the listing never published the\n   version.\n - FAILED_PRECONDITION: CANNOT_REPORT_OWN_LISTING; REPORT_LIMIT_REACHED,\n   retry_after says when the day resets.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "listingId": "1",
+              "note": "Primary treasury destination.",
+              "reason": "MISLEADING_RESULTS",
+              "versionId": "example"
+            },
+            "response": {
+              "reportedAt": "2025-01-01T00:00:00Z"
+            }
+          }
+        },
+        {
+          "name": "ReturnBotFunds",
+          "path": "strategies.v1.StrategiesService/ReturnBotFunds",
+          "requestType": "strategies.v1.ReturnBotFundsRequest",
+          "responseType": "strategies.v1.ReturnBotFundsResponse",
+          "summary": "Return Bot Funds",
+          "doc": "ReturnBotFunds returns every spendable balance of a stopped bot's\n subaccount to the caller's main account, its owner's: the only\n destination, so it needs no MFA. Only the bot's owner calls it, on its own\n session or a root-scoped API key whose policy grants\n RETURN_STRATEGY_BOT_FUNDS; an invited member of any role is refused as if\n the bot didn't exist. It never takes what an open order's hold reserves:\n while the orders a KEEP_ORDERS stop kept stay open, the return stays\n RETURN_PROCESSING, naming what they hold (held), and returns it as they\n fill or end. The return completes on its own; GetBotFundsReturn reads it.\n An open return blocks nothing: the bot's subaccount can't be given to\n another bot while anything stays on it, whatever the return.\n\n Errors:\n - FAILED_PRECONDITION: BOT_NOT_STOPPED while the bot may still trade\n   (deploying, running, paused, stopping). If the bot reads STOPPED but an\n   API-key call gets BOT_NOT_STOPPED because the bot's access is still\n   live, its owner must first call ReturnBotFunds from their own\n   interactive session to end that access; retrying with the API key alone\n   cannot. Afterwards a root-scoped API key with RETURN_STRATEGY_BOT_FUNDS\n   can return the funds; retry a recorded return with the same idempotency\n   key. NOTHING_TO_RETURN when the\n   subaccount has no available balance, or the return under the key ended\n   with nothing moved.\n - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT when the key names another bot's\n   return.\n - NOT_FOUND: BOT_NOT_FOUND when the caller has no such bot.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant RETURN_STRATEGY_BOT_FUNDS or the key is scoped to a\n   subaccount; AUTH_SESSION_KIND_NOT_ALLOWED for a connected app's session.\n - UNAVAILABLE: SERVICE_UNAVAILABLE when the return can't be decided yet;\n   retry with the same key.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "tags": [
+            "trading"
+          ],
+          "authRequired": true,
+          "authenticationMethods": [
+            "session_token",
+            "api_key"
+          ],
+          "mfaRequirement": "none",
+          "stability": "stable",
+          "errorProtoPkg": "strategies.v1",
+          "errorCatalog": "core:generic",
+          "examples": {
+            "request": {
+              "botId": "1",
+              "idempotencyKey": "idem_01J5EXAMPLE0000000000000"
+            },
+            "response": {
+              "fundsReturn": {
+                "assets": [
+                  {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                ],
+                "botId": "1",
+                "finishedAt": "2025-01-01T00:00:00Z",
+                "held": [
+                  {
+                    "amount": "123.45",
+                    "asset": "example"
+                  }
+                ],
+                "requestedAt": "2025-01-01T00:00:00Z",
+                "returnId": "1",
+                "status": "RETURN_PROCESSING"
+              }
+            }
+          }
+        },
+        {
           "name": "RunScenarios",
           "path": "strategies.v1.StrategiesService/RunScenarios",
           "requestType": "strategies.v1.RunScenariosRequest",
           "responseType": "strategies.v1.RunScenariosResponse",
           "summary": "Run Scenarios",
-          "doc": "RunScenarios runs a version's behaviour examples against its code and\n records the results. Each market's trading rules (tick, step, minimum\n quantity and minimum notional) are the exchange's when the version first\n runs, unless an example's `observe.markets` says otherwise, and the\n record keeps them: a version always gets the same result, and a new\n version runs on the rules current then.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: VERSION_NOT_FOUND.\n - FAILED_PRECONDITION: VERSION_INVALID, also when a market of the\n   version isn't listed on the exchange.\n - RESOURCE_EXHAUSTED: SCENARIO_RUN_LIMIT_REACHED; retry after\n   retry_after.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "RunScenarios runs a version's behaviour examples against its code and\n records the results. Each market's trading rules (tick, step, minimum\n quantity and minimum notional) are the exchange's when the version first\n runs, unless an example's `observe.markets` says otherwise, and the\n record keeps them: a version's recorded results stay the same, and a new\n version runs on the rules current then.\n\n One exception: when a call takes longer than allowed or the runtime fails\n on a run, its results are returned but not recorded, and the affected\n example's error says to run the examples again. The next call runs them\n again and counts toward the per-minute limit.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: VERSION_NOT_FOUND.\n - FAILED_PRECONDITION: VERSION_INVALID, also when a market of the\n   version isn't listed on the exchange.\n - RESOURCE_EXHAUSTED: SCENARIO_RUN_LIMIT_REACHED; retry after\n   retry_after.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy\n   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -2677,9 +2960,11 @@
                 "name": "value",
                 "pauseReason": "BOT_DECIDED",
                 "quoteAsset": "USDT",
+                "revision": "1",
                 "runningSince": "2025-01-01T00:00:00Z",
                 "status": "DEPLOYING",
                 "statusReason": "accepted",
+                "strategyId": "1",
                 "subaccountId": "6789012345678",
                 "uptimeRatio": "value",
                 "versionId": "value"
@@ -2694,7 +2979,7 @@
           "requestType": "strategies.v1.UnpublishStrategyRequest",
           "responseType": "strategies.v1.UnpublishStrategyResponse",
           "summary": "Unpublish Strategy",
-          "doc": "UnpublishStrategy unpublishes one of the caller's community listings: it\n leaves the list, and GetCommunityStrategy answers LISTING_NOT_FOUND. The\n author's next publish makes it public again. Copies other users already\n made stay theirs. Unpublishing an unpublished listing changes nothing.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: LISTING_NOT_FOUND, for another account's listing as for an\n   unknown one.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
+          "doc": "UnpublishStrategy unpublishes one of the caller's community listings: it\n leaves the list, and GetCommunityStrategy answers LISTING_NOT_FOUND. The\n author's next publish makes it public again. Copies other users already\n made stay theirs. Unpublishing an unpublished listing changes nothing; a\n listing moderation holds can't be unpublished until it is released.\n\n Errors:\n - INVALID_ARGUMENT: malformed request.\n - NOT_FOUND: LISTING_NOT_FOUND, for another account's listing as for an\n   unknown one.\n - FAILED_PRECONDITION: LISTING_HELD while moderation holds the listing.\n - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.\n - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a\n   session a connected app holds on the user's behalf.\n - UNAUTHENTICATED: missing or invalid credentials.",
           "tags": [
             "trading"
           ],
@@ -2712,6 +2997,7 @@
             },
             "response": {
               "listing": {
+                "holdReason": "value",
                 "listingId": "1",
                 "publishedAt": "2025-01-01T00:00:00Z",
                 "state": "PUBLIC",

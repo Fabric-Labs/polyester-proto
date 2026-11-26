@@ -39,7 +39,8 @@ enum ErrorCode {
   // No memory of the caller has this ID.
   MEMORY_NOT_FOUND = 4;
   // The conversation already has an active run. Wait for it to end, or cancel
-  // it, before sending another message.
+  // it, before sending another message. When the run is waiting for the
+  // user's decision, ErrorDetail.pending_approval_id names the approval.
   RUN_ACTIVE = 5;
   // The idempotency key was already used with a different request. The
   // original run stands.
@@ -89,8 +90,11 @@ enum ErrorCode {
   // No image of the caller's messages has this ID.
   IMAGE_NOT_FOUND = 20;
   // The message names a subject other than its conversation's: a
-  // conversation's subject is fixed when it starts. Nothing is recorded.
+  // conversation's subject never changes once set. Nothing is recorded.
   CONVERSATION_SUBJECT_MISMATCH = 21;
+  // The approval's run ended before it was decided, for example stopped by
+  // the user; nothing was executed.
+  APPROVAL_RUN_ENDED = 22;
 }
 
 // ErrorDetail is attached to Assistant API errors as an error detail of type
@@ -98,6 +102,13 @@ enum ErrorCode {
 message ErrorDetail {
   // Stable error code.
   ErrorCode code = 1;
+  // With RUN_ACTIVE only: the approval the conversation's active run is
+  // waiting for, set only while that approval is still PENDING and not past
+  // its expiry when the message is refused. Unset when the run is not waiting
+  // for a decision (for example, the approval was already decided, even if
+  // the run has not reported it yet). Show that approval's Approve and Reject
+  // choices instead of a generic "busy" message.
+  fixed64 pending_approval_id = 2;
 }
 
 // MessageRole is the author of a conversation message.
@@ -172,6 +183,9 @@ enum ApprovalStatus {
   REJECTED = 3;
   // Expired before a decision; the action did not run.
   EXPIRED = 4;
+  // The run ended before a decision, for example stopped by the user; the
+  // action did not run.
+  APPROVAL_CANCELLED = 5;
 }
 
 // MemoryKind is what kind of fact a memory holds.
@@ -265,8 +279,9 @@ message Conversation {
   google.protobuf.Timestamp created_at = 3;
   // When the latest message of the conversation was recorded.
   google.protobuf.Timestamp updated_at = 4;
-  // What the conversation is about, fixed when it started. Omitted for a
-  // general conversation.
+  // What the conversation is about: set when it started, or when the
+  // assistant created a strategy in it (see Subject), and never changed once
+  // set. Omitted for a general conversation.
   Subject subject = 5;
   // The account the conversation's latest message selected, from any client,
   // as of this list: a message sent since may have selected another.
@@ -1543,7 +1558,7 @@ message ApprovalRequested {
 message ApprovalResolved {
   // Public approval ID, as in its ApprovalRequested event.
   fixed64 approval_id = 1;
-  // APPROVED, REJECTED or EXPIRED.
+  // APPROVED, REJECTED, EXPIRED or APPROVAL_CANCELLED.
   ApprovalStatus status = 2;
 }
 
@@ -1592,7 +1607,7 @@ message RunEvent {
     SubagentFinished subagent_finished = 9;
     // The run waits for an approval.
     ApprovalRequested approval_requested = 10;
-    // An approval was decided or expired.
+    // An approval was decided, expired or cancelled.
     ApprovalResolved approval_resolved = 11;
     // Structured content to render.
     View view = 12;
@@ -1714,6 +1729,16 @@ message CurrentPage {
 // and tells the assistant what the user is working on. It grants nothing:
 // every read and change the assistant makes is still checked against the
 // caller's own access.
+//
+// A conversation without a subject gets one at most once: when the assistant
+// creates a strategy in it, the conversation becomes about that strategy,
+// unless another conversation of the caller is already about it. Only when it
+// does is it the conversation that strategy's subject selects, with its
+// history, and later messages may still omit the subject. When another
+// conversation of the caller is already about the strategy, that conversation
+// keeps it and is the one its subject selects, and this one stays without a
+// subject. A second strategy created in a conversation leaves the subject on
+// the first; another strategy is created in a new conversation.
 message Subject {
   // What the conversation is about.
   oneof kind {
@@ -1829,10 +1854,11 @@ message SendMessageRequest {
   // What the conversation is about. Without conversation_id, the message
   // continues the caller's conversation about this subject, or starts it:
   // there is at most one per subject. With conversation_id, omit it or send
-  // the conversation's own subject. A conversation's subject is fixed when it
-  // starts: any other subject, or a subject for a conversation that has none,
-  // is FAILED_PRECONDITION with CONVERSATION_SUBJECT_MISMATCH, and nothing is
-  // recorded. It is part of the request the idempotency key covers.
+  // the conversation's own subject. A conversation's subject never changes
+  // once set (see Subject): any other subject, or a subject for a
+  // conversation that has none, is FAILED_PRECONDITION with
+  // CONVERSATION_SUBJECT_MISMATCH, and nothing is recorded. It is part of the
+  // request the idempotency key covers.
   Subject subject = 11;
 }
 
@@ -1930,8 +1956,8 @@ message ListMessagesResponse {
   // when the conversation was listed earlier. Set on every page. A client that
   // opens the conversation selects it before the next message.
   ConversationAccount last_account = 3;
-  // What the conversation is about: the same as Conversation.subject, fixed
-  // when the conversation started. Set on every page; omitted for a general
+  // What the conversation is about: the same as Conversation.subject, never
+  // changed once set (see Subject). Set on every page; omitted for a general
   // conversation. A client that opens a conversation by its ID learns from it
   // whether the conversation is about one of the caller's strategies.
   Subject subject = 4;
@@ -2208,8 +2234,9 @@ service AssistantService {
 
   // CancelRun asks an active run to stop. It returns once the request is
   // recorded; the run then ends with RunFailed and category CANCELLED, and its
-  // subagents stop too. A pending approval of the run expires. Cancelling a
-  // run that already ended changes nothing and succeeds.
+  // subagents stop too. A pending approval of the run ends APPROVAL_CANCELLED,
+  // or EXPIRED once its expiry has passed, reported before RunFailed. Cancelling
+  // a run that already ended changes nothing and succeeds.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
@@ -2233,7 +2260,8 @@ service AssistantService {
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
   // - NOT_FOUND: APPROVAL_NOT_FOUND.
-  // - FAILED_PRECONDITION: APPROVAL_ALREADY_DECIDED or APPROVAL_EXPIRED.
+  // - FAILED_PRECONDITION: APPROVAL_ALREADY_DECIDED, APPROVAL_EXPIRED or
+  //   APPROVAL_RUN_ENDED.
   // - UNAVAILABLE, DEADLINE_EXCEEDED: SERVICE_UNAVAILABLE or an unknown
   //   outcome; retry the same request.
   // - UNAUTHENTICATED: missing or invalid credentials.

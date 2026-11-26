@@ -13,10 +13,27 @@ option (gnostic.openapi.v3.document) = {
   tags: [
     {
       name: "Statement Exports"
-      description: "Whole-period account statements produced in the background as one CSV file."
+      description: "Whole-period account statement, ledger and balances files produced in the background as one CSV file."
     }
   ]
 };
+
+// StatementExportType is the kind of file a statement export produces.
+enum StatementExportType {
+  // Never returned; refused in a request.
+  STATEMENT_EXPORT_TYPE_UNSPECIFIED = 0;
+  // Account statement: one row per entry, account bucket and asset, with the
+  // entry's net amount, the fees paid and the balance after it.
+  ACCOUNT_STATEMENT = 1;
+  // Ledger: one row per ledger movement, each transfer leg on its own, with
+  // its transfer reason, side, counterparty and the balance after it.
+  LEDGER = 2;
+  // Balances: one row per account bucket and asset, with its balance at the
+  // start and at the end of the period and the period's credits and debits.
+  // Its period must start inside the account history; see
+  // StatementExport.history_available_from.
+  BALANCES = 3;
+}
 
 // StatementExportStatus is where a statement export is.
 enum StatementExportStatus {
@@ -50,19 +67,27 @@ enum StatementExportFailureReason {
   STATEMENT_EXPORT_FAILURE_REASON_TOO_LARGE = 1;
   // The file could not be produced in time. Create a new export.
   STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE = 2;
+  // A BALANCES export's period starts before the earliest instant whose
+  // balances the account history holds, which moved later after the export
+  // was created. history_available_from is that instant: create a new
+  // export that starts at or after it.
+  STATEMENT_EXPORT_FAILURE_REASON_HISTORY_UNAVAILABLE = 3;
 }
 
-// StatementExport is a whole-period account statement produced in the
-// background as one CSV file.
+// StatementExport is a whole-period account statement, ledger or balances
+// file produced in the background as one CSV file.
 //
 // The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,
-// then every row of the period up to complete_through, oldest first. A period
-// without movements yields the header row alone. Each row is the effect of
-// one entry on one account bucket in one asset. An entry is one ledger
-// operation, such as a trade with its fees, a deposit, a withdrawal step or an
-// internal transfer.
+// then the rows of the period up to complete_through. ACCOUNT_STATEMENT and
+// LEDGER rows come oldest first, and a period without movements yields the
+// header row alone. Every type reads the same ledger movements of the
+// account; type sets the file's rows and columns.
 //
-// Columns, in order:
+// An ACCOUNT_STATEMENT row is the effect of one entry on one account bucket
+// in one asset. An entry is one ledger operation, such as a trade with its
+// fees, a deposit, a withdrawal step or an internal transfer.
+//
+// ACCOUNT_STATEMENT columns, in order:
 // - `time`: entry time, RFC 3339 in UTC with microseconds, for example
 //   `2026-11-12T19:52:07.734123Z`.
 // - `entry_id`: entry identifier, an unsigned 128-bit integer as a decimal
@@ -89,7 +114,64 @@ enum StatementExportFailureReason {
 //   match ID for trades; empty when unavailable.
 // - `flow_id`: public lifecycle flow ID when the entry belongs to a chain
 //   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,
-//   as LedgerReadService.ListTransfers returns it; empty otherwise.
+//   linked before the export was created; empty otherwise. A flow linked
+//   later, which LedgerReadService.ListTransfers then shows, is not in the
+//   file: a new export shows it.
+//
+// A LEDGER row is one ledger movement: one transfer leg on the account,
+// as LedgerReadService.ListTransfers returns it. A trade's settlement is
+// several rows, such as its base and quote legs and each fee.
+//
+// LEDGER columns, in order:
+// - `time`: transfer time, RFC 3339 in UTC with microseconds.
+// - `transfer_id`: transfer identifier, an unsigned 128-bit integer as a
+//   decimal string, as LedgerReadService.ListTransfers returns it. With
+//   `account` and `side` it identifies the row.
+// - `account`: account bucket, `funding` or `trading`.
+// - `asset`: asset symbol.
+// - `type`: transfer reason, such as `trade_base`, `trade_quote`,
+//   `maker_fee`, `taker_fee`, `rebate`, `deposit`, `withdraw`,
+//   `internal_transfer` or `funding_to_trading`.
+// - `side`: `debit` when the movement takes from the account bucket,
+//   `credit` when it adds to it.
+// - `amount`: signed balance change in whole units of the asset: negative
+//   for a debit, positive for a credit.
+// - `counterparty`: kind of the transfer's other side: `funding_account`,
+//   `trading_account`, `external_address`, `private_counterparty`,
+//   `fee_account` or `system_account`; empty when unknown.
+// - `balance`: account bucket balance in the asset after the movement, in
+//   whole units of the asset. For consecutive rows of the same bucket and
+//   asset, each balance equals the previous balance plus `amount`.
+// - `link_id`: correlation ID shared by related transfer legs, the trade's
+//   match ID for trades; empty when unavailable.
+// - `flow_id`: public lifecycle flow ID when the transfer belongs to a chain
+//   lifecycle flow linked before the export was created; empty otherwise,
+//   as for `flow_id` of an account statement.
+//
+// A BALANCES row is one account bucket in one asset over the period: its
+// balance at start_time, the period's ledger movements on it, and its
+// balance at complete_through. Rows come sorted by `account`, then `asset`.
+// A bucket and asset with a zero balance at both ends and no movement has no
+// row, so an account without any yields the header row alone. The period
+// must start at or after the earliest instant whose balances the account
+// history holds: an earlier start is refused when the export is created
+// (CreateStatementExport) and fails the export if that instant moves later
+// before the file is produced.
+//
+// BALANCES columns, in order:
+// - `account`: account bucket, `funding` or `trading`.
+// - `asset`: asset symbol.
+// - `opening_balance`: balance of the bucket in the asset at start_time.
+// - `credits`: total the period's movements added to the bucket, the sum of
+//   the LEDGER file's credit rows of that bucket and asset; `0` when none.
+// - `debits`: total the period's movements took from the bucket, the sum of
+//   the LEDGER file's debit rows of that bucket and asset, as a positive
+//   amount; `0` when none.
+// - `closing_balance`: balance of the bucket in the asset at
+//   complete_through. Every row reconciles: `closing_balance` equals
+//   `opening_balance` plus `credits` minus `debits`.
+// - `movements`: number of the period's ledger movements on the bucket in
+//   the asset.
 //
 // Amounts are exact decimal strings with up to 18 fractional digits and no
 // trailing zeros.
@@ -101,7 +183,8 @@ enum StatementExportFailureReason {
 // - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the
 //   file as `text/csv` and supports HTTP `Range` requests.
 //
-// Both save the file as `statement-<exportId>.csv`. Before the file is READY
+// Both save the file as `account-statement-<exportId>.csv`,
+// `ledger-<exportId>.csv` or `balances-<exportId>.csv`, by type. Before the file is READY
 // both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST
 // `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;
 // an EXPIRED export, or a file already deleted, answers
@@ -154,11 +237,17 @@ message StatementExport {
   google.protobuf.Timestamp expires_at = 13;
   // Why the export FAILED; unspecified otherwise.
   StatementExportFailureReason failure_reason = 14;
+  // Kind of file the export produces, as requested.
+  StatementExportType type = 15;
+  // Earliest instant whose balances the account history holds, which a
+  // BALANCES export's period must start at or after. Set only when
+  // failure_reason is STATEMENT_EXPORT_FAILURE_REASON_HISTORY_UNAVAILABLE.
+  google.protobuf.Timestamp history_available_from = 16;
 }
 
-// CreateStatementExportRequest asks for a whole-period statement file of one
-// account. The period is at most 366 days long; a longer or empty period is
-// INVALID_ARGUMENT.
+// CreateStatementExportRequest asks for a whole-period account statement,
+// ledger or balances file of one account. The period is at most 366 days long; a longer or empty
+// period is INVALID_ARGUMENT.
 message CreateStatementExportRequest {
   // The period must be non-empty and at most 366 days long.
   option (buf.validate.message).cel = {
@@ -191,6 +280,13 @@ message CreateStatementExportRequest {
       max_len: 64
       pattern: "^[A-Za-z0-9._:-]+$"
     }
+  ];
+  // Kind of file to produce; required. Every type has the same period,
+  // asset filter, limits and lifecycle; a BALANCES period must also start
+  // inside the account history.
+  StatementExportType type = 6 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
   ];
 }
 
@@ -231,7 +327,9 @@ message GetStatementExportDownloadUrlResponse {
   // after it was signed for this request, or when the file expires if that
   // is sooner. Request a new URL after it.
   google.protobuf.Timestamp expires_at = 2;
-  // Name the download saves the file as, `statement-<exportId>.csv`.
+  // Name the download saves the file as, `account-statement-<exportId>.csv`,
+  // `ledger-<exportId>.csv` or `balances-<exportId>.csv`, by the export's
+  // type.
   string filename = 3;
 }
 
@@ -277,7 +375,8 @@ message ListStatementExportsResponse {
 
 // StatementExportService is the account statement API. A statement covers
 // one account, optionally one asset, for a period of at most 366 days, and is
-// produced in the background as one CSV file: create an export, poll it with
+// produced in the background as one CSV file, an account statement, a ledger
+// or the account's balances: create an export, poll it with
 // GetStatementExport until it is READY, then download its file (see
 // StatementExport). API keys need the READ_STATEMENTS policy action. A root
 // account has at most 5 exports QUEUED or PROCESSING at a time, one account
@@ -291,9 +390,15 @@ service StatementExportService {
   // idempotency key.
   //
   // Errors:
-  // - INVALID_ARGUMENT: the period, asset or idempotency key is invalid.
+  // - INVALID_ARGUMENT: the period, asset, type or idempotency key is
+  //   invalid.
   // - FAILED_PRECONDITION (IDEMPOTENCY_KEY_REUSED): the key was used for a
   //   request with other fields.
+  // - FAILED_PRECONDITION (STATEMENT_HISTORY_UNAVAILABLE): a BALANCES
+  //   period starts before the earliest instant whose balances the account
+  //   history holds. The error detail's history_available_from is that
+  //   instant; REST answers `409` with it as `historyAvailableFrom`. Create
+  //   the export again with a start at or after it.
   // - RESOURCE_EXHAUSTED (STATEMENT_EXPORT_LIMIT_REACHED): the root account
   //   has 5 exports QUEUED or PROCESSING.
   // - PERMISSION_DENIED, NOT_FOUND: the account cannot be read.
@@ -307,7 +412,7 @@ service StatementExportService {
     };
     option (gnostic.openapi.v3.operation) = {
       summary: "Create Statement Export"
-      description: "Create a whole-period account statement file, produced in the background. Idempotent per idempotency key."
+      description: "Create a whole-period account statement, ledger or balances file, produced in the background. Idempotent per idempotency key."
       tags: "Statement Exports"
     };
   }
