@@ -3,6 +3,12 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-26 — develop-20261126T142600Z
+
+API reference fixes: admin API key operations, internal-transfer batch and order examples.
+
+- [2026-11-26T1205Z-auth-v1](changes/2026-11-26T1205Z-auth-v1.md): changed `auth.v1.ApiKeyService`, `auth.v1.PolicyService`.
+
 ## 2026-11-26 — develop-20261126T110905Z
 
 Release 0.93.12: Strategies bot API changes, LEDGER and BALANCES statement exports, Quick Swap payout conversions, auth sub-account changes and AI API updates.
