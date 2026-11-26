@@ -233,7 +233,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ai.v1.ApprovalStatus",
-            "description": "APPROVED, REJECTED or EXPIRED.",
+            "description": "APPROVED, REJECTED, EXPIRED or APPROVAL_CANCELLED.",
             "title": "status"
           }
         },
@@ -247,7 +247,8 @@
           "PENDING",
           "APPROVED",
           "REJECTED",
-          "EXPIRED"
+          "EXPIRED",
+          "APPROVAL_CANCELLED"
         ],
         "title": "ApprovalStatus",
         "type": "string"
@@ -709,7 +710,7 @@
           },
           "subject": {
             "$ref": "#/components/schemas/ai.v1.Subject",
-            "description": "What the conversation is about, fixed when it started. Omitted for a\n general conversation.",
+            "description": "What the conversation is about: set when it started, or when the\n assistant created a strategy in it (see Subject), and never changed once\n set. Omitted for a general conversation.",
             "title": "subject"
           },
           "title": {
@@ -1488,7 +1489,7 @@
           },
           "subject": {
             "$ref": "#/components/schemas/ai.v1.Subject",
-            "description": "What the conversation is about: the same as Conversation.subject, fixed\n when the conversation started. Set on every page; omitted for a general\n conversation. A client that opens a conversation by its ID learns from it\n whether the conversation is about one of the caller's strategies.",
+            "description": "What the conversation is about: the same as Conversation.subject, never\n changed once set (see Subject). Set on every page; omitted for a general\n conversation. A client that opens a conversation by its ID learns from it\n whether the conversation is about one of the caller's strategies.",
             "title": "subject"
           }
         },
@@ -2791,7 +2792,7 @@
           },
           "approvalResolved": {
             "$ref": "#/components/schemas/ai.v1.ApprovalResolved",
-            "description": "An approval was decided or expired.",
+            "description": "An approval was decided, expired or cancelled.",
             "title": "approval_resolved"
           },
           "createdAt": {
@@ -2982,7 +2983,7 @@
           },
           "subject": {
             "$ref": "#/components/schemas/ai.v1.Subject",
-            "description": "What the conversation is about. Without conversation_id, the message\n continues the caller's conversation about this subject, or starts it:\n there is at most one per subject. With conversation_id, omit it or send\n the conversation's own subject. A conversation's subject is fixed when it\n starts: any other subject, or a subject for a conversation that has none,\n is FAILED_PRECONDITION with CONVERSATION_SUBJECT_MISMATCH, and nothing is\n recorded. It is part of the request the idempotency key covers.",
+            "description": "What the conversation is about. Without conversation_id, the message\n continues the caller's conversation about this subject, or starts it:\n there is at most one per subject. With conversation_id, omit it or send\n the conversation's own subject. A conversation's subject never changes\n once set (see Subject): any other subject, or a subject for a\n conversation that has none, is FAILED_PRECONDITION with\n CONVERSATION_SUBJECT_MISMATCH, and nothing is recorded. It is part of the\n request the idempotency key covers.",
             "title": "subject"
           },
           "text": {
@@ -3232,7 +3233,7 @@
       },
       "ai.v1.Subject": {
         "additionalProperties": false,
-        "description": "Subject is the one thing a conversation is about, such as one of the\n caller's strategies. A client that shows the assistant beside that thing\n names it with each message: the subject selects the conversation about it\n and tells the assistant what the user is working on. It grants nothing:\n every read and change the assistant makes is still checked against the\n caller's own access.",
+        "description": "Subject is the one thing a conversation is about, such as one of the\n caller's strategies. A client that shows the assistant beside that thing\n names it with each message: the subject selects the conversation about it\n and tells the assistant what the user is working on. It grants nothing:\n every read and change the assistant makes is still checked against the\n caller's own access.\n\n A conversation without a subject gets one at most once: when the assistant\n creates a strategy in it, the conversation becomes about that strategy,\n unless another conversation of the caller is already about it. Only when it\n does is it the conversation that strategy's subject selects, with its\n history, and later messages may still omit the subject. When another\n conversation of the caller is already about the strategy, that conversation\n keeps it and is the one its subject selects, and this one stays without a\n subject. A second strategy created in a conversation leaves the subject on\n the first; another strategy is created in a new conversation.",
         "oneOf": [
           {
             "required": [
@@ -10231,7 +10232,9 @@
           "DRAFT_STRATEGIES",
           "PROPOSE_STRATEGY_DEPLOY",
           "READ_PNL",
-          "STOP_STRATEGIES"
+          "STOP_STRATEGIES",
+          "FORK_STRATEGIES",
+          "RETURN_STRATEGY_BOT_FUNDS"
         ],
         "title": "PolicyAction",
         "type": "string"
@@ -11119,6 +11122,11 @@
             "$ref": "#/components/schemas/auth.v1.SubaccountStatus",
             "description": "Current public lifecycle status of the sub-account.",
             "title": "status"
+          },
+          "strategyBot": {
+            "description": "True once a strategy bot has held this sub-account; never cleared, also\n after the bot's access ends or the sub-account's policy is cleared. Use it\n to keep bot sub-accounts out of funding-source choices. Real-time updates\n carry it too.",
+            "title": "strategy_bot",
+            "type": "boolean"
           },
           "subaccountPolicyId": {
             "description": "Optional sub-account policy identifier (opaque ID). 0 means no\n explicit policy attached.",
@@ -19205,7 +19213,7 @@
       },
       "ledger.read.v1.CreateStatementExportRequest": {
         "additionalProperties": false,
-        "description": "CreateStatementExportRequest asks for a whole-period statement file of one\n account. The period is at most 366 days long; a longer or empty period is\n INVALID_ARGUMENT.\nend_time must be after start_time and at most 366 days after it",
+        "description": "CreateStatementExportRequest asks for a whole-period account statement,\n ledger or balances file of one account. The period is at most 366 days long; a longer or empty\n period is INVALID_ARGUMENT.\nend_time must be after start_time and at most 366 days after it",
         "properties": {
           "assetId": {
             "description": "Optional public unified asset ID. When unset/0, the statement covers\n every asset; an ID that names no asset is refused.",
@@ -19240,12 +19248,18 @@
               "integer",
               "string"
             ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportType",
+            "description": "Kind of file to produce; required. Every type has the same period,\n asset filter, limits and lifecycle; a BALANCES period must also start\n inside the account history.",
+            "title": "type"
           }
         },
         "required": [
           "startTime",
           "endTime",
-          "idempotencyKey"
+          "idempotencyKey",
+          "type"
         ],
         "title": "CreateStatementExportRequest",
         "type": "object"
@@ -19731,7 +19745,7 @@
             "title": "expires_at"
           },
           "filename": {
-            "description": "Name the download saves the file as, `statement-<exportId>.csv`.",
+            "description": "Name the download saves the file as, `account-statement-<exportId>.csv`,\n `ledger-<exportId>.csv` or `balances-<exportId>.csv`, by the export's\n type.",
             "title": "filename",
             "type": "string"
           },
@@ -20012,7 +20026,7 @@
       },
       "ledger.read.v1.StatementExport": {
         "additionalProperties": false,
-        "description": "StatementExport is a whole-period account statement produced in the\n background as one CSV file.\n\n The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,\n then every row of the period up to complete_through, oldest first. A period\n without movements yields the header row alone. Each row is the effect of\n one entry on one account bucket in one asset. An entry is one ledger\n operation, such as a trade with its fees, a deposit, a withdrawal step or an\n internal transfer.\n\n Columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: entry identifier, an unsigned 128-bit integer as a decimal\n   string. It is the `transfer_id` of the entry's first transfer leg on the\n   account within the export's period, as LedgerReadService.ListTransfers\n   returns it, and is the same whichever asset the export is limited to. A\n   period boundary can fall between the legs of one entry: each export then\n   holds its own part of the entry, under the `transfer_id` of that part's\n   first leg, so do not join rows across periods on `entry_id` alone.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   as LedgerReadService.ListTransfers returns it; empty otherwise.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.\n\n A READY file downloads in one of two ways:\n - StatementExportService.GetStatementExportDownloadUrl returns a URL valid\n   for 60 seconds from signing that needs no credentials, so a browser can\n   save the file straight to disk.\n - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the\n   file as `text/csv` and supports HTTP `Range` requests.\n\n Both save the file as `statement-<exportId>.csv`. Before the file is READY\n both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST\n `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;\n an EXPIRED export, or a file already deleted, answers\n STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL\n request for a file with less than 5 seconds left; a CANCELED export\n answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are\n `application/problem+json` whose `code` is the ErrorCode name, such as\n `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403\n PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`\n for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with\n `Retry-After`, when the request can be retried.\n\n An export belongs to the root account whose session or API key created it.\n Any session or API key of that root that may read the export's account can\n read and download it, whichever of them created it. A member of a\n subaccount shared from another root sees only the exports its own root\n created, and the subaccount's owner does not see those: an export of\n another root, or of an account the caller can no longer read, answers\n NOT_FOUND, as one that does not exist.",
+        "description": "StatementExport is a whole-period account statement, ledger or balances\n file produced in the background as one CSV file.\n\n The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,\n then the rows of the period up to complete_through. ACCOUNT_STATEMENT and\n LEDGER rows come oldest first, and a period without movements yields the\n header row alone. Every type reads the same ledger movements of the\n account; type sets the file's rows and columns.\n\n An ACCOUNT_STATEMENT row is the effect of one entry on one account bucket\n in one asset. An entry is one ledger operation, such as a trade with its\n fees, a deposit, a withdrawal step or an internal transfer.\n\n ACCOUNT_STATEMENT columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: entry identifier, an unsigned 128-bit integer as a decimal\n   string. It is the `transfer_id` of the entry's first transfer leg on the\n   account within the export's period, as LedgerReadService.ListTransfers\n   returns it, and is the same whichever asset the export is limited to. A\n   period boundary can fall between the legs of one entry: each export then\n   holds its own part of the entry, under the `transfer_id` of that part's\n   first leg, so do not join rows across periods on `entry_id` alone.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   linked before the export was created; empty otherwise. A flow linked\n   later, which LedgerReadService.ListTransfers then shows, is not in the\n   file: a new export shows it.\n\n A LEDGER row is one ledger movement: one transfer leg on the account,\n as LedgerReadService.ListTransfers returns it. A trade's settlement is\n several rows, such as its base and quote legs and each fee.\n\n LEDGER columns, in order:\n - `time`: transfer time, RFC 3339 in UTC with microseconds.\n - `transfer_id`: transfer identifier, an unsigned 128-bit integer as a\n   decimal string, as LedgerReadService.ListTransfers returns it. With\n   `account` and `side` it identifies the row.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `type`: transfer reason, such as `trade_base`, `trade_quote`,\n   `maker_fee`, `taker_fee`, `rebate`, `deposit`, `withdraw`,\n   `internal_transfer` or `funding_to_trading`.\n - `side`: `debit` when the movement takes from the account bucket,\n   `credit` when it adds to it.\n - `amount`: signed balance change in whole units of the asset: negative\n   for a debit, positive for a credit.\n - `counterparty`: kind of the transfer's other side: `funding_account`,\n   `trading_account`, `external_address`, `private_counterparty`,\n   `fee_account` or `system_account`; empty when unknown.\n - `balance`: account bucket balance in the asset after the movement, in\n   whole units of the asset. For consecutive rows of the same bucket and\n   asset, each balance equals the previous balance plus `amount`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the transfer belongs to a chain\n   lifecycle flow linked before the export was created; empty otherwise,\n   as for `flow_id` of an account statement.\n\n A BALANCES row is one account bucket in one asset over the period: its\n balance at start_time, the period's ledger movements on it, and its\n balance at complete_through. Rows come sorted by `account`, then `asset`.\n A bucket and asset with a zero balance at both ends and no movement has no\n row, so an account without any yields the header row alone. The period\n must start at or after the earliest instant whose balances the account\n history holds: an earlier start is refused when the export is created\n (CreateStatementExport) and fails the export if that instant moves later\n before the file is produced.\n\n BALANCES columns, in order:\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `opening_balance`: balance of the bucket in the asset at start_time.\n - `credits`: total the period's movements added to the bucket, the sum of\n   the LEDGER file's credit rows of that bucket and asset; `0` when none.\n - `debits`: total the period's movements took from the bucket, the sum of\n   the LEDGER file's debit rows of that bucket and asset, as a positive\n   amount; `0` when none.\n - `closing_balance`: balance of the bucket in the asset at\n   complete_through. Every row reconciles: `closing_balance` equals\n   `opening_balance` plus `credits` minus `debits`.\n - `movements`: number of the period's ledger movements on the bucket in\n   the asset.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.\n\n A READY file downloads in one of two ways:\n - StatementExportService.GetStatementExportDownloadUrl returns a URL valid\n   for 60 seconds from signing that needs no credentials, so a browser can\n   save the file straight to disk.\n - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the\n   file as `text/csv` and supports HTTP `Range` requests.\n\n Both save the file as `account-statement-<exportId>.csv`,\n `ledger-<exportId>.csv` or `balances-<exportId>.csv`, by type. Before the file is READY\n both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST\n `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;\n an EXPIRED export, or a file already deleted, answers\n STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL\n request for a file with less than 5 seconds left; a CANCELED export\n answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are\n `application/problem+json` whose `code` is the ErrorCode name, such as\n `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403\n PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`\n for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with\n `Retry-After`, when the request can be retried.\n\n An export belongs to the root account whose session or API key created it.\n Any session or API key of that root that may read the export's account can\n read and download it, whichever of them created it. A member of a\n subaccount shared from another root sees only the exports its own root\n created, and the subaccount's owner does not see those: an export of\n another root, or of an account the caller can no longer read, answers\n NOT_FOUND, as one that does not exist.",
         "properties": {
           "assetId": {
             "description": "Public unified asset ID the statement is limited to; 0 for every asset.",
@@ -20062,6 +20076,11 @@
             "description": "Why the export FAILED; unspecified otherwise.",
             "title": "failure_reason"
           },
+          "historyAvailableFrom": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Earliest instant whose balances the account history holds, which a\n BALANCES export's period must start at or after. Set only when\n failure_reason is STATEMENT_EXPORT_FAILURE_REASON_HISTORY_UNAVAILABLE.",
+            "title": "history_available_from"
+          },
           "idempotencyKey": {
             "description": "Idempotency key of the request that created the export.",
             "title": "idempotency_key",
@@ -20100,6 +20119,11 @@
               "integer",
               "string"
             ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportType",
+            "description": "Kind of file the export produces, as requested.",
+            "title": "type"
           }
         },
         "title": "StatementExport",
@@ -20110,7 +20134,8 @@
         "enum": [
           "STATEMENT_EXPORT_FAILURE_REASON_UNSPECIFIED",
           "STATEMENT_EXPORT_FAILURE_REASON_TOO_LARGE",
-          "STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE"
+          "STATEMENT_EXPORT_FAILURE_REASON_UNAVAILABLE",
+          "STATEMENT_EXPORT_FAILURE_REASON_HISTORY_UNAVAILABLE"
         ],
         "title": "StatementExportFailureReason",
         "type": "string"
@@ -20127,6 +20152,17 @@
           "STATEMENT_EXPORT_STATUS_CANCELED"
         ],
         "title": "StatementExportStatus",
+        "type": "string"
+      },
+      "ledger.read.v1.StatementExportType": {
+        "description": "StatementExportType is the kind of file a statement export produces.",
+        "enum": [
+          "STATEMENT_EXPORT_TYPE_UNSPECIFIED",
+          "ACCOUNT_STATEMENT",
+          "LEDGER",
+          "BALANCES"
+        ],
+        "title": "StatementExportType",
         "type": "string"
       },
       "ledger.read.v1.TransferRow": {
@@ -29173,6 +29209,15 @@
             "title": "quote_asset",
             "type": "string"
           },
+          "revision": {
+            "description": "The strategy's revision whose version the bot runs, the number\n ListStrategyRevisions shows, as its deploy proposal recorded it. Zero\n when the run has no linked strategy, for example once the strategy is\n deleted.",
+            "format": "int64",
+            "title": "revision",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "runningSince": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "When the bot last started running. Set only while it is RUNNING.",
@@ -29187,6 +29232,15 @@
             "description": "Why the bot paused, in words: the bot's own message when it decided\n to pause, else a sentence for pause_reason. Set only with PAUSED.",
             "title": "status_reason",
             "type": "string"
+          },
+          "strategyId": {
+            "description": "Public ID of the strategy the bot was deployed from, as its deploy\n proposal recorded it. Zero when the run has no linked strategy, for\n example once the strategy is deleted.",
+            "format": "int64",
+            "title": "strategy_id",
+            "type": [
+              "integer",
+              "string"
+            ]
           },
           "subaccountId": {
             "description": "Public ID of the bot's own subaccount, which the caller's main account\n owns.",
@@ -29351,6 +29405,74 @@
         "title": "BotFunding",
         "type": "object"
       },
+      "strategies.v1.BotFundsReturn": {
+        "additionalProperties": false,
+        "description": "BotFundsReturn is one return of a stopped bot's available balances to its\n owner's main account.",
+        "properties": {
+          "assets": {
+            "description": "The amounts moved so far from the bot's subaccount to the main account,\n one per asset, confirmed only: an amount the return is still moving\n counts once the move is confirmed. It grows while RETURN_PROCESSING, as\n more becomes spendable; empty for RETURN_NOTHING_MOVED.",
+            "items": {
+              "$ref": "#/components/schemas/strategies.v1.Money"
+            },
+            "title": "assets",
+            "type": "array"
+          },
+          "botId": {
+            "description": "Public bot ID of the bot whose funds it returns.",
+            "format": "int64",
+            "title": "bot_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "finishedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When it completed or ended with nothing moved; unset while processing.",
+            "title": "finished_at"
+          },
+          "held": {
+            "description": "What still stays on the bot's subaccount, one per asset, as the return\n last read it: what its open orders' holds reserve. The return takes\n it once released, as the orders fill or end. Empty once the return\n finished.",
+            "items": {
+              "$ref": "#/components/schemas/strategies.v1.Money"
+            },
+            "title": "held",
+            "type": "array"
+          },
+          "requestedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the return was requested.",
+            "title": "requested_at"
+          },
+          "returnId": {
+            "description": "Public return ID: GetBotFundsReturn reads the return by it.",
+            "format": "int64",
+            "title": "return_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/strategies.v1.BotFundsReturnStatus",
+            "description": "How the return stands.",
+            "title": "status"
+          }
+        },
+        "title": "BotFundsReturn",
+        "type": "object"
+      },
+      "strategies.v1.BotFundsReturnStatus": {
+        "description": "BotFundsReturnStatus is how a return of a stopped bot's funds to its\n owner's main account stands.",
+        "enum": [
+          "BOT_FUNDS_RETURN_STATUS_UNSPECIFIED",
+          "RETURN_PROCESSING",
+          "RETURN_COMPLETED",
+          "RETURN_NOTHING_MOVED"
+        ],
+        "title": "BotFundsReturnStatus",
+        "type": "string"
+      },
       "strategies.v1.BotLogEntry": {
         "additionalProperties": false,
         "description": "BotLogEntry is one entry of a bot's recent activity: a decision, a line its\n call wrote, or a failed call.",
@@ -29421,6 +29543,15 @@
             "title": "name",
             "type": "string"
           },
+          "revision": {
+            "description": "The strategy's revision whose version the run ran, the number\n ListStrategyRevisions shows, as its deploy proposal recorded it. Zero\n when the run has no linked strategy, for example once the strategy is\n deleted.",
+            "format": "int64",
+            "title": "revision",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
           "runtimeVersion": {
             "description": "Runtime version the version was validated against.",
             "title": "runtime_version",
@@ -29435,6 +29566,15 @@
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "When the stop of this run was recorded. Omitted while the run has no\n stop.",
             "title": "stopped_at"
+          },
+          "strategyId": {
+            "description": "Public ID of the strategy the run was deployed from, as its deploy\n proposal recorded it. Zero when the run has no linked strategy, for\n example once the strategy is deleted.",
+            "format": "int64",
+            "title": "strategy_id",
+            "type": [
+              "integer",
+              "string"
+            ]
           },
           "versionId": {
             "description": "The version the bot ran. GetStrategyVersion reads it.",
@@ -29483,6 +29623,33 @@
         "title": "CommunityBacktest",
         "type": "object"
       },
+      "strategies.v1.CommunityForkSource": {
+        "additionalProperties": false,
+        "description": "CommunityForkSource is the community listing a listed strategy was\n forked from. It never shows more of the source than the source's own\n listing does.",
+        "properties": {
+          "authorUsername": {
+            "description": "The source author's current username, while the source is public.\n Empty otherwise.",
+            "title": "author_username",
+            "type": "string"
+          },
+          "listingId": {
+            "description": "Public listing ID of the source, while it is public. Zero once it\n isn't: the strategy is then shown as forked from a community strategy.",
+            "format": "int64",
+            "title": "listing_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "title": {
+            "description": "The source listing's title, while it is public. Empty otherwise.",
+            "title": "title",
+            "type": "string"
+          }
+        },
+        "title": "CommunityForkSource",
+        "type": "object"
+      },
       "strategies.v1.CommunityStrategy": {
         "additionalProperties": false,
         "description": "CommunityStrategy is one public community listing with its published\n version: everything a reader needs to judge it, and nothing of its\n author's account. The settings shown are the version's defaults, never\n the author's own values.",
@@ -29511,6 +29678,16 @@
             "$ref": "#/components/schemas/strategies.v1.StrategyFlow",
             "description": "The published version's flow: what wakes the bot, what it checks and\n what it may do. Unset for a version stored before flows existed.",
             "title": "flow"
+          },
+          "forkedFrom": {
+            "$ref": "#/components/schemas/strategies.v1.CommunityForkSource",
+            "description": "The listing the strategy was forked from. Unset when it wasn't forked.\n The platform sets it from the strategy's origin at each publish; its\n author can't remove or change it.",
+            "title": "forked_from"
+          },
+          "forks": {
+            "description": "How many accounts forked the listing. An account that forked it more\n than once counts once, and its author's own copies never count.",
+            "title": "forks",
+            "type": "integer"
           },
           "listingId": {
             "description": "Public listing ID.",
@@ -29592,6 +29769,11 @@
             "$ref": "#/components/schemas/strategies.v1.CommunityBacktest",
             "description": "The platform backtest of the published version, without its report.",
             "title": "backtest"
+          },
+          "forks": {
+            "description": "How many accounts forked the listing. An account that forked it more\n than once counts once, and its author's own copies never count.",
+            "title": "forks",
+            "type": "integer"
           },
           "listingId": {
             "description": "Public listing ID. GetCommunityStrategy reads the listing.",
@@ -30054,7 +30236,7 @@
         "properties": {
           "backtest": {
             "$ref": "#/components/schemas/strategies.v1.BacktestSummary",
-            "description": "The latest backtest. Omitted when there is none; backtest_absent_reason\n then says why.",
+            "description": "The latest eligible completed backtest with the default settings: the\n caller's own, finished and within retention. Omitted when there is none;\n backtest_absent_reason then says why.",
             "title": "backtest"
           },
           "backtestAbsentReason": {
@@ -30097,7 +30279,7 @@
             "type": "string"
           },
           "warnings": {
-            "description": "What to weigh before deploying, for example \"never backtested\" or \"trades\n a thin market\".",
+            "description": "What to weigh before deploying, for example \"no completed backtest\n available\" or \"trades a thin market\".",
             "items": {
               "type": "string"
             },
@@ -30188,6 +30370,55 @@
         "title": "Kind",
         "type": "string"
       },
+      "strategies.v1.ForkStrategyRequest": {
+        "additionalProperties": false,
+        "description": "ForkStrategyRequest copies one public community listing's published\n version into a new strategy of the caller.",
+        "properties": {
+          "idempotencyKey": {
+            "description": "Client-chosen key, unique per caller, that makes the call idempotent: the\n same key and request return the strategy the first call created, as it\n stands now, and never fork again; another request with the same key, a\n CreateStrategy's or a SaveDraftVersion's included, is\n IDEMPOTENCY_CONFLICT. Required.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "title": "idempotency_key",
+            "type": "string"
+          },
+          "listingId": {
+            "description": "Public listing ID.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "listing_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "name": {
+            "description": "Name of the new strategy.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "name",
+            "type": "string"
+          }
+        },
+        "title": "ForkStrategyRequest",
+        "type": "object"
+      },
+      "strategies.v1.ForkStrategyResponse": {
+        "additionalProperties": false,
+        "description": "ForkStrategyResponse is the new strategy.",
+        "properties": {
+          "strategy": {
+            "$ref": "#/components/schemas/strategies.v1.Strategy",
+            "description": "The strategy, as it stands now: the published version is its revision\n 1, and its origin names the listing.",
+            "title": "strategy"
+          },
+          "version": {
+            "$ref": "#/components/schemas/strategies.v1.VersionValidation",
+            "description": "The check result of revision 1's version, as the listing published it.",
+            "title": "version"
+          }
+        },
+        "title": "ForkStrategyResponse",
+        "type": "object"
+      },
       "strategies.v1.GetBacktestRequest": {
         "additionalProperties": false,
         "description": "GetBacktestRequest reads one backtest of the caller.",
@@ -30217,6 +30448,37 @@
           }
         },
         "title": "GetBacktestResponse",
+        "type": "object"
+      },
+      "strategies.v1.GetBotFundsReturnRequest": {
+        "additionalProperties": false,
+        "description": "GetBotFundsReturnRequest reads one return of the caller's.",
+        "properties": {
+          "returnId": {
+            "description": "Public return ID, as ReturnBotFunds answered it.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "return_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "title": "GetBotFundsReturnRequest",
+        "type": "object"
+      },
+      "strategies.v1.GetBotFundsReturnResponse": {
+        "additionalProperties": false,
+        "description": "GetBotFundsReturnResponse is the return as it stands.",
+        "properties": {
+          "fundsReturn": {
+            "$ref": "#/components/schemas/strategies.v1.BotFundsReturn",
+            "description": "The return.",
+            "title": "funds_return"
+          }
+        },
+        "title": "GetBotFundsReturnResponse",
         "type": "object"
       },
       "strategies.v1.GetBotRequest": {
@@ -31317,7 +31579,7 @@
             "type": "array"
           },
           "fundingSubaccountId": {
-            "description": "The subaccount that funds the bot. Zero means the main account. It must\n be an active subaccount of the caller's main account; any other,\n including a disabled one, is FUNDING_SUBACCOUNT_NOT_FOUND.",
+            "description": "The subaccount that funds the bot. Zero means the main account. It must\n be an active subaccount of the caller's main account; any other,\n including a disabled one, is FUNDING_SUBACCOUNT_NOT_FOUND. A subaccount\n that is or was a strategy bot's is FUNDING_SOURCE_IS_BOT, even with no\n funding.",
             "format": "int64",
             "title": "funding_subaccount_id",
             "type": [
@@ -31498,6 +31760,108 @@
           }
         },
         "title": "RenameStrategyResponse",
+        "type": "object"
+      },
+      "strategies.v1.ReportCommunityStrategyRequest": {
+        "additionalProperties": false,
+        "description": "ReportCommunityStrategyRequest reports one public community listing to\n moderation.\nnote is required when reason is OTHER",
+        "properties": {
+          "listingId": {
+            "description": "Public listing ID.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "listing_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "note": {
+            "description": "What the reader adds. At most 500 characters; required when reason is\n OTHER.",
+            "maxLength": 500,
+            "title": "note",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/strategies.v1.ReportReason",
+            "description": "Why it is reported.",
+            "title": "reason"
+          },
+          "versionId": {
+            "description": "The version the reader saw, as GetCommunityStrategy returned it: the\n report is about that version, whatever the listing shows later.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "version_id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ReportCommunityStrategyRequest",
+        "type": "object"
+      },
+      "strategies.v1.ReportCommunityStrategyResponse": {
+        "additionalProperties": false,
+        "description": "ReportCommunityStrategyResponse confirms the report.",
+        "properties": {
+          "reportedAt": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "When the report was recorded. A repeat of the caller's report of the\n same version answers the first report's time.",
+            "title": "reported_at"
+          }
+        },
+        "title": "ReportCommunityStrategyResponse",
+        "type": "object"
+      },
+      "strategies.v1.ReportReason": {
+        "description": "ReportReason is why a reader reports a community listing.",
+        "enum": [
+          "REPORT_REASON_UNSPECIFIED",
+          "MISLEADING_RESULTS",
+          "HARMFUL_CODE",
+          "SPAM",
+          "COPIED_WITHOUT_CREDIT",
+          "OTHER"
+        ],
+        "title": "ReportReason",
+        "type": "string"
+      },
+      "strategies.v1.ReturnBotFundsRequest": {
+        "additionalProperties": false,
+        "description": "ReturnBotFundsRequest returns one stopped bot's funds to the caller's main\n account.",
+        "properties": {
+          "botId": {
+            "description": "Public bot ID. The bot must belong to the caller's main account.",
+            "exclusiveMinimum": 0,
+            "format": "int64",
+            "title": "bot_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "idempotencyKey": {
+            "description": "Client-chosen key, unique per caller, that makes the call idempotent: the\n same key and bot return the same return, as it stands now, and never\n start a second one; the same key for another bot is\n IDEMPOTENCY_CONFLICT. Required.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "title": "idempotency_key",
+            "type": "string"
+          }
+        },
+        "title": "ReturnBotFundsRequest",
+        "type": "object"
+      },
+      "strategies.v1.ReturnBotFundsResponse": {
+        "additionalProperties": false,
+        "description": "ReturnBotFundsResponse is the return the call started or joined.",
+        "properties": {
+          "fundsReturn": {
+            "$ref": "#/components/schemas/strategies.v1.BotFundsReturn",
+            "description": "The return. It reads RETURN_PROCESSING while anything stays on the bot's\n subaccount, then RETURN_COMPLETED.",
+            "title": "funds_return"
+          }
+        },
+        "title": "ReturnBotFundsResponse",
         "type": "object"
       },
       "strategies.v1.RunScenariosRequest": {
@@ -31719,7 +32083,7 @@
             "type": "array"
           },
           "error": {
-            "description": "The handler's error, when it failed. Empty otherwise.",
+            "description": "Why the example failed: the handler's error, or that a call took longer\n than allowed or the runtime failed on this run, which running the\n examples again retries. Empty otherwise.",
             "title": "error",
             "type": "string"
           },
@@ -32226,6 +32590,38 @@
         "title": "StrategyFlow",
         "type": "object"
       },
+      "strategies.v1.StrategyForkOrigin": {
+        "additionalProperties": false,
+        "description": "StrategyForkOrigin is the community listing a strategy was forked from.\n The strategy shows it was forked even once the listing is no longer\n public; it then names the listing no more.",
+        "properties": {
+          "authorUsername": {
+            "description": "The listing author's current username, while it is public. Empty\n otherwise.",
+            "title": "author_username",
+            "type": "string"
+          },
+          "listingId": {
+            "description": "Public listing ID, while the listing is public. Zero once it isn't.",
+            "format": "int64",
+            "title": "listing_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "sourceVersionId": {
+            "description": "The published version copied, which is the strategy's revision 1.",
+            "title": "source_version_id",
+            "type": "string"
+          },
+          "title": {
+            "description": "The listing's title, while it is public. Empty otherwise.",
+            "title": "title",
+            "type": "string"
+          }
+        },
+        "title": "StrategyForkOrigin",
+        "type": "object"
+      },
       "strategies.v1.StrategyLimits": {
         "additionalProperties": false,
         "description": "StrategyLimits are the limits every bot of a runtime version runs under.",
@@ -32284,6 +32680,11 @@
         "additionalProperties": false,
         "description": "StrategyListing is a strategy's community listing, as its author's\n strategy shows it.",
         "properties": {
+          "holdReason": {
+            "description": "Why moderation holds the listing. Set only when state is HELD.",
+            "title": "hold_reason",
+            "type": "string"
+          },
           "listingId": {
             "description": "Public listing ID.",
             "format": "int64",
@@ -32317,7 +32718,8 @@
         "enum": [
           "LISTING_STATE_UNSPECIFIED",
           "PUBLIC",
-          "HIDDEN"
+          "HIDDEN",
+          "HELD"
         ],
         "title": "State",
         "type": "string"
@@ -32385,6 +32787,12 @@
             "title": "duplicate"
           },
           {
+            "required": [
+              "fork"
+            ],
+            "title": "fork"
+          },
+          {
             "not": {
               "anyOf": [
                 {
@@ -32396,6 +32804,11 @@
                   "required": [
                     "duplicate"
                   ]
+                },
+                {
+                  "required": [
+                    "fork"
+                  ]
                 }
               ]
             }
@@ -32406,6 +32819,11 @@
             "$ref": "#/components/schemas/strategies.v1.StrategyDuplicateOrigin",
             "description": "The version of the caller's it was copied from.",
             "title": "duplicate"
+          },
+          "fork": {
+            "$ref": "#/components/schemas/strategies.v1.StrategyForkOrigin",
+            "description": "The community listing it was forked from.",
+            "title": "fork"
           },
           "templateId": {
             "description": "The bot template it started from.",
@@ -32793,7 +33211,7 @@
       },
       "swap.quickswap.v1.AssetWithoutDestination": {
         "additionalProperties": false,
-        "description": "AssetWithoutDestination is an asset a vault holds or was ever credited\n in, which its rule pays no destination for, so no run pays it out.",
+        "description": "AssetWithoutDestination is an asset a vault holds or was ever credited\n in, which its rule pays no destination for, so no run pays it out in kind.",
         "properties": {
           "assetId": {
             "description": "Asset, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
@@ -35952,6 +36370,14 @@
         "additionalProperties": false,
         "description": "Payout is one scheduled payout run of a broker vault's payout rule.",
         "properties": {
+          "conversions": {
+            "description": "On a rule with a payout asset, each other asset the run converts into\n it before its one payout step, in source_asset_id order; empty for an\n in-kind run and while the run is planning.",
+            "items": {
+              "$ref": "#/components/schemas/swap.quickswap.v1.PayoutConversion"
+            },
+            "title": "conversions",
+            "type": "array"
+          },
           "finishedAt": {
             "$ref": "#/components/schemas/google.protobuf.Timestamp",
             "description": "When the run ended; unset while it is in progress.",
@@ -36002,7 +36428,7 @@
             "title": "status"
           },
           "steps": {
-            "description": "One step per destination of the rule version, in asset_id order. Empty\n while the run is planning.",
+            "description": "One step per destination of the rule version, in asset_id order. Empty\n while the run is planning or converting.",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.PayoutStep"
             },
@@ -36033,6 +36459,78 @@
         ],
         "title": "PayoutClose",
         "type": "string"
+      },
+      "swap.quickswap.v1.PayoutConversion": {
+        "additionalProperties": false,
+        "description": "PayoutConversion is one asset a payout run converts into its rule's\n payout asset through a Swap placed from the vault, before it pays.\n Amounts are in base units of 18 decimals.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Amount of the source asset the conversion spends: the vault's whole\n available balance of it when the run planned.",
+            "title": "amount"
+          },
+          "executedAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Source asset spent, settled; zero until the Swap is terminal.",
+            "title": "executed_amount"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/swap.v1.Execution",
+            "description": "Market or TWAP; unset when the asset was not converted.",
+            "title": "execution"
+          },
+          "isTerminal": {
+            "description": "Whether the conversion is over: its Swap is terminal, or it was skipped.",
+            "title": "is_terminal",
+            "type": "boolean"
+          },
+          "payoutAssetId": {
+            "description": "Payout asset the conversion delivers, as an AssetConfig.ledger_id.",
+            "title": "payout_asset_id",
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/swap.v1.SwapReason",
+            "description": "Why a terminal Swap did not trade its whole amount; unset when it did or\n when the asset was not converted.",
+            "title": "reason"
+          },
+          "receivedAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Payout asset received after fees; zero until the Swap is terminal.",
+            "title": "received_amount"
+          },
+          "skipReason": {
+            "description": "Why the asset was not converted: route_unsupported (no route converts\n it into the payout asset), below_minimum, above_maximum,\n conversion_unavailable (the route's depth cannot meet the conversion's\n slippage protection now), price_unavailable (no current price valued\n it), conversion_refused, rule_superseded or policy_denied (the rule's\n author may no longer convert or withdraw from the vault); empty\n otherwise. Its balance stays in the vault.",
+            "title": "skip_reason",
+            "type": "string"
+          },
+          "sourceAssetId": {
+            "description": "Asset converted, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "source_asset_id",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/swap.v1.SwapStatus",
+            "description": "Where the Swap stands; unset when the asset was not converted.",
+            "title": "status"
+          },
+          "swapId": {
+            "description": "Public ID of the conversion's Swap; zero when the asset was not\n converted.",
+            "format": "int64",
+            "title": "swap_id",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "unspentAmount": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Source asset that stays in the vault: amount minus executed_amount.",
+            "title": "unspent_amount"
+          }
+        },
+        "title": "PayoutConversion",
+        "type": "object"
       },
       "swap.quickswap.v1.PayoutRuleDestination": {
         "additionalProperties": false,
@@ -36087,13 +36585,14 @@
         "type": "object"
       },
       "swap.quickswap.v1.PayoutStage": {
-        "description": "PayoutStage is where an in-progress payout run stands.",
+        "description": "PayoutStage is where an in-progress payout run stands. A run moves through\n the stages in this order: STAGE_PLANNING, STAGE_CONVERTING (only on a rule\n with a payout asset), STAGE_REQUESTING, STAGE_PROCESSING, STAGE_BROADCAST.\n STAGE_CONVERTING comes after STAGE_PLANNING and before STAGE_REQUESTING,\n although its number is 5.",
         "enum": [
           "PAYOUT_STAGE_UNSPECIFIED",
           "STAGE_PLANNING",
           "STAGE_REQUESTING",
           "STAGE_PROCESSING",
-          "STAGE_BROADCAST"
+          "STAGE_BROADCAST",
+          "STAGE_CONVERTING"
         ],
         "title": "PayoutStage",
         "type": "string"
@@ -37946,8 +38445,13 @@
           },
           "available": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "The vault's available balance of the asset now.",
+            "description": "The vault's available balance of the asset now. On a rule with a payout\n asset, the payout asset's entry adds what each conversion is expected to\n deliver (UpcomingPayoutConversion.expected_amount_out).",
             "title": "available"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.UpcomingPayoutConversion",
+            "description": "Set on an asset the rule converts into its payout asset: what converting\n its whole available balance is quoted to deliver now. Such an asset pays\n nothing in kind (payable zero); its hold_reason is converts, or why it\n would stay in the vault.",
+            "title": "conversion"
           },
           "destinationAddress": {
             "description": "Canonical destination address; empty when the rule has no destination\n for the asset.",
@@ -37975,11 +38479,11 @@
           },
           "heldBack": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "What would stay in the vault: available minus payable.",
+            "description": "What of the asset would stay in the vault, in the asset's own units:\n available minus payable. Zero on an asset that converts (hold_reason\n converts): its whole balance leaves the vault through the conversion.",
             "title": "held_back"
           },
           "holdReason": {
-            "description": "Why held_back stays, or why nothing pays: below_minimum,\n price_unavailable, no_destination (the rule pays no destination for the\n asset), destination_cooling_down (the destination was added to the\n vault's external withdraw whitelist less than 24 hours ago; see\n payable_from), above_max (the balance above the per-run ceiling stays)\n or dust (less than one whole unit of the destination network stays);\n empty when the whole balance pays.",
+            "description": "Why held_back stays, or why nothing pays: below_minimum,\n price_unavailable, no_destination (the rule pays no destination for the\n asset), destination_cooling_down (the destination was added to the\n vault's external withdraw whitelist less than 24 hours ago; see\n payable_from), above_max (the balance above the per-run ceiling stays)\n or dust (less than one whole unit of the destination network stays);\n on a rule with a payout asset, converts (the asset is converted into the\n payout asset instead; see conversion) or why it would not be converted\n (conversion.skip_reason); empty when the whole balance pays.",
             "title": "hold_reason",
             "type": "string"
           },
@@ -37990,7 +38494,7 @@
           },
           "payable": {
             "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
-            "description": "What the run would pay: the available balance up to the rule's per-run\n ceiling, rounded down to whole units of the destination network, or zero\n when it holds.",
+            "description": "What the run would pay: available up to the rule's per-run ceiling,\n rounded down to whole units of the destination network, or zero when it\n holds. On the payout asset of a rule with a payout asset, available\n includes the expected conversion outputs. Zero on an asset the rule\n converts, which pays nothing in kind.",
             "title": "payable"
           },
           "payableFrom": {
@@ -38010,6 +38514,44 @@
           }
         },
         "title": "UpcomingPayoutAsset",
+        "type": "object"
+      },
+      "swap.quickswap.v1.UpcomingPayoutConversion": {
+        "additionalProperties": false,
+        "description": "UpcomingPayoutConversion is the current quote for converting one asset of\n a vault into its rule's payout asset through a Swap placed from the vault.\n Amounts are in base units of 18 decimals.",
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/swap.v1.Execution",
+            "description": "How the run would execute the conversion: market, or TWAP over the\n rule's conversion duration (VaultPayoutRule.conversion_twap_duration_ms)\n when its USD value exceeds 10,000 or its price impact exceeds 0.5%. A\n TWAP whose slices would fall below the route's minimum runs in fewer,\n longer slices, never fewer than two; otherwise the asset is skipped with\n below_minimum. Unset when the asset would not be converted.",
+            "title": "execution"
+          },
+          "expectedAmountOut": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Expected payout asset after every leg's fee, estimated from the whole\n amount at the current book depth; a TWAP's slices execute at the prices\n of their own time. Unset when the asset would not be converted.",
+            "title": "expected_amount_out"
+          },
+          "minAmountOut": {
+            "$ref": "#/components/schemas/swap.quickswap.v1.TokenAmount",
+            "description": "Least payout asset the conversion accepts: the expected amount less the\n 1% slippage protection, estimated the same way. Unset when the asset\n would not be converted.",
+            "title": "min_amount_out"
+          },
+          "payoutAssetId": {
+            "description": "Payout asset the conversion delivers, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "title": "payout_asset_id",
+            "type": "integer"
+          },
+          "priceImpactBps": {
+            "description": "Quoted price impact of the whole amount, in basis points.",
+            "title": "price_impact_bps",
+            "type": "integer"
+          },
+          "skipReason": {
+            "description": "Why the asset would not be converted now: route_unsupported (no route\n converts it into the payout asset), below_minimum, above_maximum,\n conversion_unavailable (the route's depth cannot meet the conversion's\n slippage protection now) or price_unavailable (no current price values\n it); empty when it would. Its balance stays in the vault.",
+            "title": "skip_reason",
+            "type": "string"
+          }
+        },
+        "title": "UpcomingPayoutConversion",
         "type": "object"
       },
       "swap.quickswap.v1.VaultAllowlistChange": {
@@ -38459,12 +39001,21 @@
         "description": "VaultPayoutRule is one broker vault's payout rule and the assets it leaves\n in the vault.",
         "properties": {
           "assetsWithoutDestination": {
-            "description": "Every asset the vault holds or was ever credited in that the rule pays\n no destination for, in asset_id order; every such asset when the vault\n has no rule.",
+            "description": "Every asset the vault holds or was ever credited in that the rule pays\n no destination for, in asset_id order; every such asset when the vault\n has no rule. On a rule with a payout asset, each run converts those with\n a balance into the payout asset before it pays (see payout_asset_id).",
             "items": {
               "$ref": "#/components/schemas/swap.quickswap.v1.AssetWithoutDestination"
             },
             "title": "assets_without_destination",
             "type": "array"
+          },
+          "conversionTwapDurationMs": {
+            "description": "Duration of a conversion that runs as TWAP, in milliseconds, 60000 to\n 3600000. A conversion runs as TWAP when its USD value exceeds 10,000 or\n its quoted price impact exceeds 0.5%, otherwise at market. Zero when\n the rule has no payout asset.",
+            "format": "int64",
+            "title": "conversion_twap_duration_ms",
+            "type": [
+              "integer",
+              "string"
+            ]
           },
           "destinations": {
             "description": "One destination per paid asset, in asset_id order.",
@@ -38488,6 +39039,11 @@
             "$ref": "#/components/schemas/chain.withdraw.v1.AutoWithdrawPause",
             "description": "Set when the rule paused itself; an Owner or Finance member resumes it.",
             "title": "pause"
+          },
+          "payoutAssetId": {
+            "description": "Asset every other asset with a balance is converted into, through a\n Swap placed from the vault, before a run pays it, as an\n AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config; zero\n when the rule pays every asset in kind. When set, destinations has\n exactly one entry, for this asset.",
+            "title": "payout_asset_id",
+            "type": "integer"
           },
           "ruleVersion": {
             "description": "The rule's latest version; zero when the vault has no rule, and every\n other rule field is then unset.",
@@ -55619,7 +56175,7 @@
     },
     "/ledger.read.v1.StatementExportService/CreateStatementExport": {
       "post": {
-        "description": "Create a whole-period account statement file, produced in the background. Idempotent per idempotency key.",
+        "description": "Create a whole-period account statement, ledger or balances file, produced in the background. Idempotent per idempotency key.",
         "operationId": "StatementExportService_CreateStatementExport",
         "parameters": [
           {
@@ -59840,7 +60396,7 @@
     },
     "/strategies.v1.StrategiesService/DeleteStrategy": {
       "post": {
-        "description": "Delete a strategy and its revisions, unless a bot deployed from it is still running, a deploy proposal of it is waiting or its community listing is public. An API key needs DRAFT_STRATEGIES and must be scoped to the main account.",
+        "description": "Delete a strategy and its revisions, unless a bot deployed from it is still running, a deploy proposal of it is waiting or its community listing is public or held by moderation. An API key needs DRAFT_STRATEGIES and must be scoped to the main account.",
         "operationId": "StrategiesService_DeleteStrategy",
         "parameters": [
           {
@@ -60140,6 +60696,76 @@
           }
         },
         "summary": "Explain Strategy",
+        "tags": [
+          "Strategies Service",
+          "StrategiesService"
+        ]
+      }
+    },
+    "/strategies.v1.StrategiesService/ForkStrategy": {
+      "post": {
+        "description": "Copy a public community listing's published version into a new strategy of the caller. An API key needs FORK_STRATEGIES and must be scoped to the main account; connected apps can't fork.",
+        "operationId": "StrategiesService_ForkStrategy",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ForkStrategyRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ForkStrategyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ForkStrategyResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ForkStrategyResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Fork Strategy",
         "tags": [
           "Strategies Service",
           "StrategiesService"
@@ -60476,6 +61102,174 @@
           }
         },
         "summary": "Get Bot",
+        "tags": [
+          "Strategies Service",
+          "StrategiesService"
+        ]
+      }
+    },
+    "/strategies.v1.StrategiesService/GetBotFundsReturn": {
+      "get": {
+        "description": "Read one return of a stopped bot's funds to the owner's main account, by its return ID. An API key needs READ_STRATEGIES and must be scoped to the main account.",
+        "operationId": "StrategiesService_GetBotFundsReturn.get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          },
+          {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnRequest"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnRequest"
+                }
+              }
+            },
+            "in": "query",
+            "name": "message"
+          },
+          {
+            "in": "query",
+            "name": "encoding",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/encoding"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base64",
+            "schema": {
+              "$ref": "#/components/schemas/base64"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compression",
+            "schema": {
+              "$ref": "#/components/schemas/compression"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connect",
+            "schema": {
+              "$ref": "#/components/schemas/connect"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Bot Funds Return",
+        "tags": [
+          "Strategies Service",
+          "StrategiesService"
+        ]
+      },
+      "post": {
+        "description": "Read one return of a stopped bot's funds to the owner's main account, by its return ID. An API key needs READ_STRATEGIES and must be scoped to the main account.",
+        "operationId": "StrategiesService_GetBotFundsReturn",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.GetBotFundsReturnResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get Bot Funds Return",
         "tags": [
           "Strategies Service",
           "StrategiesService"
@@ -63572,9 +64366,149 @@
         ]
       }
     },
+    "/strategies.v1.StrategiesService/ReportCommunityStrategy": {
+      "post": {
+        "description": "Report a public community listing to moderation, with a reason and a note, about the version the reader saw. Session only.",
+        "operationId": "StrategiesService_ReportCommunityStrategy",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ReportCommunityStrategyRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ReportCommunityStrategyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ReportCommunityStrategyResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ReportCommunityStrategyResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Report Community Strategy",
+        "tags": [
+          "Strategies Service",
+          "StrategiesService"
+        ]
+      }
+    },
+    "/strategies.v1.StrategiesService/ReturnBotFunds": {
+      "post": {
+        "description": "Return every available balance of a stopped bot's subaccount to the owner's main account. Only the bot's owner calls it. An API key needs RETURN_STRATEGY_BOT_FUNDS and must be scoped to the main account.",
+        "operationId": "StrategiesService_ReturnBotFunds",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Connect-Protocol-Version",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/connect-protocol-version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Connect-Timeout-Ms",
+            "schema": {
+              "$ref": "#/components/schemas/connect-timeout-header"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ReturnBotFundsRequest"
+              }
+            },
+            "application/proto": {
+              "schema": {
+                "$ref": "#/components/schemas/strategies.v1.ReturnBotFundsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ReturnBotFundsResponse"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "$ref": "#/components/schemas/strategies.v1.ReturnBotFundsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect.error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Return Bot Funds",
+        "tags": [
+          "Strategies Service",
+          "StrategiesService"
+        ]
+      }
+    },
     "/strategies.v1.StrategiesService/RunScenarios": {
       "post": {
-        "description": "Run a version's behaviour examples against its code and record the results. An API key needs DRAFT_STRATEGIES and must be scoped to the main account.",
+        "description": "Run a version's behaviour examples against its code and record the results. A run where a call takes longer than allowed or the runtime fails is returned but not recorded, so running the examples again runs them again. An API key needs DRAFT_STRATEGIES and must be scoped to the main account.",
         "operationId": "StrategiesService_RunScenarios",
         "parameters": [
           {
@@ -69882,11 +70816,11 @@
       "name": "FeeService"
     },
     {
-      "description": "Whole-period account statements produced in the background as one CSV file.",
+      "description": "Whole-period account statement, ledger and balances files produced in the background as one CSV file.",
       "name": "Statement Exports"
     },
     {
-      "description": "StatementExportService is the account statement API. A statement covers\n one account, optionally one asset, for a period of at most 366 days, and is\n produced in the background as one CSV file: create an export, poll it with\n GetStatementExport until it is READY, then download its file (see\n StatementExport). API keys need the READ_STATEMENTS policy action. A root\n account has at most 5 exports QUEUED or PROCESSING at a time, one account\n produces one export at a time, and a READY file can be downloaded for 7\n days. CancelStatementExport stops a QUEUED or PROCESSING export, which\n frees its place for the account's next export and under the root's 5.",
+      "description": "StatementExportService is the account statement API. A statement covers\n one account, optionally one asset, for a period of at most 366 days, and is\n produced in the background as one CSV file, an account statement, a ledger\n or the account's balances: create an export, poll it with\n GetStatementExport until it is READY, then download its file (see\n StatementExport). API keys need the READ_STATEMENTS policy action. A root\n account has at most 5 exports QUEUED or PROCESSING at a time, one account\n produces one export at a time, and a READY file can be downloaded for 7\n days. CancelStatementExport stops a QUEUED or PROCESSING export, which\n frees its place for the account's next export and under the root's 5.",
       "name": "StatementExportService"
     },
     {
@@ -69945,7 +70879,7 @@
       "name": "Strategies Service"
     },
     {
-      "description": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call moves money,\n creates a subaccount or deploys a bot: deploying takes the user's MFA and\n wallet signature on the deploy page ProposeDeploy links. StopBot stops a\n bot, which only ever reduces what it does.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference, ListStrategyTemplates,\n ListCommunityStrategies and GetCommunityStrategy need no credentials.\n PublishStrategyVersion and UnpublishStrategy take the user's own session:\n publishing makes a strategy's code public, so only the user does it, on\n the website. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot: deploying takes the user's MFA and wallet signature.\n Every call is safe to retry.",
+      "description": "StrategiesService writes, tests and proposes the caller's trading bots and\n reads them. Bots belong to the caller's main account, and each runs on its\n own subaccount, created when the user deploys it. No call creates a\n subaccount or deploys a bot: deploying takes the user's MFA and wallet\n signature on the deploy page ProposeDeploy links. StopBot stops a bot,\n which only ever reduces what it does. The one call that moves money,\n ReturnBotFunds, moves a stopped bot's available balances only to its\n owner's own main account.\n\n Requests name no account, except the funding subaccount of ProposeDeploy:\n every call acts for the caller's main account, and StopBot also for a\n member of a bot's subaccount whose role may stop it. An\n API key must be scoped to the main account, and its policy must grant the\n call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,\n save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to\n propose deploys, STOP_STRATEGIES to stop bots, FORK_STRATEGIES to fork community\n listings, RETURN_STRATEGY_BOT_FUNDS to return a stopped bot's funds. An API\n key scoped to a subaccount is refused\n (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants\n the permission. GetStrategyReference, ListStrategyTemplates,\n ListCommunityStrategies and GetCommunityStrategy need no credentials.\n PublishStrategyVersion, UnpublishStrategy and ReportCommunityStrategy take\n the user's own session: publishing makes a strategy's code public, and a\n report is the user's own, so only the user does them, on the website. A session a connected app holds on the user's behalf makes\n the reads with the account:read scope, and creates, saves, renames and\n deletes strategies, tests versions, proposes deploys and stops bots with\n strategies:manage; a call outside the session's scopes refuses it\n (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app\n deploys a bot, forks a community listing or returns a bot's funds:\n deploying takes the user's MFA and wallet signature, forking starts on the\n website or with an API key, and a return is the owner's own. Every call is\n safe to retry.",
       "name": "StrategiesService"
     },
     {

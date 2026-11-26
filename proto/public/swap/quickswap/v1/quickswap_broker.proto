@@ -9,6 +9,7 @@ import "google/protobuf/timestamp.proto";
 import "polyester/api/options.proto";
 import "polyester/type/v1/u128.proto";
 import "swap/quickswap/v1/quickswap.proto";
+import "swap/v1/swap.proto";
 
 option go_package = "github.com/Fabric-Labs/polyester-sdk-go/gen/swap/quickswap/v1;quickswapv1";
 option (gnostic.openapi.v3.document) = {
@@ -1048,7 +1049,11 @@ enum PayoutStatus {
   PAYOUT_FAILED = 6;
 }
 
-// PayoutStage is where an in-progress payout run stands.
+// PayoutStage is where an in-progress payout run stands. A run moves through
+// the stages in this order: STAGE_PLANNING, STAGE_CONVERTING (only on a rule
+// with a payout asset), STAGE_REQUESTING, STAGE_PROCESSING, STAGE_BROADCAST.
+// STAGE_CONVERTING comes after STAGE_PLANNING and before STAGE_REQUESTING,
+// although its number is 5.
 enum PayoutStage {
   // Not in progress.
   PAYOUT_STAGE_UNSPECIFIED = 0;
@@ -1062,6 +1067,10 @@ enum PayoutStage {
   // A destination-network transaction is known (PayoutStep.tx_hash); the run
   // waits for its withdrawals to complete.
   STAGE_BROADCAST = 4;
+  // The run is converting the vault's other assets into the rule's payout
+  // asset (Payout.conversions); its payout step is planned once every
+  // conversion is over and settled.
+  STAGE_CONVERTING = 5;
 }
 
 // PayoutStepState is where one asset's payout in a run stands.
@@ -1175,8 +1184,52 @@ message Payout {
   // unset when the rule has no USD minimum.
   TokenAmount min_usd_value = 10;
   // One step per destination of the rule version, in asset_id order. Empty
-  // while the run is planning.
+  // while the run is planning or converting.
   repeated PayoutStep steps = 11;
+  // On a rule with a payout asset, each other asset the run converts into
+  // it before its one payout step, in source_asset_id order; empty for an
+  // in-kind run and while the run is planning.
+  repeated PayoutConversion conversions = 12;
+}
+
+// PayoutConversion is one asset a payout run converts into its rule's
+// payout asset through a Swap placed from the vault, before it pays.
+// Amounts are in base units of 18 decimals.
+message PayoutConversion {
+  // Asset converted, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 source_asset_id = 1;
+  // Payout asset the conversion delivers, as an AssetConfig.ledger_id.
+  uint32 payout_asset_id = 2;
+  // Amount of the source asset the conversion spends: the vault's whole
+  // available balance of it when the run planned.
+  TokenAmount amount = 3;
+  // Public ID of the conversion's Swap; zero when the asset was not
+  // converted.
+  fixed64 swap_id = 4;
+  // Market or TWAP; unset when the asset was not converted.
+  swap.v1.Execution execution = 5;
+  // Where the Swap stands; unset when the asset was not converted.
+  swap.v1.SwapStatus status = 6;
+  // Why a terminal Swap did not trade its whole amount; unset when it did or
+  // when the asset was not converted.
+  swap.v1.SwapReason reason = 7;
+  // Whether the conversion is over: its Swap is terminal, or it was skipped.
+  bool is_terminal = 8;
+  // Source asset spent, settled; zero until the Swap is terminal.
+  TokenAmount executed_amount = 9;
+  // Source asset that stays in the vault: amount minus executed_amount.
+  TokenAmount unspent_amount = 10;
+  // Payout asset received after fees; zero until the Swap is terminal.
+  TokenAmount received_amount = 11;
+  // Why the asset was not converted: route_unsupported (no route converts
+  // it into the payout asset), below_minimum, above_maximum,
+  // conversion_unavailable (the route's depth cannot meet the conversion's
+  // slippage protection now), price_unavailable (no current price valued
+  // it), conversion_refused, rule_superseded or policy_denied (the rule's
+  // author may no longer convert or withdraw from the vault); empty
+  // otherwise. Its balance stays in the vault.
+  string skip_reason = 12;
 }
 
 // ListPayoutsRequest lists the payout runs of the broker's vaults, newest
@@ -1269,13 +1322,19 @@ message UpcomingPayoutAsset {
   // Canonical destination address; empty when the rule has no destination
   // for the asset.
   string destination_address = 3;
-  // The vault's available balance of the asset now.
+  // The vault's available balance of the asset now. On a rule with a payout
+  // asset, the payout asset's entry adds what each conversion is expected to
+  // deliver (UpcomingPayoutConversion.expected_amount_out).
   TokenAmount available = 4;
-  // What the run would pay: the available balance up to the rule's per-run
-  // ceiling, rounded down to whole units of the destination network, or zero
-  // when it holds.
+  // What the run would pay: available up to the rule's per-run ceiling,
+  // rounded down to whole units of the destination network, or zero when it
+  // holds. On the payout asset of a rule with a payout asset, available
+  // includes the expected conversion outputs. Zero on an asset the rule
+  // converts, which pays nothing in kind.
   TokenAmount payable = 5;
-  // What would stay in the vault: available minus payable.
+  // What of the asset would stay in the vault, in the asset's own units:
+  // available minus payable. Zero on an asset that converts (hold_reason
+  // converts): its whole balance leaves the vault through the conversion.
   TokenAmount held_back = 6;
   // Why held_back stays, or why nothing pays: below_minimum,
   // price_unavailable, no_destination (the rule pays no destination for the
@@ -1283,7 +1342,9 @@ message UpcomingPayoutAsset {
   // vault's external withdraw whitelist less than 24 hours ago; see
   // payable_from), above_max (the balance above the per-run ceiling stays)
   // or dust (less than one whole unit of the destination network stays);
-  // empty when the whole balance pays.
+  // on a rule with a payout asset, converts (the asset is converted into the
+  // payout asset instead; see conversion) or why it would not be converted
+  // (conversion.skip_reason); empty when the whole balance pays.
   string hold_reason = 7;
   // The least one payout of the asset pays: the destination's minimum, or
   // the least a withdrawal on its network pays now when that is higher.
@@ -1308,6 +1369,43 @@ message UpcomingPayoutAsset {
   // added to the vault's external withdraw whitelist. Unset with that hold
   // reason when the time is not known yet.
   google.protobuf.Timestamp payable_from = 13;
+  // Set on an asset the rule converts into its payout asset: what converting
+  // its whole available balance is quoted to deliver now. Such an asset pays
+  // nothing in kind (payable zero); its hold_reason is converts, or why it
+  // would stay in the vault.
+  UpcomingPayoutConversion conversion = 14;
+}
+
+// UpcomingPayoutConversion is the current quote for converting one asset of
+// a vault into its rule's payout asset through a Swap placed from the vault.
+// Amounts are in base units of 18 decimals.
+message UpcomingPayoutConversion {
+  // Payout asset the conversion delivers, as an AssetConfig.ledger_id from
+  // GET /v1/chain/deposit-withdraw/config.
+  uint32 payout_asset_id = 1;
+  // Expected payout asset after every leg's fee, estimated from the whole
+  // amount at the current book depth; a TWAP's slices execute at the prices
+  // of their own time. Unset when the asset would not be converted.
+  TokenAmount expected_amount_out = 2;
+  // Least payout asset the conversion accepts: the expected amount less the
+  // 1% slippage protection, estimated the same way. Unset when the asset
+  // would not be converted.
+  TokenAmount min_amount_out = 3;
+  // Quoted price impact of the whole amount, in basis points.
+  uint32 price_impact_bps = 4;
+  // How the run would execute the conversion: market, or TWAP over the
+  // rule's conversion duration (VaultPayoutRule.conversion_twap_duration_ms)
+  // when its USD value exceeds 10,000 or its price impact exceeds 0.5%. A
+  // TWAP whose slices would fall below the route's minimum runs in fewer,
+  // longer slices, never fewer than two; otherwise the asset is skipped with
+  // below_minimum. Unset when the asset would not be converted.
+  swap.v1.Execution execution = 5;
+  // Why the asset would not be converted now: route_unsupported (no route
+  // converts it into the payout asset), below_minimum, above_maximum,
+  // conversion_unavailable (the route's depth cannot meet the conversion's
+  // slippage protection now) or price_unavailable (no current price values
+  // it); empty when it would. Its balance stays in the vault.
+  string skip_reason = 6;
 }
 
 // UpcomingPayout previews one vault's next payout run from its balances now.
@@ -1391,7 +1489,7 @@ message PayoutRuleDestination {
 }
 
 // AssetWithoutDestination is an asset a vault holds or was ever credited
-// in, which its rule pays no destination for, so no run pays it out.
+// in, which its rule pays no destination for, so no run pays it out in kind.
 message AssetWithoutDestination {
   // Asset, as an AssetConfig.ledger_id from
   // GET /v1/chain/deposit-withdraw/config.
@@ -1425,8 +1523,20 @@ message VaultPayoutRule {
   google.protobuf.Timestamp updated_at = 8;
   // Every asset the vault holds or was ever credited in that the rule pays
   // no destination for, in asset_id order; every such asset when the vault
-  // has no rule.
+  // has no rule. On a rule with a payout asset, each run converts those with
+  // a balance into the payout asset before it pays (see payout_asset_id).
   repeated AssetWithoutDestination assets_without_destination = 9;
+  // Asset every other asset with a balance is converted into, through a
+  // Swap placed from the vault, before a run pays it, as an
+  // AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config; zero
+  // when the rule pays every asset in kind. When set, destinations has
+  // exactly one entry, for this asset.
+  uint32 payout_asset_id = 10;
+  // Duration of a conversion that runs as TWAP, in milliseconds, 60000 to
+  // 3600000. A conversion runs as TWAP when its USD value exceeds 10,000 or
+  // its quoted price impact exceeds 0.5%, otherwise at market. Zero when
+  // the rule has no payout asset.
+  uint64 conversion_twap_duration_ms = 11;
 }
 
 // ListVaultPayoutRulesRequest reads the payout rules of the broker's vaults.
@@ -2338,8 +2448,9 @@ service QuickSwapBrokerService {
 
   // ListPayouts lists the payout runs of the broker's vaults.
   //
-  // Newest first, filtered by vault, status and scheduled slot. Every broker
-  // role and the broker's API keys can read, without step-up.
+  // Newest first, filtered by vault, status and scheduled slot, each run
+  // with its payout steps and its conversions into the rule's payout asset.
+  // Every broker role and the broker's API keys can read, without step-up.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND, or VAULT_NOT_FOUND for a vault that is
@@ -2386,7 +2497,8 @@ service QuickSwapBrokerService {
   //
   // The preview uses the vault's balances now: when the run starts, whether
   // it would pay, and per asset what it would pay, what would stay and why,
-  // and the expected network fee. Every broker role and the broker's API keys
+  // the expected network fee and, on a rule with a payout asset, the quote
+  // of each conversion into it. Every broker role and the broker's API keys
   // can read, without step-up.
   //
   // Errors:
@@ -2410,8 +2522,9 @@ service QuickSwapBrokerService {
   // ListVaultPayoutRules reads the payout rule of each of the broker's vaults.
   //
   // Each vault also lists the assets it holds or was credited in that its
-  // rule pays no destination for. Every broker role and the broker's API keys
-  // can read, without step-up; only Owner and Finance members change rules.
+  // rule pays no destination for, and the payout asset its rule converts
+  // them into, if any. Every broker role and the broker's API keys can read,
+  // without step-up; only Owner and Finance members change rules.
   //
   // Errors:
   // - NOT_FOUND: BROKER_NOT_FOUND or VAULT_NOT_FOUND.

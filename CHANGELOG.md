@@ -3,6 +3,25 @@
 Public contract publications to `develop`, newest first. Each entry lists
 the change notes it published; read them under `changes/`.
 
+## 2026-11-26 — develop-20261126T110905Z
+
+Release 0.93.12: Strategies bot API changes, LEDGER and BALANCES statement exports, Quick Swap payout conversions, auth sub-account changes and AI API updates.
+
+- [2026-11-23T1944Z-strategies-v1](changes/2026-11-23T1944Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-24T0000Z-strategies-v1](changes/2026-11-24T0000Z-strategies-v1.md): added `strategies.v1.StrategiesService`, `auth.v1.PolicyService`.
+- [2026-11-24T0130Z-strategies-v1](changes/2026-11-24T0130Z-strategies-v1.md): added `strategies.v1.StrategiesService`.
+- [2026-11-24T2250Z-strategies-v1](changes/2026-11-24T2250Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-25T0618Z-swap-quickswap-v1](changes/2026-11-25T0618Z-swap-quickswap-v1.md): added `swap.quickswap.v1.QuickSwapBrokerService`.
+- [2026-11-25T0619Z-ai-v1](changes/2026-11-25T0619Z-ai-v1.md): changed `ai.v1.AssistantService`. **Breaking.**
+- [2026-11-25T0822Z-ledger-read-v1](changes/2026-11-25T0822Z-ledger-read-v1.md): changed `ledger.read.v1.StatementExportService`. **Breaking.**
+- [2026-11-25T1312Z-strategies-v1](changes/2026-11-25T1312Z-strategies-v1.md): changed `strategies.v1.StrategiesService`.
+- [2026-11-25T1352Z-auth-v1](changes/2026-11-25T1352Z-auth-v1.md): changed `auth.v1.PolicyService`, `auth.v1.ApiKeyService`. **Breaking.**
+- [2026-11-25T1418Z-auth-v1](changes/2026-11-25T1418Z-auth-v1.md): added `auth.v1.SubaccountService`, `auth.v1.SubaccountViewService`.
+- [2026-11-25T1628Z-ai-v1](changes/2026-11-25T1628Z-ai-v1.md): changed `ai.v1.AssistantService`.
+- [2026-11-25T1758Z-strategies-v1](changes/2026-11-25T1758Z-strategies-v1.md): added `strategies.v1.StrategiesService`.
+- [2026-11-25T1859Z-strategies-v1](changes/2026-11-25T1859Z-strategies-v1.md): added `strategies.v1.StrategiesService`, `auth.v1.PolicyService`.
+- [2026-11-25T2330Z-ledger-read-v1](changes/2026-11-25T2330Z-ledger-read-v1.md): changed `ledger.read.v1.StatementExportService`.
+
 ## 2026-11-25 — develop-20261125T131445Z
 
 0.93.11: Swap cancel and listing, order controls, read-model and reference updates.

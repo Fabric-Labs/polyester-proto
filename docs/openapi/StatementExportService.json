@@ -25,7 +25,7 @@
       },
       "ledger.read.v1.CreateStatementExportRequest": {
         "additionalProperties": false,
-        "description": "CreateStatementExportRequest asks for a whole-period statement file of one\n account. The period is at most 366 days long; a longer or empty period is\n INVALID_ARGUMENT.\nend_time must be after start_time and at most 366 days after it",
+        "description": "CreateStatementExportRequest asks for a whole-period account statement,\n ledger or balances file of one account. The period is at most 366 days long; a longer or empty\n period is INVALID_ARGUMENT.\nend_time must be after start_time and at most 366 days after it",
         "properties": {
           "assetId": {
             "description": "Optional public unified asset ID. When unset/0, the statement covers\n every asset; an ID that names no asset is refused.",
@@ -56,12 +56,18 @@
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "subaccount_id",
             "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportType",
+            "description": "Kind of file to produce; required. Every type has the same period,\n asset filter, limits and lifecycle; a BALANCES period must also start\n inside the account history.",
+            "title": "type"
           }
         },
         "required": [
           "startTime",
           "endTime",
-          "idempotencyKey"
+          "idempotencyKey",
+          "type"
         ],
         "title": "CreateStatementExportRequest",
         "type": "object"
@@ -89,7 +95,7 @@
             "title": "expires_at"
           },
           "filename": {
-            "description": "Name the download saves the file as, `statement-\u003cexportId\u003e.csv`.",
+            "description": "Name the download saves the file as, `account-statement-\u003cexportId\u003e.csv`,\n `ledger-\u003cexportId\u003e.csv` or `balances-\u003cexportId\u003e.csv`, by the export's\n type.",
             "title": "filename",
             "type": "string"
           },
@@ -149,7 +155,7 @@
       },
       "ledger.read.v1.StatementExport": {
         "additionalProperties": false,
-        "description": "StatementExport is a whole-period account statement produced in the\n background as one CSV file.\n\n The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,\n then every row of the period up to complete_through, oldest first. A period\n without movements yields the header row alone. Each row is the effect of\n one entry on one account bucket in one asset. An entry is one ledger\n operation, such as a trade with its fees, a deposit, a withdrawal step or an\n internal transfer.\n\n Columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: entry identifier, an unsigned 128-bit integer as a decimal\n   string. It is the `transfer_id` of the entry's first transfer leg on the\n   account within the export's period, as LedgerReadService.ListTransfers\n   returns it, and is the same whichever asset the export is limited to. A\n   period boundary can fall between the legs of one entry: each export then\n   holds its own part of the entry, under the `transfer_id` of that part's\n   first leg, so do not join rows across periods on `entry_id` alone.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   as LedgerReadService.ListTransfers returns it; empty otherwise.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.\n\n A READY file downloads in one of two ways:\n - StatementExportService.GetStatementExportDownloadUrl returns a URL valid\n   for 60 seconds from signing that needs no credentials, so a browser can\n   save the file straight to disk.\n - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the\n   file as `text/csv` and supports HTTP `Range` requests.\n\n Both save the file as `statement-\u003cexportId\u003e.csv`. Before the file is READY\n both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST\n `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;\n an EXPIRED export, or a file already deleted, answers\n STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL\n request for a file with less than 5 seconds left; a CANCELED export\n answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are\n `application/problem+json` whose `code` is the ErrorCode name, such as\n `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403\n PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`\n for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with\n `Retry-After`, when the request can be retried.\n\n An export belongs to the root account whose session or API key created it.\n Any session or API key of that root that may read the export's account can\n read and download it, whichever of them created it. A member of a\n subaccount shared from another root sees only the exports its own root\n created, and the subaccount's owner does not see those: an export of\n another root, or of an account the caller can no longer read, answers\n NOT_FOUND, as one that does not exist.",
+        "description": "StatementExport is a whole-period account statement, ledger or balances\n file produced in the background as one CSV file.\n\n The file is RFC 4180 CSV in UTF-8 with CRLF line endings: the header row,\n then the rows of the period up to complete_through. ACCOUNT_STATEMENT and\n LEDGER rows come oldest first, and a period without movements yields the\n header row alone. Every type reads the same ledger movements of the\n account; type sets the file's rows and columns.\n\n An ACCOUNT_STATEMENT row is the effect of one entry on one account bucket\n in one asset. An entry is one ledger operation, such as a trade with its\n fees, a deposit, a withdrawal step or an internal transfer.\n\n ACCOUNT_STATEMENT columns, in order:\n - `time`: entry time, RFC 3339 in UTC with microseconds, for example\n   `2026-11-12T19:52:07.734123Z`.\n - `entry_id`: entry identifier, an unsigned 128-bit integer as a decimal\n   string. It is the `transfer_id` of the entry's first transfer leg on the\n   account within the export's period, as LedgerReadService.ListTransfers\n   returns it, and is the same whichever asset the export is limited to. A\n   period boundary can fall between the legs of one entry: each export then\n   holds its own part of the entry, under the `transfer_id` of that part's\n   first leg, so do not join rows across periods on `entry_id` alone.\n - `type`: `trade` for a trade's settlement and its fees; otherwise the\n   entry's transfer reason, such as `deposit`, `withdraw`,\n   `internal_transfer`, `funding_to_trading` or `system_adjustment`.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `amount`: signed balance change of the entry in whole units of the\n   asset, excluding the fees in `fee`, for example `-5000` or `0.1`. Fees\n   the account receives are included here.\n - `fee`: fees the account paid in the asset for the entry, in whole units\n   of the asset; `0` when none.\n - `balance`: account bucket balance in the asset after the entry, in whole\n   units of the asset. For consecutive rows of the same bucket and asset,\n   each balance equals the previous balance plus `amount` minus `fee`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the entry belongs to a chain\n   lifecycle flow, such as a deposit, a withdrawal or an internal transfer,\n   linked before the export was created; empty otherwise. A flow linked\n   later, which LedgerReadService.ListTransfers then shows, is not in the\n   file: a new export shows it.\n\n A LEDGER row is one ledger movement: one transfer leg on the account,\n as LedgerReadService.ListTransfers returns it. A trade's settlement is\n several rows, such as its base and quote legs and each fee.\n\n LEDGER columns, in order:\n - `time`: transfer time, RFC 3339 in UTC with microseconds.\n - `transfer_id`: transfer identifier, an unsigned 128-bit integer as a\n   decimal string, as LedgerReadService.ListTransfers returns it. With\n   `account` and `side` it identifies the row.\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `type`: transfer reason, such as `trade_base`, `trade_quote`,\n   `maker_fee`, `taker_fee`, `rebate`, `deposit`, `withdraw`,\n   `internal_transfer` or `funding_to_trading`.\n - `side`: `debit` when the movement takes from the account bucket,\n   `credit` when it adds to it.\n - `amount`: signed balance change in whole units of the asset: negative\n   for a debit, positive for a credit.\n - `counterparty`: kind of the transfer's other side: `funding_account`,\n   `trading_account`, `external_address`, `private_counterparty`,\n   `fee_account` or `system_account`; empty when unknown.\n - `balance`: account bucket balance in the asset after the movement, in\n   whole units of the asset. For consecutive rows of the same bucket and\n   asset, each balance equals the previous balance plus `amount`.\n - `link_id`: correlation ID shared by related transfer legs, the trade's\n   match ID for trades; empty when unavailable.\n - `flow_id`: public lifecycle flow ID when the transfer belongs to a chain\n   lifecycle flow linked before the export was created; empty otherwise,\n   as for `flow_id` of an account statement.\n\n A BALANCES row is one account bucket in one asset over the period: its\n balance at start_time, the period's ledger movements on it, and its\n balance at complete_through. Rows come sorted by `account`, then `asset`.\n A bucket and asset with a zero balance at both ends and no movement has no\n row, so an account without any yields the header row alone. The period\n must start at or after the earliest instant whose balances the account\n history holds: an earlier start is refused when the export is created\n (CreateStatementExport) and fails the export if that instant moves later\n before the file is produced.\n\n BALANCES columns, in order:\n - `account`: account bucket, `funding` or `trading`.\n - `asset`: asset symbol.\n - `opening_balance`: balance of the bucket in the asset at start_time.\n - `credits`: total the period's movements added to the bucket, the sum of\n   the LEDGER file's credit rows of that bucket and asset; `0` when none.\n - `debits`: total the period's movements took from the bucket, the sum of\n   the LEDGER file's debit rows of that bucket and asset, as a positive\n   amount; `0` when none.\n - `closing_balance`: balance of the bucket in the asset at\n   complete_through. Every row reconciles: `closing_balance` equals\n   `opening_balance` plus `credits` minus `debits`.\n - `movements`: number of the period's ledger movements on the bucket in\n   the asset.\n\n Amounts are exact decimal strings with up to 18 fractional digits and no\n trailing zeros.\n\n A READY file downloads in one of two ways:\n - StatementExportService.GetStatementExportDownloadUrl returns a URL valid\n   for 60 seconds from signing that needs no credentials, so a browser can\n   save the file straight to disk.\n - An authenticated `GET /v1/statements/exports/{exportId}/file` returns the\n   file as `text/csv` and supports HTTP `Range` requests.\n\n Both save the file as `account-statement-\u003cexportId\u003e.csv`,\n `ledger-\u003cexportId\u003e.csv` or `balances-\u003cexportId\u003e.csv`, by type. Before the file is READY\n both answer FAILED_PRECONDITION with STATEMENT_EXPORT_NOT_READY, REST\n `409 Conflict`; a FAILED export answers STATEMENT_EXPORT_FAILED, REST `409`;\n an EXPIRED export, or a file already deleted, answers\n STATEMENT_EXPORT_EXPIRED, REST `410 Gone`, and so does a download URL\n request for a file with less than 5 seconds left; a CANCELED export\n answers STATEMENT_EXPORT_CANCELED, REST `409`. REST errors are\n `application/problem+json` whose `code` is the ErrorCode name, such as\n `STATEMENT_EXPORT_NOT_READY`: `401` without valid credentials, `403\n PERMISSION_DENIED` for an API key without READ_STATEMENTS, `404 NOT_FOUND`\n for an export the caller cannot read, and `503 UPSTREAM_ERROR`, with\n `Retry-After`, when the request can be retried.\n\n An export belongs to the root account whose session or API key created it.\n Any session or API key of that root that may read the export's account can\n read and download it, whichever of them created it. A member of a\n subaccount shared from another root sees only the exports its own root\n created, and the subaccount's owner does not see those: an export of\n another root, or of an account the caller can no longer read, answers\n NOT_FOUND, as one that does not exist.",
         "properties": {
           "assetId": {
             "description": "Public unified asset ID the statement is limited to; 0 for every asset.",
@@ -196,6 +202,11 @@
             "description": "Why the export FAILED; unspecified otherwise.",
             "title": "failure_reason"
           },
+          "historyAvailableFrom": {
+            "$ref": "#/components/schemas/google.protobuf.Timestamp",
+            "description": "Earliest instant whose balances the account history holds, which a\n BALANCES export's period must start at or after. Set only when\n failure_reason is HISTORY_UNAVAILABLE.",
+            "title": "history_available_from"
+          },
           "idempotencyKey": {
             "description": "Idempotency key of the request that created the export.",
             "title": "idempotency_key",
@@ -231,6 +242,11 @@
             "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
             "title": "subaccount_id",
             "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ledger.read.v1.StatementExportType",
+            "description": "Kind of file the export produces, as requested.",
+            "title": "type"
           }
         },
         "title": "StatementExport",
@@ -241,7 +257,8 @@
         "enum": [
           "UNSPECIFIED",
           "TOO_LARGE",
-          "UNAVAILABLE"
+          "UNAVAILABLE",
+          "HISTORY_UNAVAILABLE"
         ],
         "title": "StatementExportFailureReason",
         "type": "string"
@@ -258,6 +275,17 @@
           "CANCELED"
         ],
         "title": "StatementExportStatus",
+        "type": "string"
+      },
+      "ledger.read.v1.StatementExportType": {
+        "description": "StatementExportType is the kind of file a statement export produces.",
+        "enum": [
+          "UNSPECIFIED",
+          "ACCOUNT_STATEMENT",
+          "LEDGER",
+          "BALANCES"
+        ],
+        "title": "StatementExportType",
         "type": "string"
       }
     },
@@ -355,12 +383,14 @@
                       "expiresAt": "2025-01-01T00:00:00Z",
                       "exportId": "SrnDK1JimAN",
                       "failureReason": "TOO_LARGE",
+                      "historyAvailableFrom": "2025-01-01T00:00:00Z",
                       "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                       "movements": "1",
                       "readyAt": "2025-01-01T00:00:00Z",
                       "startTime": "2025-01-01T00:00:00Z",
                       "status": "QUEUED",
-                      "subaccountId": "35XKbW6Upmh"
+                      "subaccountId": "35XKbW6Upmh",
+                      "type": "ACCOUNT_STATEMENT"
                     }
                   ],
                   "inProgressExports": 1,
@@ -400,7 +430,7 @@
         "x-poly-response-type": "ledger.read.v1.ListStatementExportsResponse"
       },
       "post": {
-        "description": "Create a whole-period account statement file, produced in the background. Idempotent per idempotency key.",
+        "description": "Create a whole-period account statement, ledger or balances file, produced in the background. Idempotent per idempotency key.",
         "operationId": "StatementExportService_CreateStatementExport",
         "requestBody": {
           "content": {
@@ -410,7 +440,8 @@
                 "endTime": "2026-11-01T00:00:00Z",
                 "idempotencyKey": "statement-2026-10",
                 "startTime": "2026-10-01T00:00:00Z",
-                "subaccountId": "45LUmqjT"
+                "subaccountId": "45LUmqjT",
+                "type": "ACCOUNT_STATEMENT"
               },
               "schema": {
                 "$ref": "#/components/schemas/ledger.read.v1.CreateStatementExportRequest"
@@ -438,12 +469,14 @@
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "exportId": "StBY1y2vZHR",
                     "failureReason": "TOO_LARGE",
+                    "historyAvailableFrom": "2025-01-01T00:00:00Z",
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "movements": "1",
                     "readyAt": "2025-01-01T00:00:00Z",
                     "startTime": "2025-01-01T00:00:00Z",
                     "status": "QUEUED",
-                    "subaccountId": "36VMbrHtUyp"
+                    "subaccountId": "36VMbrHtUyp",
+                    "type": "ACCOUNT_STATEMENT"
                   }
                 },
                 "schema": {
@@ -512,12 +545,14 @@
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "exportId": "StBY1y2vZHR",
                     "failureReason": "TOO_LARGE",
+                    "historyAvailableFrom": "2025-01-01T00:00:00Z",
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "movements": "1",
                     "readyAt": "2025-01-01T00:00:00Z",
                     "startTime": "2025-01-01T00:00:00Z",
                     "status": "QUEUED",
-                    "subaccountId": "36VMbrHtUyp"
+                    "subaccountId": "36VMbrHtUyp",
+                    "type": "ACCOUNT_STATEMENT"
                   }
                 },
                 "schema": {
@@ -586,12 +621,14 @@
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "exportId": "StBY1y2vZHR",
                     "failureReason": "TOO_LARGE",
+                    "historyAvailableFrom": "2025-01-01T00:00:00Z",
                     "idempotencyKey": "idem_01J5EXAMPLE0000000000000",
                     "movements": "1",
                     "readyAt": "2025-01-01T00:00:00Z",
                     "startTime": "2025-01-01T00:00:00Z",
                     "status": "QUEUED",
-                    "subaccountId": "36VMbrHtUyp"
+                    "subaccountId": "36VMbrHtUyp",
+                    "type": "ACCOUNT_STATEMENT"
                   }
                 },
                 "schema": {

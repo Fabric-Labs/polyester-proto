@@ -210,7 +210,7 @@
     {
       "name": "swap.quickswap.v1.AssetWithoutDestination",
       "kind": "message",
-      "doc": "AssetWithoutDestination is an asset a vault holds or was ever credited\n in, which its rule pays no destination for, so no run pays it out.",
+      "doc": "AssetWithoutDestination is an asset a vault holds or was ever credited\n in, which its rule pays no destination for, so no run pays it out in kind.",
       "message": {
         "fields": [
           {
@@ -5018,9 +5018,17 @@
             "name": "steps",
             "jsonName": "steps",
             "number": 11,
-            "doc": "One step per destination of the rule version, in asset_id order. Empty\n while the run is planning.",
+            "doc": "One step per destination of the rule version, in asset_id order. Empty\n while the run is planning or converting.",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.PayoutStep"
+          },
+          {
+            "name": "conversions",
+            "jsonName": "conversions",
+            "number": 12,
+            "doc": "On a rule with a payout asset, each other asset the run converts into\n it before its one payout step, in source_asset_id order; empty for an\n in-kind run and while the run is planning.",
+            "repeated": true,
+            "protoRef": "swap.quickswap.v1.PayoutConversion"
           }
         ]
       }
@@ -5050,6 +5058,107 @@
             "name": "CLOSE_UNKNOWN",
             "number": 4,
             "doc": "The withdrawal failed, and where its funds went is not known: the\n payout ended before payouts recorded how a failed withdrawal closed, its\n outcome was not known when it ended, or the records of its end disagree. The payout may have left the vault or\n may have been returned to it; the vault's balance is authoritative."
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.PayoutConversion",
+      "kind": "message",
+      "doc": "PayoutConversion is one asset a payout run converts into its rule's\n payout asset through a Swap placed from the vault, before it pays.\n Amounts are in base units of 18 decimals.",
+      "message": {
+        "fields": [
+          {
+            "name": "source_asset_id",
+            "jsonName": "sourceAssetId",
+            "number": 1,
+            "doc": "Asset converted, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "payout_asset_id",
+            "jsonName": "payoutAssetId",
+            "number": 2,
+            "doc": "Payout asset the conversion delivers, as an AssetConfig.ledger_id.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "amount",
+            "jsonName": "amount",
+            "number": 3,
+            "doc": "Amount of the source asset the conversion spends: the vault's whole\n available balance of it when the run planned.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "swap_id",
+            "jsonName": "swapId",
+            "number": 4,
+            "doc": "Public ID of the conversion's Swap; zero when the asset was not\n converted.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
+          },
+          {
+            "name": "execution",
+            "jsonName": "execution",
+            "number": 5,
+            "doc": "Market or TWAP; unset when the asset was not converted.",
+            "protoRef": "swap.v1.Execution"
+          },
+          {
+            "name": "status",
+            "jsonName": "status",
+            "number": 6,
+            "doc": "Where the Swap stands; unset when the asset was not converted.",
+            "protoRef": "swap.v1.SwapStatus"
+          },
+          {
+            "name": "reason",
+            "jsonName": "reason",
+            "number": 7,
+            "doc": "Why a terminal Swap did not trade its whole amount; unset when it did or\n when the asset was not converted.",
+            "protoRef": "swap.v1.SwapReason"
+          },
+          {
+            "name": "is_terminal",
+            "jsonName": "isTerminal",
+            "number": 8,
+            "doc": "Whether the conversion is over: its Swap is terminal, or it was skipped.",
+            "protoScalar": "bool",
+            "jsonType": "boolean"
+          },
+          {
+            "name": "executed_amount",
+            "jsonName": "executedAmount",
+            "number": 9,
+            "doc": "Source asset spent, settled; zero until the Swap is terminal.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "unspent_amount",
+            "jsonName": "unspentAmount",
+            "number": 10,
+            "doc": "Source asset that stays in the vault: amount minus executed_amount.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "received_amount",
+            "jsonName": "receivedAmount",
+            "number": 11,
+            "doc": "Payout asset received after fees; zero until the Swap is terminal.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "skip_reason",
+            "jsonName": "skipReason",
+            "number": 12,
+            "doc": "Why the asset was not converted: route_unsupported (no route converts\n it into the payout asset), below_minimum, above_maximum,\n conversion_unavailable (the route's depth cannot meet the conversion's\n slippage protection now), price_unavailable (no current price valued\n it), conversion_refused, rule_superseded or policy_denied (the rule's\n author may no longer convert or withdraw from the vault); empty\n otherwise. Its balance stays in the vault.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -5129,7 +5238,7 @@
     {
       "name": "swap.quickswap.v1.PayoutStage",
       "kind": "enum",
-      "doc": "PayoutStage is where an in-progress payout run stands.",
+      "doc": "PayoutStage is where an in-progress payout run stands. A run moves through\n the stages in this order: STAGE_PLANNING, STAGE_CONVERTING (only on a rule\n with a payout asset), STAGE_REQUESTING, STAGE_PROCESSING, STAGE_BROADCAST.\n STAGE_CONVERTING comes after STAGE_PLANNING and before STAGE_REQUESTING,\n although its number is 5.",
       "enum": {
         "values": [
           {
@@ -5151,6 +5260,11 @@
             "name": "STAGE_BROADCAST",
             "number": 4,
             "doc": "A destination-network transaction is known (PayoutStep.tx_hash); the run\n waits for its withdrawals to complete."
+          },
+          {
+            "name": "STAGE_CONVERTING",
+            "number": 5,
+            "doc": "The run is converting the vault's other assets into the rule's payout\n asset (Payout.conversions); its payout step is planned once every\n conversion is over and settled."
           }
         ]
       }
@@ -8080,28 +8194,28 @@
             "name": "available",
             "jsonName": "available",
             "number": 4,
-            "doc": "The vault's available balance of the asset now.",
+            "doc": "The vault's available balance of the asset now. On a rule with a payout\n asset, the payout asset's entry adds what each conversion is expected to\n deliver (UpcomingPayoutConversion.expected_amount_out).",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
             "name": "payable",
             "jsonName": "payable",
             "number": 5,
-            "doc": "What the run would pay: the available balance up to the rule's per-run\n ceiling, rounded down to whole units of the destination network, or zero\n when it holds.",
+            "doc": "What the run would pay: available up to the rule's per-run ceiling,\n rounded down to whole units of the destination network, or zero when it\n holds. On the payout asset of a rule with a payout asset, available\n includes the expected conversion outputs. Zero on an asset the rule\n converts, which pays nothing in kind.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
             "name": "held_back",
             "jsonName": "heldBack",
             "number": 6,
-            "doc": "What would stay in the vault: available minus payable.",
+            "doc": "What of the asset would stay in the vault, in the asset's own units:\n available minus payable. Zero on an asset that converts (hold_reason\n converts): its whole balance leaves the vault through the conversion.",
             "protoRef": "swap.quickswap.v1.TokenAmount"
           },
           {
             "name": "hold_reason",
             "jsonName": "holdReason",
             "number": 7,
-            "doc": "Why held_back stays, or why nothing pays: below_minimum,\n price_unavailable, no_destination (the rule pays no destination for the\n asset), destination_cooling_down (the destination was added to the\n vault's external withdraw whitelist less than 24 hours ago; see\n payable_from), above_max (the balance above the per-run ceiling stays)\n or dust (less than one whole unit of the destination network stays);\n empty when the whole balance pays.",
+            "doc": "Why held_back stays, or why nothing pays: below_minimum,\n price_unavailable, no_destination (the rule pays no destination for the\n asset), destination_cooling_down (the destination was added to the\n vault's external withdraw whitelist less than 24 hours ago; see\n payable_from), above_max (the balance above the per-run ceiling stays)\n or dust (less than one whole unit of the destination network stays);\n on a rule with a payout asset, converts (the asset is converted into the\n payout asset instead; see conversion) or why it would not be converted\n (conversion.skip_reason); empty when the whole balance pays.",
             "protoScalar": "string",
             "jsonType": "string"
           },
@@ -8152,6 +8266,69 @@
             "protoRef": "google.protobuf.Timestamp",
             "jsonType": "string",
             "format": "date-time"
+          },
+          {
+            "name": "conversion",
+            "jsonName": "conversion",
+            "number": 14,
+            "doc": "Set on an asset the rule converts into its payout asset: what converting\n its whole available balance is quoted to deliver now. Such an asset pays\n nothing in kind (payable zero); its hold_reason is converts, or why it\n would stay in the vault.",
+            "protoRef": "swap.quickswap.v1.UpcomingPayoutConversion"
+          }
+        ]
+      }
+    },
+    {
+      "name": "swap.quickswap.v1.UpcomingPayoutConversion",
+      "kind": "message",
+      "doc": "UpcomingPayoutConversion is the current quote for converting one asset of\n a vault into its rule's payout asset through a Swap placed from the vault.\n Amounts are in base units of 18 decimals.",
+      "message": {
+        "fields": [
+          {
+            "name": "payout_asset_id",
+            "jsonName": "payoutAssetId",
+            "number": 1,
+            "doc": "Payout asset the conversion delivers, as an AssetConfig.ledger_id from\n GET /v1/chain/deposit-withdraw/config.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "expected_amount_out",
+            "jsonName": "expectedAmountOut",
+            "number": 2,
+            "doc": "Expected payout asset after every leg's fee, estimated from the whole\n amount at the current book depth; a TWAP's slices execute at the prices\n of their own time. Unset when the asset would not be converted.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "min_amount_out",
+            "jsonName": "minAmountOut",
+            "number": 3,
+            "doc": "Least payout asset the conversion accepts: the expected amount less the\n 1% slippage protection, estimated the same way. Unset when the asset\n would not be converted.",
+            "protoRef": "swap.quickswap.v1.TokenAmount"
+          },
+          {
+            "name": "price_impact_bps",
+            "jsonName": "priceImpactBps",
+            "number": 4,
+            "doc": "Quoted price impact of the whole amount, in basis points.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "execution",
+            "jsonName": "execution",
+            "number": 5,
+            "doc": "How the run would execute the conversion: market, or TWAP over the\n rule's conversion duration (VaultPayoutRule.conversion_twap_duration_ms)\n when its USD value exceeds 10,000 or its price impact exceeds 0.5%. A\n TWAP whose slices would fall below the route's minimum runs in fewer,\n longer slices, never fewer than two; otherwise the asset is skipped with\n below_minimum. Unset when the asset would not be converted.",
+            "protoRef": "swap.v1.Execution"
+          },
+          {
+            "name": "skip_reason",
+            "jsonName": "skipReason",
+            "number": 6,
+            "doc": "Why the asset would not be converted now: route_unsupported (no route\n converts it into the payout asset), below_minimum, above_maximum,\n conversion_unavailable (the route's depth cannot meet the conversion's\n slippage protection now) or price_unavailable (no current price values\n it); empty when it would. Its balance stays in the vault.",
+            "protoScalar": "string",
+            "jsonType": "string"
           }
         ]
       }
@@ -8777,9 +8954,27 @@
             "name": "assets_without_destination",
             "jsonName": "assetsWithoutDestination",
             "number": 9,
-            "doc": "Every asset the vault holds or was ever credited in that the rule pays\n no destination for, in asset_id order; every such asset when the vault\n has no rule.",
+            "doc": "Every asset the vault holds or was ever credited in that the rule pays\n no destination for, in asset_id order; every such asset when the vault\n has no rule. On a rule with a payout asset, each run converts those with\n a balance into the payout asset before it pays (see payout_asset_id).",
             "repeated": true,
             "protoRef": "swap.quickswap.v1.AssetWithoutDestination"
+          },
+          {
+            "name": "payout_asset_id",
+            "jsonName": "payoutAssetId",
+            "number": 10,
+            "doc": "Asset every other asset with a balance is converted into, through a\n Swap placed from the vault, before a run pays it, as an\n AssetConfig.ledger_id from GET /v1/chain/deposit-withdraw/config; zero\n when the rule pays every asset in kind. When set, destinations has\n exactly one entry, for this asset.",
+            "protoScalar": "uint32",
+            "jsonType": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "conversion_twap_duration_ms",
+            "jsonName": "conversionTwapDurationMs",
+            "number": 11,
+            "doc": "Duration of a conversion that runs as TWAP, in milliseconds, 60000 to\n 3600000. A conversion runs as TWAP when its USD value exceeds 10,000 or\n its quoted price impact exceeds 0.5%, otherwise at market. Zero when\n the rule has no payout asset.",
+            "protoScalar": "uint64",
+            "jsonType": "string",
+            "format": "uint64"
           }
         ]
       }

@@ -208,7 +208,7 @@
             "name": "status",
             "jsonName": "status",
             "number": 2,
-            "doc": "APPROVED, REJECTED or EXPIRED.",
+            "doc": "APPROVED, REJECTED, EXPIRED or APPROVAL_CANCELLED.",
             "protoRef": "ai.v1.ApprovalStatus"
           }
         ]
@@ -239,6 +239,11 @@
             "name": "EXPIRED",
             "number": 4,
             "doc": "Expired before a decision; the action did not run."
+          },
+          {
+            "name": "APPROVAL_CANCELLED",
+            "number": 5,
+            "doc": "The run ended before a decision, for example stopped by the user; the\n action did not run."
           }
         ]
       }
@@ -824,7 +829,7 @@
             "name": "subject",
             "jsonName": "subject",
             "number": 5,
-            "doc": "What the conversation is about, fixed when it started. Omitted for a\n general conversation.",
+            "doc": "What the conversation is about: set when it started, or when the\n assistant created a strategy in it (see Subject), and never changed once\n set. Omitted for a general conversation.",
             "protoRef": "ai.v1.Subject"
           },
           {
@@ -1307,7 +1312,7 @@
           {
             "name": "RUN_ACTIVE",
             "number": 5,
-            "doc": "The conversation already has an active run. Wait for it to end, or cancel\n it, before sending another message."
+            "doc": "The conversation already has an active run. Wait for it to end, or cancel\n it, before sending another message. When the run is waiting for the\n user's decision, ErrorDetail.pending_approval_id names the approval."
           },
           {
             "name": "IDEMPOTENCY_CONFLICT",
@@ -1387,7 +1392,12 @@
           {
             "name": "CONVERSATION_SUBJECT_MISMATCH",
             "number": 21,
-            "doc": "The message names a subject other than its conversation's: a\n conversation's subject is fixed when it starts. Nothing is recorded."
+            "doc": "The message names a subject other than its conversation's: a\n conversation's subject never changes once set. Nothing is recorded."
+          },
+          {
+            "name": "APPROVAL_RUN_ENDED",
+            "number": 22,
+            "doc": "The approval's run ended before it was decided, for example stopped by\n the user; nothing was executed."
           }
         ]
       }
@@ -1404,6 +1414,15 @@
             "number": 1,
             "doc": "Stable error code.",
             "protoRef": "ai.v1.ErrorCode"
+          },
+          {
+            "name": "pending_approval_id",
+            "jsonName": "pendingApprovalId",
+            "number": 2,
+            "doc": "With RUN_ACTIVE only: the approval the conversation's active run is\n waiting for, set only while that approval is still PENDING and not past\n its expiry when the message is refused. Unset when the run is not waiting\n for a decision (for example, the approval was already decided, even if\n the run has not reported it yet). Show that approval's Approve and Reject\n choices instead of a generic \"busy\" message.",
+            "protoScalar": "fixed64",
+            "jsonType": "string",
+            "format": "fixed64"
           }
         ]
       }
@@ -2067,7 +2086,7 @@
             "name": "subject",
             "jsonName": "subject",
             "number": 4,
-            "doc": "What the conversation is about: the same as Conversation.subject, fixed\n when the conversation started. Set on every page; omitted for a general\n conversation. A client that opens a conversation by its ID learns from it\n whether the conversation is about one of the caller's strategies.",
+            "doc": "What the conversation is about: the same as Conversation.subject, never\n changed once set (see Subject). Set on every page; omitted for a general\n conversation. A client that opens a conversation by its ID learns from it\n whether the conversation is about one of the caller's strategies.",
             "protoRef": "ai.v1.Subject"
           }
         ]
@@ -3595,7 +3614,7 @@
             "name": "approval_resolved",
             "jsonName": "approvalResolved",
             "number": 11,
-            "doc": "An approval was decided or expired.",
+            "doc": "An approval was decided, expired or cancelled.",
             "protoRef": "ai.v1.ApprovalResolved",
             "oneof": "event"
           },
@@ -3835,7 +3854,7 @@
             "name": "subject",
             "jsonName": "subject",
             "number": 11,
-            "doc": "What the conversation is about. Without conversation_id, the message\n continues the caller's conversation about this subject, or starts it:\n there is at most one per subject. With conversation_id, omit it or send\n the conversation's own subject. A conversation's subject is fixed when it\n starts: any other subject, or a subject for a conversation that has none,\n is FAILED_PRECONDITION with CONVERSATION_SUBJECT_MISMATCH, and nothing is\n recorded. It is part of the request the idempotency key covers.",
+            "doc": "What the conversation is about. Without conversation_id, the message\n continues the caller's conversation about this subject, or starts it:\n there is at most one per subject. With conversation_id, omit it or send\n the conversation's own subject. A conversation's subject never changes\n once set (see Subject): any other subject, or a subject for a\n conversation that has none, is FAILED_PRECONDITION with\n CONVERSATION_SUBJECT_MISMATCH, and nothing is recorded. It is part of the\n request the idempotency key covers.",
             "protoRef": "ai.v1.Subject"
           }
         ]
@@ -4152,7 +4171,7 @@
     {
       "name": "ai.v1.Subject",
       "kind": "message",
-      "doc": "Subject is the one thing a conversation is about, such as one of the\n caller's strategies. A client that shows the assistant beside that thing\n names it with each message: the subject selects the conversation about it\n and tells the assistant what the user is working on. It grants nothing:\n every read and change the assistant makes is still checked against the\n caller's own access.",
+      "doc": "Subject is the one thing a conversation is about, such as one of the\n caller's strategies. A client that shows the assistant beside that thing\n names it with each message: the subject selects the conversation about it\n and tells the assistant what the user is working on. It grants nothing:\n every read and change the assistant makes is still checked against the\n caller's own access.\n\n A conversation without a subject gets one at most once: when the assistant\n creates a strategy in it, the conversation becomes about that strategy,\n unless another conversation of the caller is already about it. Only when it\n does is it the conversation that strategy's subject selects, with its\n history, and later messages may still omit the subject. When another\n conversation of the caller is already about the strategy, that conversation\n keeps it and is the one its subject selects, and this one stays without a\n subject. A second strategy created in a conversation leaves the subject on\n the first; another strategy is created in a new conversation.",
       "message": {
         "oneofs": [
           {

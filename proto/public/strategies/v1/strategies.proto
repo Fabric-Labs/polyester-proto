@@ -91,7 +91,8 @@ enum ErrorCode {
   // stop a bot. Not returned until the limit is enforced.
   INDICATOR_SETTINGS_LIMIT_REACHED = 19;
   // The idempotency key was already used with a different request. The
-  // original backtest, proposal, stop, strategy or saved draft stands.
+  // original backtest, proposal, stop, strategy, saved draft or funds return
+  // stands.
   IDEMPOTENCY_CONFLICT = 20;
   // A required service is temporarily unavailable; retry the same request.
   // Every call of this API is safe to retry.
@@ -156,6 +157,31 @@ enum ErrorCode {
   // The caller published as many times as allowed in the current UTC day.
   // retry_after says when the day resets (00:00 UTC).
   PUBLISH_LIMIT_REACHED = 40;
+  // The listing is held by moderation: it can't be published or unpublished,
+  // nor its strategy deleted, until it is released. The author's strategy
+  // shows the hold's reason.
+  LISTING_HELD = 41;
+  // The caller is the listing's author, who can't report it.
+  CANNOT_REPORT_OWN_LISTING = 42;
+  // The caller reported as many listings as allowed in the current UTC day.
+  // retry_after says when the day resets (00:00 UTC).
+  REPORT_LIMIT_REACHED = 43;
+  // The funding subaccount is, or was, a strategy bot's subaccount. A bot's
+  // funds never fund another bot: fund a deploy from the main account or a
+  // subaccount no bot has held. field_path names funding_subaccount_id.
+  FUNDING_SOURCE_IS_BOT = 44;
+  // The bot may still trade, so its funds can't be returned yet: it is
+  // deploying, running, paused or stopping, or its stop isn't complete.
+  // Retry once the bot reads STOPPED. If the bot reads STOPPED but an API-key
+  // call still gets BOT_NOT_STOPPED because the bot's access is still live,
+  // its owner must first call ReturnBotFunds from their own interactive
+  // session to end that access; retrying with the API key alone cannot.
+  // Afterwards a root-scoped API key with RETURN_STRATEGY_BOT_FUNDS can return
+  // the funds. Retry a recorded return with the same idempotency key.
+  BOT_NOT_STOPPED = 45;
+  // The bot's subaccount has no available balance to return, or the return
+  // under the idempotency key ended with nothing moved.
+  NOTHING_TO_RETURN = 46;
 }
 
 // BotCapDetail explains BOT_CAP_REACHED.
@@ -209,8 +235,8 @@ message ErrorDetail {
   // FUNDING_INVALID and MANIFEST_TOO_LARGE.
   string field_path = 2;
   // When the same request may succeed. Set only with
-  // SCENARIO_RUN_LIMIT_REACHED, PUBLISH_LIMIT_REACHED, and with
-  // BACKTEST_LIMIT_REACHED for the daily limit.
+  // SCENARIO_RUN_LIMIT_REACHED, PUBLISH_LIMIT_REACHED, REPORT_LIMIT_REACHED,
+  // and with BACKTEST_LIMIT_REACHED for the daily limit.
   google.protobuf.Timestamp retry_after = 3;
   // Set only with BOT_CAP_REACHED.
   BotCapDetail bot_cap = 4;
@@ -558,7 +584,9 @@ message ScenarioResult {
   repeated google.protobuf.Struct actual = 4;
   // The code's log lines, oldest first: at most 50.
   repeated string logs = 5;
-  // The handler's error, when it failed. Empty otherwise.
+  // Why the example failed: the handler's error, or that a call took longer
+  // than allowed or the runtime failed on this run, which running the
+  // examples again retries. Empty otherwise.
   string error = 6;
 }
 
@@ -972,14 +1000,15 @@ message ExplainStrategyResponse {
   repeated SettingField settings = 3;
   // Each behaviour example and its last result, in manifest order.
   repeated ScenarioSummary scenarios = 4;
-  // The latest backtest. Omitted when there is none; backtest_absent_reason
-  // then says why.
+  // The latest eligible completed backtest with the default settings: the
+  // caller's own, finished and within retention. Omitted when there is none;
+  // backtest_absent_reason then says why.
   BacktestSummary backtest = 5;
   // Why there is no backtest, for example that the bot cannot be backtested
   // on candles. Empty when backtest is set.
   string backtest_absent_reason = 6;
-  // What to weigh before deploying, for example "never backtested" or "trades
-  // a thin market".
+  // What to weigh before deploying, for example "no completed backtest
+  // available" or "trades a thin market".
   repeated string warnings = 7;
   // What the bot does not do, for example "stopping the bot does not sell its
   // holdings".
@@ -1064,7 +1093,9 @@ message ProposeDeployRequest {
   string idempotency_key = 5 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
   // The subaccount that funds the bot. Zero means the main account. It must
   // be an active subaccount of the caller's main account; any other,
-  // including a disabled one, is FUNDING_SUBACCOUNT_NOT_FOUND.
+  // including a disabled one, is FUNDING_SUBACCOUNT_NOT_FOUND. A subaccount
+  // that is or was a strategy bot's is FUNDING_SOURCE_IS_BOT, even with no
+  // funding.
   fixed64 funding_subaccount_id = 6;
 }
 
@@ -1328,6 +1359,15 @@ message Bot {
   // in is there with zero counts. A bot deployed again within the day counts
   // every one of its runs. Counts lag the bot by up to about a minute.
   repeated BotActivityHour activity = 16;
+  // Public ID of the strategy the bot was deployed from, as its deploy
+  // proposal recorded it. Zero when the run has no linked strategy, for
+  // example once the strategy is deleted.
+  fixed64 strategy_id = 17;
+  // The strategy's revision whose version the bot runs, the number
+  // ListStrategyRevisions shows, as its deploy proposal recorded it. Zero
+  // when the run has no linked strategy, for example once the strategy is
+  // deleted.
+  uint64 revision = 18;
 }
 
 // BotActivityHour is what a bot did in one UTC hour, by when each event
@@ -1475,6 +1515,81 @@ message StopBotResponse {
   StopMode mode = 2;
 }
 
+// BotFundsReturnStatus is how a return of a stopped bot's funds to its
+// owner's main account stands.
+enum BotFundsReturnStatus {
+  // Status was not specified.
+  BOT_FUNDS_RETURN_STATUS_UNSPECIFIED = 0;
+  // The return is under way: it completes on its own, and GetBotFundsReturn
+  // reads it. It stays under way while anything stays on the bot's
+  // subaccount, such as what its open orders hold (held), and returns it as
+  // it becomes spendable: the orders a KEEP_ORDERS stop kept can stay open
+  // for days.
+  RETURN_PROCESSING = 1;
+  // Nothing spendable or held stays on the bot's subaccount, and every asset
+  // in assets is credited to the owner's main account.
+  RETURN_COMPLETED = 2;
+  // The return ended with nothing moved: by the time it could move, nothing
+  // was left on the bot's subaccount to return.
+  RETURN_NOTHING_MOVED = 3;
+}
+
+// BotFundsReturn is one return of a stopped bot's available balances to its
+// owner's main account.
+message BotFundsReturn {
+  // Public return ID: GetBotFundsReturn reads the return by it.
+  fixed64 return_id = 1;
+  // Public bot ID of the bot whose funds it returns.
+  fixed64 bot_id = 2;
+  // How the return stands.
+  BotFundsReturnStatus status = 3;
+  // The amounts moved so far from the bot's subaccount to the main account,
+  // one per asset, confirmed only: an amount the return is still moving
+  // counts once the move is confirmed. It grows while RETURN_PROCESSING, as
+  // more becomes spendable; empty for RETURN_NOTHING_MOVED.
+  repeated Money assets = 4;
+  // When the return was requested.
+  google.protobuf.Timestamp requested_at = 5;
+  // When it completed or ended with nothing moved; unset while processing.
+  google.protobuf.Timestamp finished_at = 6;
+  // What still stays on the bot's subaccount, one per asset, as the return
+  // last read it: what its open orders' holds reserve. The return takes
+  // it once released, as the orders fill or end. Empty once the return
+  // finished.
+  repeated Money held = 7;
+}
+
+// ReturnBotFundsRequest returns one stopped bot's funds to the caller's main
+// account.
+message ReturnBotFundsRequest {
+  // Public bot ID. The bot must belong to the caller's main account.
+  fixed64 bot_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Client-chosen key, unique per caller, that makes the call idempotent: the
+  // same key and bot return the same return, as it stands now, and never
+  // start a second one; the same key for another bot is
+  // IDEMPOTENCY_CONFLICT. Required.
+  string idempotency_key = 2 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+}
+
+// ReturnBotFundsResponse is the return the call started or joined.
+message ReturnBotFundsResponse {
+  // The return. It reads RETURN_PROCESSING while anything stays on the bot's
+  // subaccount, then RETURN_COMPLETED.
+  BotFundsReturn funds_return = 1;
+}
+
+// GetBotFundsReturnRequest reads one return of the caller's.
+message GetBotFundsReturnRequest {
+  // Public return ID, as ReturnBotFunds answered it.
+  fixed64 return_id = 1 [(buf.validate.field).fixed64.gt = 0];
+}
+
+// GetBotFundsReturnResponse is the return as it stands.
+message GetBotFundsReturnResponse {
+  // The return.
+  BotFundsReturn funds_return = 1;
+}
+
 // GetBotResponse is a bot with its money rules, settings and recent
 // decisions. The bot's subaccount is read like any other, by its
 // subaccount_id: its balances with LedgerReadService.GetBalances, its open
@@ -1522,6 +1637,15 @@ message BotVersion {
   // When the stop of this run was recorded. Omitted while the run has no
   // stop.
   google.protobuf.Timestamp stopped_at = 5;
+  // Public ID of the strategy the run was deployed from, as its deploy
+  // proposal recorded it. Zero when the run has no linked strategy, for
+  // example once the strategy is deleted.
+  fixed64 strategy_id = 6;
+  // The strategy's revision whose version the run ran, the number
+  // ListStrategyRevisions shows, as its deploy proposal recorded it. Zero
+  // when the run has no linked strategy, for example once the strategy is
+  // deleted.
+  uint64 revision = 7;
 }
 
 // ListBotVersionsResponse returns one page of a bot's versions.
@@ -1704,6 +1828,11 @@ message StrategyListing {
     // answers LISTING_NOT_FOUND. The author's next publish makes it public
     // again.
     HIDDEN = 2;
+    // Held by moderation: out of the list, and GetCommunityStrategy answers
+    // LISTING_NOT_FOUND. hold_reason says why. Only moderation releases it;
+    // until then publishing and unpublishing it, and deleting its strategy,
+    // are LISTING_HELD. No bot, copy or deployment changes.
+    HELD = 3;
   }
 
   // Public listing ID.
@@ -1714,6 +1843,8 @@ message StrategyListing {
   string version_id = 3;
   // When that version was published.
   google.protobuf.Timestamp published_at = 4;
+  // Why moderation holds the listing. Set only when state is HELD.
+  string hold_reason = 5;
 }
 
 // StrategyBot is a bot deployed from a strategy, as the strategy shows it.
@@ -1733,7 +1864,24 @@ message StrategyOrigin {
     string template_id = 1;
     // The version of the caller's it was copied from.
     StrategyDuplicateOrigin duplicate = 2;
+    // The community listing it was forked from.
+    StrategyForkOrigin fork = 3;
   }
+}
+
+// StrategyForkOrigin is the community listing a strategy was forked from.
+// The strategy shows it was forked even once the listing is no longer
+// public; it then names the listing no more.
+message StrategyForkOrigin {
+  // Public listing ID, while the listing is public. Zero once it isn't.
+  fixed64 listing_id = 1;
+  // The listing's title, while it is public. Empty otherwise.
+  string title = 2;
+  // The listing author's current username, while it is public. Empty
+  // otherwise.
+  string author_username = 3;
+  // The published version copied, which is the strategy's revision 1.
+  string source_version_id = 4;
 }
 
 // StrategyDuplicateOrigin is the version of the caller's a strategy was
@@ -2218,6 +2366,23 @@ message CommunityStrategySummary {
   CommunityBacktest backtest = 6;
   // When the shown version was published.
   google.protobuf.Timestamp published_at = 7;
+  // How many accounts forked the listing. An account that forked it more
+  // than once counts once, and its author's own copies never count.
+  uint32 forks = 8;
+}
+
+// CommunityForkSource is the community listing a listed strategy was
+// forked from. It never shows more of the source than the source's own
+// listing does.
+message CommunityForkSource {
+  // Public listing ID of the source, while it is public. Zero once it
+  // isn't: the strategy is then shown as forked from a community strategy.
+  fixed64 listing_id = 1;
+  // The source listing's title, while it is public. Empty otherwise.
+  string title = 2;
+  // The source author's current username, while the source is public.
+  // Empty otherwise.
+  string author_username = 3;
 }
 
 // CommunityStrategy is one public community listing with its published
@@ -2256,6 +2421,13 @@ message CommunityStrategy {
   StrategyFlow flow = 14;
   // The platform backtest of the published version, with its report.
   CommunityBacktest backtest = 15;
+  // How many accounts forked the listing. An account that forked it more
+  // than once counts once, and its author's own copies never count.
+  uint32 forks = 16;
+  // The listing the strategy was forked from. Unset when it wasn't forked.
+  // The platform sets it from the strategy's origin at each publish; its
+  // author can't remove or change it.
+  CommunityForkSource forked_from = 17;
 }
 
 // PublishStrategyVersionRequest publishes one version of one of the caller's
@@ -2357,6 +2529,83 @@ message ListCommunityStrategiesResponse {
   string next_page_token = 2;
 }
 
+// ForkStrategyRequest copies one public community listing's published
+// version into a new strategy of the caller.
+message ForkStrategyRequest {
+  // Public listing ID.
+  fixed64 listing_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // Name of the new strategy.
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // Client-chosen key, unique per caller, that makes the call idempotent: the
+  // same key and request return the strategy the first call created, as it
+  // stands now, and never fork again; another request with the same key, a
+  // CreateStrategy's or a SaveDraftVersion's included, is
+  // IDEMPOTENCY_CONFLICT. Required.
+  string idempotency_key = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9._:-]{1,128}$"];
+}
+
+// ForkStrategyResponse is the new strategy.
+message ForkStrategyResponse {
+  // The strategy, as it stands now: the published version is its revision
+  // 1, and its origin names the listing.
+  Strategy strategy = 1;
+  // The check result of revision 1's version, as the listing published it.
+  VersionValidation version = 2;
+}
+
+// ReportReason is why a reader reports a community listing.
+enum ReportReason {
+  // Not set. Never returned, and refused in a request.
+  REPORT_REASON_UNSPECIFIED = 0;
+  // Its results or description mislead about what the strategy does.
+  MISLEADING_RESULTS = 1;
+  // Its code could harm whoever runs it.
+  HARMFUL_CODE = 2;
+  // It is spam.
+  SPAM = 3;
+  // It copies someone else's strategy without crediting it.
+  COPIED_WITHOUT_CREDIT = 4;
+  // Another reason, which note explains.
+  OTHER = 5;
+}
+
+// ReportCommunityStrategyRequest reports one public community listing to
+// moderation.
+message ReportCommunityStrategyRequest {
+  option (buf.validate.message).cel = {
+    id: "report_community_strategy.note_for_other"
+    message: "note is required when reason is OTHER"
+    expression: "this.reason != 5 || size(this.note) > 0"
+  };
+
+  // Public listing ID.
+  fixed64 listing_id = 1 [(buf.validate.field).fixed64.gt = 0];
+  // The version the reader saw, as GetCommunityStrategy returned it: the
+  // report is about that version, whatever the listing shows later.
+  string version_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // Why it is reported.
+  ReportReason reason = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // What the reader adds. At most 500 characters; required when reason is
+  // OTHER.
+  string note = 4 [(buf.validate.field).string.max_len = 500];
+}
+
+// ReportCommunityStrategyResponse confirms the report.
+message ReportCommunityStrategyResponse {
+  // When the report was recorded. A repeat of the caller's report of the
+  // same version answers the first report's time.
+  google.protobuf.Timestamp reported_at = 1;
+}
+
 // GetCommunityStrategyRequest reads one public community listing.
 message GetCommunityStrategyRequest {
   // Public listing ID.
@@ -2371,10 +2620,12 @@ message GetCommunityStrategyResponse {
 
 // StrategiesService writes, tests and proposes the caller's trading bots and
 // reads them. Bots belong to the caller's main account, and each runs on its
-// own subaccount, created when the user deploys it. No call moves money,
-// creates a subaccount or deploys a bot: deploying takes the user's MFA and
-// wallet signature on the deploy page ProposeDeploy links. StopBot stops a
-// bot, which only ever reduces what it does.
+// own subaccount, created when the user deploys it. No call creates a
+// subaccount or deploys a bot: deploying takes the user's MFA and wallet
+// signature on the deploy page ProposeDeploy links. StopBot stops a bot,
+// which only ever reduces what it does. The one call that moves money,
+// ReturnBotFunds, moves a stopped bot's available balances only to its
+// owner's own main account.
 //
 // Requests name no account, except the funding subaccount of ProposeDeploy:
 // every call acts for the caller's main account, and StopBot also for a
@@ -2382,19 +2633,23 @@ message GetCommunityStrategyResponse {
 // API key must be scoped to the main account, and its policy must grant the
 // call's permission: READ_STRATEGIES for reads, DRAFT_STRATEGIES to create,
 // save, rename and delete strategies and test versions, PROPOSE_STRATEGY_DEPLOY to
-// propose deploys, STOP_STRATEGIES to stop bots. An API key scoped to a subaccount is refused
+// propose deploys, STOP_STRATEGIES to stop bots, FORK_STRATEGIES to fork community
+// listings, RETURN_STRATEGY_BOT_FUNDS to return a stopped bot's funds. An API
+// key scoped to a subaccount is refused
 // (PERMISSION_DENIED, AUTH_API_KEY_ACCESS_DENIED) even when its policy grants
 // the permission. GetStrategyReference, ListStrategyTemplates,
 // ListCommunityStrategies and GetCommunityStrategy need no credentials.
-// PublishStrategyVersion and UnpublishStrategy take the user's own session:
-// publishing makes a strategy's code public, so only the user does it, on
-// the website. A session a connected app holds on the user's behalf makes
+// PublishStrategyVersion, UnpublishStrategy and ReportCommunityStrategy take
+// the user's own session: publishing makes a strategy's code public, and a
+// report is the user's own, so only the user does them, on the website. A session a connected app holds on the user's behalf makes
 // the reads with the account:read scope, and creates, saves, renames and
 // deletes strategies, tests versions, proposes deploys and stops bots with
 // strategies:manage; a call outside the session's scopes refuses it
 // (PERMISSION_DENIED, AUTH_SESSION_KIND_NOT_ALLOWED). No connected app
-// deploys a bot: deploying takes the user's MFA and wallet signature.
-// Every call is safe to retry.
+// deploys a bot, forks a community listing or returns a bot's funds:
+// deploying takes the user's MFA and wallet signature, forking starts on the
+// website or with an API key, and a return is the owner's own. Every call is
+// safe to retry.
 service StrategiesService {
   option (polyester.api.docs_group) = "trading";
 
@@ -2588,7 +2843,7 @@ service StrategiesService {
   // hasn't stopped, whether deployed from one of its proposals or running
   // one of its revisions' versions, while a deploy proposal of it has
   // neither expired, failed nor been deployed, and while its community
-  // listing is public. Deleting never stops a bot. Proposals of the strategy
+  // listing is public or held by moderation. Deleting never stops a bot. Proposals of the strategy
   // stay, and show no strategy once it is deleted. Its unpublished listing
   // stays unpublished, with the versions it published. A version only the
   // strategy's revisions kept then expires like any other.
@@ -2597,7 +2852,8 @@ service StrategiesService {
   // - INVALID_ARGUMENT: malformed request.
   // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
   //   an unknown or already deleted one.
-  // - FAILED_PRECONDITION: STRATEGY_IN_USE.
+  // - FAILED_PRECONDITION: STRATEGY_IN_USE; LISTING_HELD while moderation
+  //   holds the strategy's listing.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
   // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
   //   does not grant DRAFT_STRATEGIES or the key is scoped to a subaccount.
@@ -2608,7 +2864,7 @@ service StrategiesService {
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Delete Strategy"
-      description: "Delete a strategy and its revisions, unless a bot deployed from it is still running, a deploy proposal of it is waiting or its community listing is public. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      description: "Delete a strategy and its revisions, unless a bot deployed from it is still running, a deploy proposal of it is waiting or its community listing is public or held by moderation. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -2714,8 +2970,13 @@ service StrategiesService {
   // records the results. Each market's trading rules (tick, step, minimum
   // quantity and minimum notional) are the exchange's when the version first
   // runs, unless an example's `observe.markets` says otherwise, and the
-  // record keeps them: a version always gets the same result, and a new
+  // record keeps them: a version's recorded results stay the same, and a new
   // version runs on the rules current then.
+  //
+  // One exception: when a call takes longer than allowed or the runtime fails
+  // on a run, its results are returned but not recorded, and the affected
+  // example's error says to run the examples again. The next call runs them
+  // again and counts toward the per-minute limit.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
@@ -2734,7 +2995,7 @@ service StrategiesService {
     option (polyester.api.authentication_methods) = API_KEY;
     option (gnostic.openapi.v3.operation) = {
       summary: "Run Scenarios"
-      description: "Run a version's behaviour examples against its code and record the results. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
+      description: "Run a version's behaviour examples against its code and record the results. A run where a call takes longer than allowed or the runtime fails is returned but not recorded, so running the examples again runs them again. An API key needs DRAFT_STRATEGIES and must be scoped to the main account."
       tags: "Strategies Service"
     };
   }
@@ -2857,8 +3118,8 @@ service StrategiesService {
   // - NOT_FOUND: STRATEGY_NOT_FOUND, for another account's strategy as for
   //   an unknown one; REVISION_NOT_FOUND; or FUNDING_SUBACCOUNT_NOT_FOUND.
   // - FAILED_PRECONDITION: VERSION_INVALID, SCENARIOS_FAILING,
-  //   BACKTEST_MISSING, MARKET_NOT_ALLOWED, INSUFFICIENT_FUNDS or
-  //   BOT_CAP_REACHED.
+  //   BACKTEST_MISSING, MARKET_NOT_ALLOWED, INSUFFICIENT_FUNDS,
+  //   FUNDING_SOURCE_IS_BOT or BOT_CAP_REACHED.
   // - RESOURCE_EXHAUSTED: INDICATOR_SETTINGS_LIMIT_REACHED.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original proposal stands.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
@@ -3081,6 +3342,68 @@ service StrategiesService {
     };
   }
 
+  // ReturnBotFunds returns every spendable balance of a stopped bot's
+  // subaccount to the caller's main account, its owner's: the only
+  // destination, so it needs no MFA. Only the bot's owner calls it, on its own
+  // session or a root-scoped API key whose policy grants
+  // RETURN_STRATEGY_BOT_FUNDS; an invited member of any role is refused as if
+  // the bot didn't exist. It never takes what an open order's hold reserves:
+  // while the orders a KEEP_ORDERS stop kept stay open, the return stays
+  // RETURN_PROCESSING, naming what they hold (held), and returns it as they
+  // fill or end. The return completes on its own; GetBotFundsReturn reads it.
+  // An open return blocks nothing: the bot's subaccount can't be given to
+  // another bot while anything stays on it, whatever the return.
+  //
+  // Errors:
+  // - FAILED_PRECONDITION: BOT_NOT_STOPPED while the bot may still trade
+  //   (deploying, running, paused, stopping). If the bot reads STOPPED but an
+  //   API-key call gets BOT_NOT_STOPPED because the bot's access is still
+  //   live, its owner must first call ReturnBotFunds from their own
+  //   interactive session to end that access; retrying with the API key alone
+  //   cannot. Afterwards a root-scoped API key with RETURN_STRATEGY_BOT_FUNDS
+  //   can return the funds; retry a recorded return with the same idempotency
+  //   key. NOTHING_TO_RETURN when the
+  //   subaccount has no available balance, or the return under the key ended
+  //   with nothing moved.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT when the key names another bot's
+  //   return.
+  // - NOT_FOUND: BOT_NOT_FOUND when the caller has no such bot.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant RETURN_STRATEGY_BOT_FUNDS or the key is scoped to a
+  //   subaccount; AUTH_SESSION_KIND_NOT_ALLOWED for a connected app's session.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE when the return can't be decided yet;
+  //   retry with the same key.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ReturnBotFunds(ReturnBotFundsRequest) returns (ReturnBotFundsResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Return Bot Funds"
+      description: "Return every available balance of a stopped bot's subaccount to the owner's main account. Only the bot's owner calls it. An API key needs RETURN_STRATEGY_BOT_FUNDS and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
+  // GetBotFundsReturn reads one of the caller's returns of a stopped bot's
+  // funds, by the return ID ReturnBotFunds answered.
+  //
+  // Errors:
+  // - NOT_FOUND: the caller has no such return.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant READ_STRATEGIES or the key is scoped to a subaccount.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc GetBotFundsReturn(GetBotFundsReturnRequest) returns (GetBotFundsReturnResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get Bot Funds Return"
+      description: "Read one return of a stopped bot's funds to the owner's main account, by its return ID. An API key needs READ_STRATEGIES and must be scoped to the main account."
+      tags: "Strategies Service"
+    };
+  }
+
   // StopBot stops a bot: it makes no new decisions. KEEP_ORDERS hands its
   // open orders, protective stop-losses included, to its subaccount: they
   // stay in the book as the subaccount's own orders, which the bot no longer
@@ -3147,7 +3470,8 @@ service StrategiesService {
   // - FAILED_PRECONDITION: VERSION_INVALID; SCENARIOS_FAILING;
   //   WINDOW_HAS_NO_DATA when the default window holds no market data;
   //   USERNAME_REQUIRED; LISTING_CAP_REACHED, listing_cap gives the cap;
-  //   PUBLISH_LIMIT_REACHED, retry_after says when the day resets.
+  //   PUBLISH_LIMIT_REACHED, retry_after says when the day resets;
+  //   LISTING_HELD while moderation holds the listing.
   // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original publish stands.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
   // - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a
@@ -3166,12 +3490,14 @@ service StrategiesService {
   // UnpublishStrategy unpublishes one of the caller's community listings: it
   // leaves the list, and GetCommunityStrategy answers LISTING_NOT_FOUND. The
   // author's next publish makes it public again. Copies other users already
-  // made stay theirs. Unpublishing an unpublished listing changes nothing.
+  // made stay theirs. Unpublishing an unpublished listing changes nothing; a
+  // listing moderation holds can't be unpublished until it is released.
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed request.
   // - NOT_FOUND: LISTING_NOT_FOUND, for another account's listing as for an
   //   unknown one.
+  // - FAILED_PRECONDITION: LISTING_HELD while moderation holds the listing.
   // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry.
   // - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a
   //   session a connected app holds on the user's behalf.
@@ -3201,6 +3527,67 @@ service StrategiesService {
       description: "List the public community listings, most recently published first, optionally only those of some types or trading some markets."
       tags: "Strategies Service"
       security: [{}]
+    };
+  }
+
+  // ReportCommunityStrategy reports a public community listing to
+  // moderation: what is wrong with the version the reader saw, from a fixed
+  // list of reasons, with a note. One report per reader, listing and
+  // version, even after the version is published again: reporting it again
+  // answers the first report and doesn't count toward the day's reports. A
+  // reader makes at most 20 reports per UTC day. A report changes nothing of the listing by
+  // itself; moderation reviews it.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request, or a reason of OTHER without a
+  //   note.
+  // - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an
+  //   unknown one; VERSION_NOT_FOUND when the listing never published the
+  //   version.
+  // - FAILED_PRECONDITION: CANNOT_REPORT_OWN_LISTING; REPORT_LIMIT_REACHED,
+  //   retry_after says when the day resets.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_SESSION_KIND_NOT_ALLOWED for an API key or a
+  //   session a connected app holds on the user's behalf.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ReportCommunityStrategy(ReportCommunityStrategyRequest) returns (ReportCommunityStrategyResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Report Community Strategy"
+      description: "Report a public community listing to moderation, with a reason and a note, about the version the reader saw. Session only."
+      tags: "Strategies Service"
+    };
+  }
+
+  // ForkStrategy copies a public community listing's published version into
+  // a new strategy of the caller, as its revision 1, and records the
+  // listing as its origin. The copy is the caller's own: its behaviour
+  // examples and backtests are the caller's to run, and nothing the
+  // listing's author does later changes it. Forking one's own listing makes
+  // a copy as a duplicate does, and isn't counted as a fork. An account has
+  // at most 100 strategies.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: malformed request.
+  // - NOT_FOUND: LISTING_NOT_FOUND, for an unpublished listing as for an
+  //   unknown one.
+  // - FAILED_PRECONDITION: STRATEGY_CAP_REACHED; strategy_cap gives the cap.
+  // - ALREADY_EXISTS: IDEMPOTENCY_CONFLICT; the original strategy stands.
+  // - UNAVAILABLE: SERVICE_UNAVAILABLE; retry the same request.
+  // - PERMISSION_DENIED: AUTH_API_KEY_ACCESS_DENIED when the API key's policy
+  //   does not grant FORK_STRATEGIES or the key is scoped to a subaccount;
+  //   AUTH_SESSION_KIND_NOT_ALLOWED for a session a connected app holds on
+  //   the user's behalf.
+  // - UNAUTHENTICATED: missing or invalid credentials.
+  rpc ForkStrategy(ForkStrategyRequest) returns (ForkStrategyResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (polyester.api.authentication_methods) = SESSION_TOKEN;
+    option (polyester.api.authentication_methods) = API_KEY;
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Fork Strategy"
+      description: "Copy a public community listing's published version into a new strategy of the caller. An API key needs FORK_STRATEGIES and must be scoped to the main account; connected apps can't fork."
+      tags: "Strategies Service"
     };
   }
 
